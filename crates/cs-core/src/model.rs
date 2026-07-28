@@ -77,6 +77,16 @@ pub struct Message {
     /// is only file-unique — subagent threads share a session id (ADR 2).
     pub native_id: String,
     /// Parent within the conversation DAG, in the same id space as `native_id`.
+    ///
+    /// Must name a message the importer actually **emitted**. Every source has nodes that
+    /// get skipped — structural roots, `isMeta` turns, empty or image-only messages — and
+    /// when one of those sits mid-chain the importer has to re-parent its children to the
+    /// nearest surviving ancestor rather than pointing at the node it dropped.
+    ///
+    /// This is not cosmetic. `index::on_head_path` walks these edges through a map built
+    /// from emitted messages only, so a dangling parent silently terminates the walk and
+    /// marks every message above it as off-head-path — a search result that quietly claims
+    /// to be on an abandoned branch when it is not.
     pub parent_native_id: Option<String>,
     /// Which thread this belongs to — usually the transcript file it came from. Carried
     /// explicitly rather than parsed back out of `native_id` (ADR 4).

@@ -1,0 +1,30 @@
+[workspace]
+resolver = "2"
+members = ["crates/cs-archive"]
+# The PoC is a throwaway measurement instrument kept for its results, not part of the
+# product. Excluding it keeps its pinned deps out of the workspace lockfile.
+exclude = ["poc/rust"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+
+# Pinned once here so the two crates cannot drift apart on a shared type.
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+thiserror = "2"
+anyhow = "1"
+blake3 = "1"
+globset = "0.4"
+reflink-copy = "0.1"
+uuid = { version = "1", features = ["v4"] }
+clap = { version = "4", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

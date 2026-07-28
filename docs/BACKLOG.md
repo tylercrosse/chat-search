@@ -86,8 +86,18 @@ start fits a type-ahead budget) rather than a refactor — ADR 12.
 - [ ] **Port the PoC importers to read the archive, not live source dirs.** They currently
       read `~/.codex/sessions` directly, which breaks reproducibility and makes it impossible
       to reparse conversations that no longer exist upstream — ADR 1
-- [ ] Codex and Claude Code importers against the real model: DAG, sidechains, `custom-title`,
-      forks
+- [x] Codex importer against the real model — 651 conversations, 119,020 messages, zero id
+      collisions on the reference corpus
+- [ ] Claude Code importer against the real model
+- [ ] **Codex legacy pre-`payload` format** — 18 files (2.6%) written before ~2025-12 have no
+      `payload` wrapper and no `event_msg` at all, so 121 prose messages across 18
+      conversations are silently dropped today. Needs a disjoint code path gated on "line has
+      no payload object", which cannot regress the current format.
+- [ ] **8 Codex subagent files cannot be linked to their parent** — older rollouts carry
+      neither `session_id` nor `parent_thread_id`, so they surface as standalone
+      conversations. Recovering them needs a cross-file pass.
+- [ ] Lift the duplicated RFC3339 → epoch-millis parser out of `codex.rs` and
+      `claude_code.rs` into a shared module
 - [ ] OpenCode importer (blocked on bundling above)
 - [ ] Gemini CLI importer
 - [x] ChatGPT export importer — 2,011 conversations, 14,390 messages; first real exercise of

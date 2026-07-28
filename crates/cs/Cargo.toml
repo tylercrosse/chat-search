@@ -10,6 +10,9 @@ path = "src/main.rs"
 
 [dependencies]
 cs-archive = { path = "../cs-archive" }
+cs-core = { path = "../cs-core" }
+cs-import = { path = "../cs-import" }
 anyhow = { workspace = true }
 clap = { workspace = true }
 serde_json = { workspace = true }
+rusqlite = { workspace = true }

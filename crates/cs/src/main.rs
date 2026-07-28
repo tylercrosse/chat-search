@@ -3,6 +3,8 @@ use clap::{Parser, Subcommand};
 use cs_archive::{machine, CaptureKind, Change, Config, Event, Fingerprint, Layout, Manifest, ManifestWriter, Op};
 use std::path::PathBuf;
 
+mod query;
+
 #[derive(Parser)]
 #[command(name = "cs", about = "Search your AI conversations across every tool", version)]
 struct Cli {
@@ -38,6 +40,43 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Rebuild the search index from the archive. Always a full rebuild — the index is a
+    /// pure function of the archive, so there is no migration path (ADR 1).
+    Index {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Index a ChatGPT export directly, until export ingest lands.
+        #[arg(long)]
+        chatgpt_export: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Search indexed conversations.
+    Search {
+        query: String,
+        #[arg(long, default_value = "10")]
+        limit: i64,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Restrict to one source id.
+        #[arg(long)]
+        source: Option<String>,
+        /// Search tool calls and output instead of prose.
+        #[arg(long)]
+        tools: bool,
+        /// Include messages on branches that were edited away.
+        #[arg(long)]
+        include_off_path: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Why a conversation did not come back for a query.
+    Explain {
+        conv_id: String,
+        query: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
     /// Capture changed files into the archive and record what was observed.
     Archive {
         /// Limit to one source id.
@@ -59,6 +98,13 @@ fn main() -> Result<()> {
         Command::Init { machine_alias, force } => init(&config_path, machine_alias, force),
         Command::Status { json } => status(&config_path, json),
         Command::Scan { source, json } => scan(&config_path, source.as_deref(), json),
+        Command::Index { db, chatgpt_export, json } => {
+            query::index(&config_path, db, chatgpt_export, json)
+        }
+        Command::Search { query: q, limit, db, source, tools, include_off_path, json } => {
+            query::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, json)
+        }
+        Command::Explain { conv_id, query: q, db } => query::explain(&config_path, db, &conv_id, &q),
         Command::Archive { source, dry_run, json } => {
             archive(&config_path, source.as_deref(), dry_run, json)
         }

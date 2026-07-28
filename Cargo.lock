@@ -211,6 +211,9 @@ dependencies = [
  "anyhow",
  "clap",
  "cs-archive",
+ "cs-core",
+ "cs-import",
+ "rusqlite",
  "serde_json",
 ]
 

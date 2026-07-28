@@ -110,8 +110,16 @@ start fits a type-ahead budget) rather than a refactor — ADR 12.
 
 ## Index and search
 
-- [ ] **Real schema**: `parent_id`, `head_id`, `thread` table, `deleted_upstream_at` — ADR 4, 9.
-      The PoC index is flat and has none of it.
+- [x] **Real schema** — `parent_id`, `head_id`, `thread_key`, `on_head_path`,
+      `deleted_upstream_at`; index + BM25 search + `cs explain` — ADR 4, 9
+- [ ] **Group results by conversation.** Measured on the first real queries: 10 hits often
+      cover only 4 distinct conversations, because a conversation's main thread and its
+      subagents all match and eat the result list. Collapse to best-hit-per-conversation with
+      a match count, rather than returning near-duplicates.
+- [ ] **Decide how subagent hits should rank.** 4 of 10 hits on some queries are subagent
+      prose — technically correct matches, rarely what was being looked for. Options:
+      down-weight, group under the parent, or filter behind a flag.
+- [ ] Gemini CLI importer — 34 files are archived and currently index to zero conversations
 - [ ] `library.db` and the authored event log — ADR 3
 - [ ] Title resolution fold, including the authored override — ADR 8
 - [ ] Incremental / tail indexing for the live session — ADR 10

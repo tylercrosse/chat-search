@@ -1,0 +1,23 @@
+[package]
+name = "chat-search-poc"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "csp"
+path = "src/main.rs"
+
+[dependencies]
+# bundled builds SQLite from source with FTS5 enabled — no system dependency
+rusqlite = { version = "0.32", features = ["bundled"] }
+# preserve_order matches JS JSON.stringify key ordering, so the two implementations
+# serialise tool inputs identically and the differential test stays meaningful
+serde_json = { version = "1", features = ["preserve_order"] }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

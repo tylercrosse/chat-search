@@ -18,6 +18,20 @@ Terms follow [GLOSSARY.md](./GLOSSARY.md). Measurements come from [../poc/RESULT
 
 **Why.** It converts most downstream decisions from irreversible to reversible — you `rm index.db` instead of writing a migration. A full rebuild is 7s, so this costs nothing in practice. The temptation to skip it is that raw is mostly noise (91% tool traffic); disk is cheaper than the decisions it buys back.
 
+**The invariant that makes this work.** Every column in `index.db` must be a pure function of _(archive, importer version)_. Hold that and any schema change is `rm index.db`, change the importer, rebuild — no migrations, ever.
+
+**Corollary: needing a migration for `index.db` is a bug**, not a chore. It means the index holds something the archive cannot reproduce, which quietly makes the disposable database non-disposable and takes the flexibility with it.
+
+**What this leaves free, and what eventually freezes.** Tables, columns, indexes, tokenizer, ranking and even the id formats are soft while nothing references them. Three things freeze on specific triggers:
+
+| what | freezes when | mitigation |
+| --- | --- | --- |
+| id formats | the first annotation is written to `library.db` | already designed stable (ADR 2); do not change the format after that point |
+| JSON field names | a second client exists | keep changes additive, version the contract |
+| cheap rebuild | embeddings land | cache embeddings keyed on `(message_id, model_id)` outside the rebuild path |
+
+The last one matters most. Rebuild is ~7s; embedding 30k messages is minutes. If embeddings sit inside the rebuild path, every later schema change costs minutes and gets avoided — which is how a disposable index stops being disposable.
+
 **Revisit when.** Rebuild exceeds ~60s, or archive storage becomes a real cost.
 
 ---

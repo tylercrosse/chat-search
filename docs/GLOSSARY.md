@@ -51,7 +51,7 @@ These are genuinely different and must not be collapsed.
 
 This shared session id is why per-file message ordinals collide (7,637 messages, 5% of the corpus) and why message ids must be scoped by transcript file.
 
-**Edit-branch** Intra-conversation, intra-file. Editing a ChatGPT message does not overwrite it — a new node appears under the same parent and the old one is retained. Measured: 869 branch nodes in the ChatGPT export. This is why the model is a DAG: it turns the hardest-looking mutation into an append.
+**Edit-branch** Intra-conversation, intra-file. Editing a ChatGPT message does not overwrite it — a new node appears under the same parent and the old one is retained. Measured across 2,011 conversations: **287 branch points** (nodes with more than one child) in 234 conversations, leaving **869 message nodes off the `current_node` path**. This is why the model is a DAG: it turns the hardest-looking mutation into an append.
 
 ---
 
@@ -110,8 +110,8 @@ The split from the archiver is what makes **retroactive reparse** possible: fix 
 | Fork | `forked_from_id` | — | — |
 | Subagent thread | `thread_source: "subagent"` | `isSidechain: true` | — |
 | Edit-branch | — | — | sibling under one parent |
-| Title (authored) | — | `custom-title` event | user rename |
-| Title (generated) | — | `ai-title` event | auto title |
+| Title (authored) | — | `custom-title` event | `title` — origin not recorded |
+| Title (generated) | — | `ai-title` event | `title` — origin not recorded |
 
 **Title precedence** is a fold over the append-only log, not a stored value:
 

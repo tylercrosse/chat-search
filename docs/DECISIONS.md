@@ -66,7 +66,7 @@ The last one matters most. Rebuild is ~7s; embedding 30k messages is minutes. If
 
 **Decision.** Messages carry `parent_id`. `conversation.head_id` points at the current leaf and is the only mutable field. The displayed conversation is the walk from head to root; off-path messages remain searchable.
 
-**Why.** Every branching mechanism in these sources is an append _if_ the model can hold two children of one parent, and a destructive mutation if it cannot. Editing a ChatGPT message creates a sibling rather than overwriting — 869 branch nodes in the export. Retrofitting flat→DAG would mean rewriting every importer, dedup, result grouping and the reader UI.
+**Why.** Every branching mechanism in these sources is an append _if_ the model can hold two children of one parent, and a destructive mutation if it cannot. Editing a ChatGPT message creates a sibling rather than overwriting — 287 branch points across 234 of 2,011 conversations, leaving 869 message nodes off the current head path. Retrofitting flat→DAG would mean rewriting every importer, dedup, result grouping and the reader UI.
 
 **Consequence.** Search can return messages from abandoned branches. For an archive that is correct — but results need to say so, which is what `head_id` is for.
 

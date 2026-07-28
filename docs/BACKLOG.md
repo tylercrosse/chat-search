@@ -90,7 +90,7 @@ start fits a type-ahead budget) rather than a refactor — ADR 12.
       forks
 - [ ] OpenCode importer (blocked on bundling above)
 - [ ] Gemini CLI importer
-- [ ] ChatGPT export importer — includes the 869 edit-branch nodes, the first real test of
+- [x] ChatGPT export importer — 2,011 conversations, 14,390 messages; first real exercise of
       the DAG model — ADR 4
 - [ ] Archive reader so layout policy never reaches importers — ADR 18
 - [ ] Strip slash-command markup from titles (`<command-message>find-skills</command-message>…`

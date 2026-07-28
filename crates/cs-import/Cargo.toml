@@ -1,18 +1,14 @@
 [package]
-name = "cs-archive"
+name = "cs-import"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-serde = { workspace = true }
+cs-archive = { path = "../cs-archive" }
+cs-core = { path = "../cs-core" }
 serde_json = { workspace = true }
-toml = { workspace = true }
 thiserror = { workspace = true }
-blake3 = { workspace = true }
-globset = { workspace = true }
-reflink-copy = { workspace = true }
-uuid = { workspace = true }
 
 [dev-dependencies]
 uuid = { workspace = true }

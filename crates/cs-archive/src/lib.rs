@@ -11,11 +11,13 @@ pub mod config;
 pub mod error;
 pub mod machine;
 pub mod manifest;
+pub mod reader;
 pub mod scan;
 
 pub use capture::{capture_file, CaptureKind};
 pub use config::{Config, Layout, Source};
 pub use error::{Error, Result};
 pub use machine::Machine;
+pub use reader::{ArchivedFile, ArchiveReader};
 pub use manifest::{Event, Fingerprint, Manifest, ManifestWriter, Op};
 pub use scan::{scan_source, Change, FileChange, SourceScan};

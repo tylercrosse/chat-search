@@ -165,7 +165,7 @@ Almost nothing here is built. Honest inventory:
 
 | | state |
 | --- | --- |
-| Archiver | **built** — mirror layout, clone capture, change detection. Bundle layout (OpenCode) not implemented |
+| Archiver | **built and running** — mirror layout, clone capture, change detection, scheduled every 5 min. Bundle layout (OpenCode) not implemented, so OpenCode is not archived |
 | Manifest | **built** — append-only JSONL, folded on load |
 | Archive reader | **not built** |
 | Importers — Codex, Claude Code | PoC only, and they read **live source dirs, not the archive** |

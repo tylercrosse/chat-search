@@ -12,12 +12,28 @@ Status legend: `[ ]` not started · `[~]` partial · `[x]` done.
 
 ## Now
 
-- [ ] **`git init`.** 32 files of docs and working code are unversioned. This is the single
-      largest risk in the project right now and takes one command.
-- [ ] **Run the archiver for real** — `cs init && cs archive` against `~/.chat-archive`.
-      Everything so far has been exercised in a scratch directory only.
-- [ ] **Schedule it.** An archiver that only runs when you remember is not a safety net.
-      launchd agent or cron; needs the watch-vs-scan call below.
+- [x] `git init` — done 2026-07-28
+- [x] Run the archiver for real — 1,022 files / 2,220 MB cloned into `~/.chat-archive`
+- [x] Schedule it — launchd agent, every 5 minutes (see [Operations](#operations))
+- [ ] **Quiet mode for scheduled runs.** `cs archive` prints a full table every run, so the
+      log grows ~150 KB/day of "nothing changed". Only report when something was captured,
+      or rotate.
+- [ ] **`bytes captured` overstates disk cost.** An append re-clones the whole file, so the
+      reported figure is file size, not delta. Report allocated blocks instead.
+
+## Operations
+
+Current live setup on this machine, recorded here because it lives outside the repo:
+
+| | |
+| --- | --- |
+| binary | `~/.cargo/bin/cs` (`cargo install --path crates/cs`) |
+| config | `~/.config/chat-search/config.toml` |
+| archive | `~/.chat-archive/raw/tylers-macbook-air/` |
+| schedule | `~/Library/LaunchAgents/com.chat-search.archive.plist`, every 300 s |
+| logs | `~/Library/Logs/chat-search/archive.{log,err}` |
+
+To stop it: `launchctl bootout gui/$(id -u)/com.chat-search.archive`
 
 ## Capture
 

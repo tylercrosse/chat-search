@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cs-archive"]
+members = ["crates/cs-archive", "crates/cs"]
 # The PoC is a throwaway measurement instrument kept for its results, not part of the
 # product. Excluding it keeps its pinned deps out of the workspace lockfile.
 exclude = ["poc/rust"]

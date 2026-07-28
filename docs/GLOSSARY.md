@@ -27,6 +27,8 @@ Terms are marked **[schema]** where they correspond to a table, column, or enum 
 
 The split exists because tool traffic is 91% of the text. Indexing it alongside prose means BM25 ranks tool output against the content you actually wanted.
 
+`reasoning` comes **entirely from Codex**. Claude Code persists no reasoning text: every one of its `thinking` blocks is `{"thinking": "", "signature": "…"}` — the text is blanked and only an encrypted signature is stored, so those messages fall out at the empty-text rule.
+
 **Head** **[schema]** The currently-selected leaf message of a conversation — `conversation.head_id`. The one mutable field in the entire schema. "The conversation as displayed" is the walk from `head_id` up through `parent_id` to the root. Messages not on that path still exist and are still searchable; they are on abandoned branches.
 
 ---

@@ -6,12 +6,14 @@
 //! messages. Interpreting bytes is the importer's job, and keeping the two apart is what
 //! makes retroactive reparse possible.
 
+pub mod capture;
 pub mod config;
 pub mod error;
 pub mod machine;
 pub mod manifest;
 pub mod scan;
 
+pub use capture::{capture_file, CaptureKind};
 pub use config::{Config, Layout, Source};
 pub use error::{Error, Result};
 pub use machine::Machine;

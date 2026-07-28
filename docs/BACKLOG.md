@@ -55,6 +55,32 @@ To stop it: `launchctl bootout gui/$(id -u)/com.chat-search.archive`
 - [ ] `forget` operation: remove from raw + index, write a tombstone so a rescan cannot
       resurrect it — ADR 9
 
+## MVP
+
+> Find a conversation you half-remember, across ChatGPT, Claude Code and Codex, and open it
+> where it lives.
+
+Archive (done) + three importers + real schema + BM25 + a CLI that prints results with a
+`resume_cmd`. Ordered so the one question only you can answer — is the ranking any good —
+becomes answerable in days rather than weeks.
+
+**Not in it:** embeddings, clustering, `library.db`, any GUI, OpenCode, Gemini, tool-output
+search. Skipping `library.db` is safe only while nothing authored is written into
+`index.db`; that invariant is easy to hold and expensive to unwind.
+
+**Hard constraint:** `cs search --json` must emit exactly what a GUI would consume — stable
+field names, no terminal-width truncation. That is what makes a Raycast extension a
+weekend's work (~200 lines of TypeScript shelling out to the binary, whose 4.9 ms p95 cold
+start fits a type-ahead budget) rather than a refactor — ADR 12.
+
+**Ordering traps** — these cost rework, and none of them are decisions:
+
+1. Schema before importer #3, or every importer gets rewritten when the DAG lands.
+2. Importers read the archive from #1. The PoC reads live source dirs; inheriting that makes
+   retroactive reparse silently not work — ADR 1.
+3. Fixtures synthetic from the first test, or the repo can never be shared.
+4. Query contract before client #2, or the schema is frozen by its consumers.
+
 ## Interpret
 
 - [ ] **Port the PoC importers to read the archive, not live source dirs.** They currently

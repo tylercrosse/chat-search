@@ -56,7 +56,13 @@ Terms follow [GLOSSARY.md](./GLOSSARY.md). Measurements come from [../poc/RESULT
 
 **Consequence.** Search can return messages from abandoned branches. For an archive that is correct — but results need to say so, which is what `head_id` is for.
 
-**Revisit when.** Never expected to reverse; may need a `thread` table materialised if subagent volume grows.
+**Threads are derived, not materialised — for now.** A conversation can hold several threads (one main plus one per subagent), but only **2.1%** of Codex and **4.9%** of Claude Code conversations have more than one, so a `thread` table would be 1:1 noise for the other 95%. Messages instead carry `thread_key` and `is_sidechain`, and the set of threads is `SELECT DISTINCT thread_key`.
+
+Carrying `thread_key` as an explicit column — rather than parsing it back out of the message id, which already encodes it — is what keeps this reversible.
+
+Materialising later is cheap for the same reason the rest of the index is: `rm index.db`, change the importer, rebuild in ~7s (ADR 1). Nothing user-facing references thread ids; annotations target conversations and messages.
+
+**Revisit when.** The reader needs to show thread structure — nesting is real in this corpus (subagents observed at depths 1, 2 and 3, so a subagent has spawned a subagent, which a boolean cannot express), and thread-level metadata (`agent_nickname`, `agent_role`) has nowhere to live without a table. Also revisit if search results need collapsing by thread.
 
 ---
 

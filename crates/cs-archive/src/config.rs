@@ -94,7 +94,11 @@ impl Config {
 /// actually exist on this machine are emitted, so a fresh config is immediately usable.
 pub fn detect_sources() -> Vec<Source> {
     let candidates = [
-        ("codex", "~/.codex/sessions", Layout::Mirror, vec!["**/rollout-*.jsonl"]),
+        // Codex zstd-compresses rollouts older than ~7 days in a background worker, so
+        // the glob must survive `.jsonl` becoming `.jsonl.zst` or everything older than a
+        // week stops being captured. The archiver stores either verbatim; decompression is
+        // the importer's problem, not capture's.
+        ("codex", "~/.codex/sessions", Layout::Mirror, vec!["**/rollout-*.jsonl", "**/rollout-*.jsonl.zst"]),
         ("claude-code", "~/.claude/projects", Layout::Mirror, vec!["**/*.jsonl"]),
         ("gemini-cli", "~/.gemini/tmp", Layout::Mirror, vec!["**/*.json"]),
         // Bundle layout is not implemented yet; listed so the id is reserved.

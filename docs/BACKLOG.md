@@ -47,6 +47,10 @@ To stop it: `launchctl bootout gui/$(id -u)/com.chat-search.archive`
 - [ ] **Claude.ai capture** — no local files at all; needs export or API.
 - [ ] **Recurring export reminder** — every day without one accrues unrecoverable gaps in the
       two server-side sources. The existing ChatGPT export already ends 2026-07-10.
+- [x] Codex `.zst` glob — compression after ~7 days would have silently dropped everything
+      older than a week (see [FORMAT-NOTES.md](./FORMAT-NOTES.md))
+- [ ] **Decompress `.zst` rollouts in the Codex importer.** The archiver now captures them
+      verbatim, but nothing can read them yet. Latent until Codex starts compressing here.
 - [ ] **Watch vs scan** — decides archiver latency and whether a daemon is needed.
 - [ ] Compression, when clone divergence starts costing real space — ADR 20
 - [ ] Encrypted offsite tier — ADR 20 option D. Solves *disaster*, which cloning does not.
@@ -106,6 +110,16 @@ start fits a type-ahead budget) rather than a refactor — ADR 12.
 - [ ] Strip slash-command markup from titles (`<command-message>find-skills</command-message>…`
       currently leaks into conversation titles)
 - [ ] Derived `surface` and `account` columns — ADR 16
+- [ ] **Claude Code `queued_command` attachments** — real user prompts typed while a tool ran.
+      No `uuid`/`parentUuid`, so they must be spliced by timestamp; currently dropped.
+- [ ] **Codex fork replay dedup** — a fork copies the parent's whole transcript into the child
+      file, so fork-heavy projects flood results with near-identical hits.
+- [ ] **Codex `paginated` history mode** — not present in this corpus, but a legacy-only
+      parser extracts zero messages from such files if it appears.
+- [ ] **Codex pre-2025-09-09 format** — 18 files here, no parser anywhere handles it
+- [ ] **Separate `role` from authoredness.** `Kind` currently conflates what a message is with
+      who wrote it; `environment_context` and `isMeta` are exactly that collision. See the
+      material_origin idea in [FORMAT-NOTES.md](./FORMAT-NOTES.md).
 - [ ] Cursor and Antigravity importers — protobuf, 52 conversations, poor value/effort ratio
 
 ## Index and search

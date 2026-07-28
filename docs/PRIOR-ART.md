@@ -12,18 +12,30 @@ cass are genuine archives, and which sources each covers.
 
 ---
 
-## Headline: two priors were wrong
+> **Revised after a second pass found the category leader that the first pass missed.**
+> The surveying agent also reported that GitHub's search endpoint silently under-returned —
+> `agentsview` did not match a query its own description should have matched. Treat every
+> coverage claim here as a **lower bound**; more tools exist that this survey did not find.
 
-Going in, the assumption was that existing tools read live source files and none would
-survive the source being deleted, and that ingesting both the ChatGPT export and CLI-agent
-transcripts was an open gap. Both are false.
+## Headline: three priors were wrong
 
-- **cass and Polylogue are true archives.** Both copy content into their own durable store
-  with content-hash idempotency, and both explicitly design for the source disappearing.
-- **Polylogue already ingests ChatGPT account exports *and* CLI transcripts.**
-- **SQLite FTS5 is not an unusual choice** — Polylogue and Agent Sessions both use it.
+Going in, the assumption was that existing tools read live source files, that none survive
+the source being deleted, and that ingesting both the ChatGPT export and CLI-agent
+transcripts was an open gap. All three are false.
 
-The live-read prior does hold for everything below the top two.
+- **agentsview, cass and Polylogue are true archives**, copying content into durable stores.
+- **agentsview covers all five of this project's target sources**, ingests the ChatGPT export
+  ZIP, and ships a desktop app and web UI over its archive.
+- **SQLite FTS5 is the common choice**, not an unusual one — agentsview, Polylogue and Agent
+  Sessions all use it.
+
+The live-read prior holds only below the top three.
+
+**agentsview is a strict superset of this project's MVP as scoped.** Verified from source
+rather than README: `internal/parser/chatgpt.go` opens with *"Parses ChatGPT export archives
+(conversations-\*.json) into structured session data with DAG linearization"* — the same job,
+including the DAG handling, as the importer built here. 4,595 stars, MIT, Go, releasing
+weekly.
 
 ---
 
@@ -33,6 +45,7 @@ Source-verified.
 
 | Tool | Sources | Surfaces | Storage | Search | **Archive or live-read** | Licence | Last activity | Price |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **[agentsview](https://github.com/kenn-io/agentsview)** | **~40 agents, all five of ours** — Claude Code, Codex, Gemini CLI, OpenCode + **ChatGPT export ZIP** and Claude.ai export. Decrypts the Antigravity store | CLI, daemon, **web UI**, **Tauri desktop app**, MCP, Docker, S3/Postgres/DuckDB targets | SQLite primary archive (`messages.content`, `thinking_text` copied in); optional Postgres/DuckDB | **FTS5 + sqlite-vec**, hybrid | **Archive.** ChatGPT is import-only, so it exists *only* as a copy. No reaping of vanished sources found | MIT | 2026-07-28 · v0.39.0 · **4,595 stars** | Free OSS. Sends an anonymous `daemon_active` telemetry ping, opt-out by env var |
 | [Polylogue](https://github.com/Sinity/polylogue) | ChatGPT **export**, Claude.ai export, Claude Code, Codex, Gemini CLI, AI Studio, Hermes, Antigravity. **No OpenCode** | CLI, Python API, local HTTP reader, MCP server, MV3 capture extension, daemon | Split SQLite: `source.db` (raw evidence), `index.db` (derived), `embeddings.db`, `user.db` (overlays), `ops.db` (disposable) + SHA-256 content-addressed blob store | FTS5 contentless + BM25; lanes for dialogue/actions/semantic; hybrid via RRF | **Archive.** `source.db` is "the rebuild root"; ingest idempotent by content hash; documented backup/restore and tier-durability classes | MIT | 2026-07-28 | Free OSS |
 | [cass](https://github.com/Dicklesworthstone/coding_agent_session_search) | 23 agents incl. Codex, Claude Code, Gemini CLI, **OpenCode**, Cursor, Aider, Cline, Copilot, Antigravity + **ChatGPT desktop app store** (not the export ZIP) | TUI, CLI, HTML export; third-party MCP bridges | SQLite archive + Tantivy index generations + raw mirror per source | Tantivy BM25 with edge n-grams + optional MiniLM ONNX + hybrid RRF | **Archive.** "SQLite is the source of truth"; rsync sync additive-only, remote deletions never propagate; has a `remote_source_pruned` gap code | **MIT + "Anthropic Rider"** — GitHub reports NOASSERTION, not OSI-clean | 2026-07-28 · 1,027 stars | Free OSS |
 | [claude-code-history-viewer](https://github.com/jhlee0409/claude-code-history-viewer) | 28 providers, CLI-agent only. No ChatGPT web | Tauri desktop app + headless server | **None** | Plain scan; no FTS, no index, no embeddings | **Live-read.** Reads provider files in place every time | MIT | 2026-07-23 · **1,957 stars** | Free OSS |
@@ -96,28 +109,31 @@ the problem as evidence retention, and both had to build a durable store to do i
 
 ## Gaps — closed and open
 
-**Closed. Do not treat these as differentiators.**
+**Closed. Every one of these was called a differentiator at some point in this project and
+every one is occupied.**
 
-- Cross-provider web-export **and** CLI ingestion — Polylogue does it.
-- True archival durability — cass and Polylogue both survive source deletion, with
-  content-hash idempotency and explicit anti-pruning design.
-- SQLite FTS5 as the search layer — Polylogue and Agent Sessions both use it.
-- MCP exposure of chat history — at least six independent servers.
-- Breadth of provider support — 20–28 providers is table stakes in Cluster 2.
+- All five sources in one archiving tool — **agentsview, 5/5**.
+- Cross-provider web-export **and** CLI ingestion — agentsview and Polylogue.
+- Archival durability surviving source deletion — agentsview, cass, Polylogue.
+- SQLite FTS5 as the search layer — agentsview, Polylogue, Agent Sessions.
+- Hybrid lexical + vector search — all three leaders.
+- MCP exposure — saturated; agentsview ships one and six-plus standalone servers exist.
+- Provider breadth — 20–40 is table stakes.
+- Clean MIT licence at the top — agentsview and Polylogue both.
+- Cross-machine sync — agentsview (S3, Postgres), cass (rsync mirrors).
+- **A GUI over a real archive** — called open in an earlier revision; wrong. agentsview ships
+  a Tauri desktop app *and* a web UI over its SQLite archive.
 
-**Genuinely open.**
+**Genuinely open — features, not a product wedge.**
 
-- **All five of this project's sources in one archiving tool.** Polylogue covers 4/5 and is
-  missing OpenCode entirely. cass covers all five but reaches ChatGPT only through the
-  desktop app's local store — unencrypted v1 only, with v2/v3 needing manual setup — not the
-  export ZIP. The intersection is real but narrow.
-- **Retention-aware capture.** Everyone treats ingestion as a scan. Nobody schedules against
-  a known deletion clock. cass gets closest with a `remote_source_pruned` signal, but that is
-  diagnostic after the fact rather than preventive.
-- **Licence cleanliness at the top.** cass is the strongest competitor and its licence is not
-  OSI-clean (NOASSERTION on GitHub).
-- **A GUI over a real archive.** The best storage (Polylogue, cass) has the weakest UI; the
-  best UI (claude-code-history-viewer, 1,957 stars) has no storage and no index at all.
+- **Retention-clock-aware capture.** Nobody schedules ingestion against a known expiry. The
+  Claude Code 30-day window is exactly the constraint no tool models. cass comes closest with
+  a `remote_source_pruned` gap code, but that is post-hoc diagnosis rather than preventive
+  capture. **This is the one idea the survey did not find anywhere.**
+- **Strict zero-network operation.** agentsview pings PostHog by default (opt-out available);
+  cass and Polylogue arguably already occupy the absolutist position.
+- **Continuous web-chat capture without a manual export.** Export ZIPs are point-in-time;
+  Polylogue's opt-in MV3 extension is the only attempt, and it is explicitly a fallback.
 
 ## Not found
 
@@ -151,10 +167,17 @@ What remains genuinely ours:
 - Rust practice was an explicit goal, and that is not invalidated by someone else having
   shipped a similar thing.
 
-**The honest recommendation** is to spend an hour with cass and Polylogue against the real
-corpus *before* writing more importers. If either finds the conversations you cannot find
-today, that is the actual goal met, and this becomes an archiver feeding it rather than a
-whole search stack. If neither does — for the OpenCode gap, the licence, or because their
-ranking is not better than ours — the path continues with much better information.
+**The honest recommendation** is to install agentsview, point it at the real corpus, and see
+whether it finds the conversations that are currently hard to find. That is an hour, and it
+answers the question the whole project exists to answer.
 
-That check is cheap and it is the sort of thing that only gets more expensive to do later.
+Three outcomes, all fine:
+
+1. **It works.** The actual goal is met today. This project narrows to the retention-aware
+   archiver — smaller, sharper, and the one idea the survey found nowhere — feeding it.
+2. **It nearly works.** Contribute the gap upstream. It is MIT and shipping weekly.
+3. **It does not.** Continue, with far better information about what "better" has to mean.
+
+What survives all three outcomes: the archiver is complementary rather than competitive, it
+produces a plain mirrored tree any of these tools can read, and the Rust practice that
+motivated the language choice was never contingent on being first.

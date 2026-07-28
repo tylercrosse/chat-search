@@ -1,0 +1,107 @@
+# Backlog
+
+Deferred **work**. Deferred **decisions** live in [DECISIONS.md](./DECISIONS.md) — anything
+still `open` or marked `Open —` there is a decision, not a task, and is only cross-referenced
+from here so it does not get tracked in two places and drift.
+
+Items carry the ADR that justifies them. If an item and its ADR disagree, the ADR wins.
+
+Status legend: `[ ]` not started · `[~]` partial · `[x]` done.
+
+---
+
+## Now
+
+- [ ] **`git init`.** 32 files of docs and working code are unversioned. This is the single
+      largest risk in the project right now and takes one command.
+- [ ] **Run the archiver for real** — `cs init && cs archive` against `~/.chat-archive`.
+      Everything so far has been exercised in a scratch directory only.
+- [ ] **Schedule it.** An archiver that only runs when you remember is not a safety net.
+      launchd agent or cron; needs the watch-vs-scan call below.
+
+## Capture
+
+- [x] Mirror capture with APFS clone, change detection, manifest — ADR 18, 19, 20
+- [ ] **OpenCode bundling** — ADR 18. 170k files, `layout = "bundle"` is reserved in config
+      but unimplemented, so OpenCode is currently **not archived at all**. Dormant since
+      2026-02, which is why it was deferred, not because it is unimportant.
+- [ ] **ChatGPT export ingest** — 2,011 conversations, 2023-01 → 2026-07, the single biggest
+      chunk of the corpus and reachable no other way (the desktop app cache is encrypted).
+      An existing export sits at `~/dev/sandbox/chat-history/data/`.
+- [ ] **Claude.ai capture** — no local files at all; needs export or API.
+- [ ] **Recurring export reminder** — every day without one accrues unrecoverable gaps in the
+      two server-side sources. The existing ChatGPT export already ends 2026-07-10.
+- [ ] **Watch vs scan** — decides archiver latency and whether a daemon is needed.
+- [ ] Compression, when clone divergence starts costing real space — ADR 20
+- [ ] Encrypted offsite tier — ADR 20 option D. Solves *disaster*, which cloning does not.
+- [ ] `--verify` full-hash pass for periodic paranoia — ADR 19
+- [ ] Machine re-key detection after a clone or restore — ADR 17
+- [ ] `forget` operation: remove from raw + index, write a tombstone so a rescan cannot
+      resurrect it — ADR 9
+
+## Interpret
+
+- [ ] **Port the PoC importers to read the archive, not live source dirs.** They currently
+      read `~/.codex/sessions` directly, which breaks reproducibility and makes it impossible
+      to reparse conversations that no longer exist upstream — ADR 1
+- [ ] Codex and Claude Code importers against the real model: DAG, sidechains, `custom-title`,
+      forks
+- [ ] OpenCode importer (blocked on bundling above)
+- [ ] Gemini CLI importer
+- [ ] ChatGPT export importer — includes the 869 edit-branch nodes, the first real test of
+      the DAG model — ADR 4
+- [ ] Archive reader so layout policy never reaches importers — ADR 18
+- [ ] Strip slash-command markup from titles (`<command-message>find-skills</command-message>…`
+      currently leaks into conversation titles)
+- [ ] Derived `surface` and `account` columns — ADR 16
+- [ ] Cursor and Antigravity importers — protobuf, 52 conversations, poor value/effort ratio
+
+## Index and search
+
+- [ ] **Real schema**: `parent_id`, `head_id`, `thread` table, `deleted_upstream_at` — ADR 4, 9.
+      The PoC index is flat and has none of it.
+- [ ] `library.db` and the authored event log — ADR 3
+- [ ] Title resolution fold, including the authored override — ADR 8
+- [ ] Incremental / tail indexing for the live session — ADR 10
+- [ ] Embeddings and hybrid ranking (BM25 + vector, reciprocal rank fusion)
+- [ ] Clustering and topic discovery — explicitly a nice-to-have, falls out of embeddings
+
+## Clients
+
+- [ ] CLI search (the PoC has one; it needs rebuilding against the real schema)
+- [ ] Quick surface — Raycast first to validate ranking before investing in chrome
+- [ ] Deep surface — full window, timeline, conversation reader with tool calls collapsed
+- [ ] VS Code extension
+- [ ] Theming
+
+## Cross-cutting
+
+- [ ] **Mechanise the "Revisit when" triggers.** 17 ADRs carry one, and nothing checks any of
+      them — a trigger with no monitor is a wish. Four are mechanisable today because the
+      tools already measure the inputs:
+
+      | ADR | trigger | who could check it |
+      | --- | --- | --- |
+      | 1 | rebuild exceeds ~60 s | indexer |
+      | 6 | corpus exceeds ~50 GB | archiver |
+      | 20 | free space < 10 GB, or growth > 1.5 GB/month | archiver |
+      | 19 | a source mutates in place without changing size | `--verify` pass |
+
+- [ ] Synthetic golden-file fixtures — a Codex subagent thread, a declared fork, a renamed
+      session, a ChatGPT edit-branch. Must be synthetic: real transcripts contain secrets.
+- [ ] Keep the archive out of any cloud-synced directory, and decide redaction — ADR 15
+
+## Decisions still open
+
+Tracked in [DECISIONS.md](./DECISIONS.md), listed here only so they are visible:
+
+| ADR | question | blocks |
+| --- | --- | --- |
+| 14 | subprocess vs daemon | client work |
+| 15 | redact at import or at display | sharing anything, or moving the archive off this machine |
+| 8 | in-app vs upstream rename precedence | title fold |
+| 16 | work/personal account separation | nothing now — effectively forced to "one source" |
+| 17 | clone/restore re-key policy | second machine |
+| 18 | sync transport | second machine |
+| 19 | hash strength | nothing now |
+| 20 | compress per-file or per-bundle | compression work |

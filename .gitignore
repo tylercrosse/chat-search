@@ -1,0 +1,11 @@
+target/
+poc/rust/target/
+.DS_Store
+
+# Never commit transcripts, archives or indexes: they contain conversation content,
+# env vars, tokens and file contents pulled from real sessions.
+*.db
+*.db-wal
+*.db-shm
+/archive/
+/raw/

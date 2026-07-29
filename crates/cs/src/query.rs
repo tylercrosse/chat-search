@@ -25,8 +25,10 @@ pub fn index(
     config_path: &Path,
     db_path: Option<PathBuf>,
     chatgpt_export: Option<PathBuf>,
+    tool_text_limit: usize,
     json: bool,
 ) -> Result<()> {
+    let opts = cs_core::IndexOptions { tool_text_limit };
     let cfg = Config::load(config_path)
         .with_context(|| format!("reading {}", config_path.display()))?;
     let m = machine::load_or_create(&cfg.archive_root, cfg.machine_alias.as_deref())?;
@@ -56,7 +58,7 @@ pub fn index(
                 Err(_) => failed += 1,
             }
         }
-        let stats = cs_core::write_conversations(&mut conn, convs.iter())
+        let stats = cs_core::write_conversations_with(&mut conn, convs.iter(), opts)
             .with_context(|| format!("indexing {}", source.id))?;
         reports.push(source_report(&source.id, files.len(), failed, &stats, t0));
         accumulate(&mut totals, &stats);
@@ -77,7 +79,7 @@ pub fn index(
             files += 1;
             convs.extend(cs_import::chatgpt_export::import_all(&std::fs::read(&path)?));
         }
-        let stats = cs_core::write_conversations(&mut conn, convs.iter())?;
+        let stats = cs_core::write_conversations_with(&mut conn, convs.iter(), opts)?;
         reports.push(source_report("chatgpt-export", files, 0, &stats, t0));
         accumulate(&mut totals, &stats);
     }

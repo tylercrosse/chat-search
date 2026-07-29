@@ -48,6 +48,10 @@ enum Command {
         /// Index a ChatGPT export directly, until export ingest lands.
         #[arg(long)]
         chatgpt_export: Option<PathBuf>,
+        /// Bytes of each tool call/result to keep. 0 drops tool text entirely; it is all
+        /// reproducible from the archive.
+        #[arg(long, default_value = "1024")]
+        tool_text_limit: usize,
         #[arg(long)]
         json: bool,
     },
@@ -107,8 +111,8 @@ fn main() -> Result<()> {
         Command::Init { machine_alias, force } => init(&config_path, machine_alias, force),
         Command::Status { json } => status(&config_path, json),
         Command::Scan { source, json } => scan(&config_path, source.as_deref(), json),
-        Command::Index { db, chatgpt_export, json } => {
-            query::index(&config_path, db, chatgpt_export, json)
+        Command::Index { db, chatgpt_export, tool_text_limit, json } => {
+            query::index(&config_path, db, chatgpt_export, tool_text_limit, json)
         }
         Command::Search { query: q, limit, db, source, tools, include_off_path, prefix, nested, flat, json } => {
             query::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)

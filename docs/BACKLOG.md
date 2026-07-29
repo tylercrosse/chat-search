@@ -139,8 +139,9 @@ start fits a type-ahead budget) rather than a refactor — ADR 12.
       tailwidn→tailwind, reciprocol→reciproc.
 - [ ] **TUI.** The reason fast-resume feels instant is that it stays alive; our per-query cost
       is already 1-7 ms, so the win is entirely in not paying startup per keystroke.
-- [ ] **Trim tool text out of `index.db`.** 383 MB of the 548 MB is `message.text`, mostly
-      `tool_result`, which default search never touches and the archive can reproduce.
+- [x] **Trim tool text out of `index.db`** — clipped to 1 KiB at index time. 549 MB → 292 MB
+      and the rebuild halved to 10.6s. Tool search still works over the kept head, which is
+      where the tool name and the start of its arguments live.
 - [ ] Tune `REPEAT_WEIGHT` (0.25) and the decay constant against a real eval set
 - [ ] Gemini CLI importer — 34 files are archived and currently index to zero conversations
 - [ ] `library.db` and the authored event log — ADR 3

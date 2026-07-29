@@ -88,7 +88,11 @@ Materialising later is cheap for the same reason the rest of the index is: `rm i
 
 **Why.** Measured on the real corpus: prose is 20.1 MB of 240 MB — **8.4% of the text**. A combined index would be 91% tool sludge competing for BM25 rank against the content you actually want.
 
-**Revisit when.** Tool search proves useful enough to want unified ranking with field boosts instead of separate tables.
+**Tool text is clipped to 1 KiB at index time.** Tool traffic was 241 MB of the 285 MB of stored text while prose was 41 MB, and none of it is searched by default. All of it is reproducible from the archive, so by ADR 1 it need not be in the index at all — but the *head* earns its keep, because that is where a tool's name and the start of its arguments live, which is what makes "which conversation ran `cargo build`" answerable. Measured: 549 MB → 292 MB, and the rebuild halved to 10.6s.
+
+Truncation is marked in the stored text with the dropped byte count. A silently shortened tool result reads as a tool that returned little, which is more misleading than an explicit pointer back to the archive. `--tool-text-limit 0` drops tool text entirely (85%).
+
+**Revisit when.** Tool search proves useful enough to want unified ranking with field boosts instead of separate tables — or the 1 KiB clip proves too short to find things by.
 
 ---
 

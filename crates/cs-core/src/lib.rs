@@ -10,7 +10,7 @@ pub mod model;
 pub mod schema;
 pub mod search;
 
-pub use index::{open, reset, write_conversations, IndexStats};
+pub use index::{open, open_fresh, reset, write_conversations, IndexStats};
 pub use model::{Conversation, Kind, Message, Role, Titles};
 pub use schema::IMPORTER_VERSION;
-pub use search::{explain, search, Explain, Field, Hit, Query};
+pub use search::{explain, search, search_grouped, Explain, Field, Group, Hit, Query};

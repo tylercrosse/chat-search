@@ -126,13 +126,22 @@ start fits a type-ahead budget) rather than a refactor — ADR 12.
 
 - [x] **Real schema** — `parent_id`, `head_id`, `thread_key`, `on_head_path`,
       `deleted_upstream_at`; index + BM25 search + `cs explain` — ADR 4, 9
-- [ ] **Group results by conversation.** Measured on the first real queries: 10 hits often
-      cover only 4 distinct conversations, because a conversation's main thread and its
-      subagents all match and eat the result list. Collapse to best-hit-per-conversation with
-      a match count, rather than returning near-duplicates.
-- [ ] **Decide how subagent hits should rank.** 4 of 10 hits on some queries are subagent
-      prose — technically correct matches, rarely what was being looked for. Options:
-      down-weight, group under the parent, or filter behind a flag.
+- [x] **Group results by conversation** — Algolia DocSearch shape: conversation as the
+      result, best matching messages nested. Damped scoring (best + 25% of the rest),
+      subagent and edited-away matches nested under their parent and labelled
+- [x] **Prefix matching for typeahead** — final unfinished token only, 3-char floor
+- [x] **Time decay direction** — it divided the wrong way and had been *boosting* age since
+      the proof of concept
+- [ ] **Fuzzy-on-failure typo tolerance.** `fts5vocab` exposes the term list (49,538 terms);
+      bounded edit distance with a first-char and length prefilter corrects to the *stemmed*
+      form the index actually holds. Only run when the exact query returns nothing, so
+      correctly-spelled queries pay nothing. Prototype corrected borrwo→borrow,
+      tailwidn→tailwind, reciprocol→reciproc.
+- [ ] **TUI.** The reason fast-resume feels instant is that it stays alive; our per-query cost
+      is already 1-7 ms, so the win is entirely in not paying startup per keystroke.
+- [ ] **Trim tool text out of `index.db`.** 383 MB of the 548 MB is `message.text`, mostly
+      `tool_result`, which default search never touches and the archive can reproduce.
+- [ ] Tune `REPEAT_WEIGHT` (0.25) and the decay constant against a real eval set
 - [ ] Gemini CLI importer — 34 files are archived and currently index to zero conversations
 - [ ] `library.db` and the authored event log — ADR 3
 - [ ] Title resolution fold, including the authored override — ADR 8

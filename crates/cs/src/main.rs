@@ -67,6 +67,15 @@ enum Command {
         /// Include messages on branches that were edited away.
         #[arg(long)]
         include_off_path: bool,
+        /// Treat the last word as a prefix, for typeahead.
+        #[arg(long)]
+        prefix: bool,
+        /// Matching messages to nest under each conversation.
+        #[arg(long, default_value = "3")]
+        nested: usize,
+        /// One row per message instead of grouping by conversation.
+        #[arg(long)]
+        flat: bool,
         #[arg(long)]
         json: bool,
     },
@@ -101,8 +110,8 @@ fn main() -> Result<()> {
         Command::Index { db, chatgpt_export, json } => {
             query::index(&config_path, db, chatgpt_export, json)
         }
-        Command::Search { query: q, limit, db, source, tools, include_off_path, json } => {
-            query::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, json)
+        Command::Search { query: q, limit, db, source, tools, include_off_path, prefix, nested, flat, json } => {
+            query::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)
         }
         Command::Explain { conv_id, query: q, db } => query::explain(&config_path, db, &conv_id, &q),
         Command::Archive { source, dry_run, json } => {

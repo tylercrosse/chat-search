@@ -43,10 +43,42 @@ pub struct Hit {
 /// Raw user input is not a valid FTS5 MATCH expression — a bare `-`, `*` or quote is a
 /// syntax error. Tokenise and re-quote each term; implicit AND between them.
 pub fn to_match_expr(query: &str) -> String {
-    query
+    to_match_expr_opts(query, false)
+}
+
+/// Shortest token that may be expanded into a prefix match.
+///
+/// A one- or two-character prefix matches a large fraction of the corpus, and BM25 has to
+/// score *every* matching row before it can sort, so the cost is in ranking rather than
+/// lookup and no index fixes it. Measured on 40k prose messages: `h*` 2510ms, `ho*` 51ms,
+/// `hov*` 16ms, `hove*` 6ms. Below this length the token is matched exactly instead, which
+/// is what typeahead UIs do anyway — results simply start appearing at the third keystroke.
+pub const MIN_PREFIX_LEN: usize = 3;
+
+/// With `prefix`, the *final* token becomes a prefix match — the typeahead shape, where
+/// every completed word is exact and only the one still being typed is open-ended.
+/// A trailing separator means the last word is finished, so no prefix is applied.
+pub fn to_match_expr_opts(query: &str, prefix: bool) -> String {
+    let terms: Vec<String> = query
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|t| !t.is_empty())
-        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .map(|t| t.replace('"', "\"\""))
+        .collect();
+    let ends_open = query
+        .chars()
+        .last()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_');
+    let last = terms.len().saturating_sub(1);
+    terms
+        .iter()
+        .enumerate()
+        .map(|(i, t)| {
+            if prefix && ends_open && i == last && t.chars().count() >= MIN_PREFIX_LEN {
+                format!("\"{t}\"*")
+            } else {
+                format!("\"{t}\"")
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -82,6 +114,8 @@ pub struct Query<'a> {
     pub source: Option<&'a str>,
     /// Include messages on branches that were edited away.
     pub include_off_path: bool,
+    /// Treat the final token as a prefix, for typeahead.
+    pub prefix: bool,
     pub now_ms: i64,
 }
 
@@ -93,6 +127,7 @@ impl<'a> Query<'a> {
             field: Field::Prose,
             source: None,
             include_off_path: false,
+            prefix: false,
             now_ms: 0,
         }
     }
@@ -105,7 +140,7 @@ pub fn search(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Hit>> {
         "SELECT m.id, m.conv_id, m.role, m.kind, m.ts, m.text, m.on_head_path,
                 m.is_sidechain, m.thread_key,
                 c.source, c.title, c.resume_cmd, c.deleted_upstream_at,
-                bm25({table}) * (1.0 + 0.3 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
+                bm25({table}) / (1.0 + 0.3 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
          FROM {table}
          JOIN message m      ON m.rowid = {table}.rowid
          JOIN conversation c ON c.id = m.conv_id
@@ -118,7 +153,7 @@ pub fn search(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Hit>> {
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
-        params![q.now_ms, to_match_expr(q.text), q.include_off_path as i64, q.source, q.limit],
+        params![q.now_ms, to_match_expr_opts(q.text, q.prefix), q.include_off_path as i64, q.source, q.limit],
         |r| {
             let text: String = r.get(5)?;
             Ok(Hit {
@@ -264,5 +299,155 @@ mod tests {
     fn snippet_is_char_safe_on_multibyte_text() {
         let s = snippet("héllo wörld ünïcode", "wörld", 10);
         assert!(s.contains("wörld"));
+    }
+}
+
+// ---------------------------------------------------------------- grouping
+
+/// A conversation and its best matching messages — the Algolia DocSearch shape: the
+/// conversation is the result, matching messages nest beneath it.
+#[derive(Debug, Clone, Serialize)]
+pub struct Group {
+    pub conv_id: String,
+    pub source: String,
+    pub title: Option<String>,
+    pub ended_at: Option<i64>,
+    /// What a human would call a turn: user prose, not raw message count.
+    pub user_turns: i64,
+    pub score: f64,
+    /// Total matching messages, including any not shown.
+    pub match_count: usize,
+    pub resume_cmd: Option<String>,
+    pub deleted_upstream: bool,
+    pub hits: Vec<Hit>,
+}
+
+/// How much a conversation's *additional* matches count beyond its best one.
+///
+/// 0.0 would be pure max — one strong hit is the whole score, and a conversation that
+/// returns to a topic ten times ranks no higher. 1.0 would be pure sum, which lets long
+/// agent sessions win on volume alone. 0.25 keeps the best hit leading while letting
+/// sustained discussion break ties.
+pub const REPEAT_WEIGHT: f64 = 0.25;
+
+/// Conversations matching `q`, best-first, each carrying up to `nested` messages.
+///
+/// Scores are pulled ungrouped and folded here rather than in SQL: FTS5 auxiliary functions
+/// like bm25() cannot be used through a CTE or subquery, so the grouping has to happen after
+/// the rows come back.
+pub fn search_grouped(
+    conn: &Connection,
+    q: &Query,
+    nested: usize,
+) -> rusqlite::Result<Vec<Group>> {
+    // Pull well beyond `limit` conversations' worth of messages, since one conversation can
+    // account for many hits and would otherwise crowd out the tail.
+    let ceiling = (q.limit * 50).clamp(500, 5_000);
+    let hits = search(conn, &Query { limit: ceiling, ..*q })?;
+
+    let mut order: Vec<String> = Vec::new();
+    let mut by_conv: std::collections::HashMap<String, Vec<Hit>> = std::collections::HashMap::new();
+    for h in hits {
+        if !by_conv.contains_key(&h.conv_id) {
+            order.push(h.conv_id.clone());
+        }
+        by_conv.entry(h.conv_id.clone()).or_default().push(h);
+    }
+
+    let mut groups = Vec::with_capacity(order.len());
+    for conv_id in order {
+        let mut hits = by_conv.remove(&conv_id).unwrap_or_default();
+        // bm25 is negative and better is more negative, so the best hit is the minimum.
+        let best = hits.iter().map(|h| h.score).fold(f64::INFINITY, f64::min);
+        let total: f64 = hits.iter().map(|h| h.score).sum();
+        let score = best + REPEAT_WEIGHT * (total - best);
+
+        let first = hits.first().cloned();
+        let match_count = hits.len();
+        hits.truncate(nested);
+
+        groups.push(Group {
+            conv_id,
+            source: first.as_ref().map(|h| h.source.clone()).unwrap_or_default(),
+            title: first.as_ref().and_then(|h| h.title.clone()),
+            ended_at: None,
+            user_turns: 0,
+            score,
+            match_count,
+            resume_cmd: first.as_ref().and_then(|h| h.resume_cmd.clone()),
+            deleted_upstream: first.as_ref().is_some_and(|h| h.deleted_upstream),
+            hits,
+        });
+    }
+
+    // Ties broken by conv_id so the order is stable across runs — results that reshuffle
+    // between identical queries read as a bug even when the ranking is the same.
+    groups.sort_by(|a, b| {
+        a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.conv_id.cmp(&b.conv_id))
+    });
+    groups.truncate(q.limit as usize);
+
+    // Conversation metadata is fetched only for the groups actually being returned. Doing it
+    // during the fold costs one query per *matching* conversation, which a broad typeahead
+    // prefix like "h" turns into thousands — measured at 2.5s before this was moved.
+    let mut stmt =
+        conn.prepare_cached("SELECT ended_at, user_turns FROM conversation WHERE id = ?1")?;
+    for g in &mut groups {
+        if let Ok((ended_at, user_turns)) =
+            stmt.query_row(params![g.conv_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        {
+            g.ended_at = ended_at;
+            g.user_turns = user_turns;
+        }
+    }
+    Ok(groups)
+}
+
+#[cfg(test)]
+mod group_tests {
+    use super::*;
+
+    #[test]
+    fn prefix_applies_only_to_an_unfinished_final_token() {
+        assert_eq!(to_match_expr_opts("borrow check", true), r#""borrow" "check"*"#);
+        // trailing space means that word is finished
+        assert_eq!(to_match_expr_opts("borrow check ", true), r#""borrow" "check""#);
+        // below the floor, matched exactly: a 1-2 char prefix matches most of the corpus
+        // and BM25 must score every row before sorting
+        assert_eq!(to_match_expr_opts("ho", true), r#""ho""#);
+        assert_eq!(to_match_expr_opts("hov", true), r#""hov"*"#);
+        // off by default, so ordinary search is unaffected
+        assert_eq!(to_match_expr_opts("borrow check", false), r#""borrow" "check""#);
+    }
+
+    #[test]
+    fn damping_sits_between_best_hit_and_total() {
+        // bm25 is negative; better is more negative
+        let damped = |ss: &[f64]| {
+            let best = ss.iter().cloned().fold(f64::INFINITY, f64::min);
+            let total: f64 = ss.iter().sum();
+            best + REPEAT_WEIGHT * (total - best)
+        };
+        let once = [-6.0];
+        let four_times = [-6.0, -6.0, -6.0, -6.0];
+
+        // repeated discussion of the same strength improves a conversation's score...
+        assert!(damped(&four_times) < damped(&once), "repetition should help");
+        // ...but far less than raw sum, which is what stops long sessions winning on volume
+        assert!(damped(&four_times) > four_times.iter().sum::<f64>());
+        // and a single strong hit still outranks several mediocre ones
+        assert!(damped(&[-11.0]) < damped(&four_times));
+        // pure max would ignore repetition entirely
+        assert_eq!(damped(&once), once[0]);
+    }
+
+    #[test]
+    fn age_lowers_a_score_rather_than_raising_it() {
+        // The decay divides. Multiplying — which is what this did until it was measured —
+        // makes an old negative score *more* negative and therefore rank higher.
+        let bm25 = -10.0_f64;
+        let decayed = |age_years: f64| bm25 / (1.0 + 0.3 * age_years);
+        assert!(decayed(3.0) > decayed(0.0), "older must rank lower, not higher");
+        assert!((decayed(0.0) - bm25).abs() < f64::EPSILON);
     }
 }

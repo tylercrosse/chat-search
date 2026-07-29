@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS conversation(
   ended_at            INTEGER,
   msg_count           INTEGER NOT NULL DEFAULT 0,
   prose_count         INTEGER NOT NULL DEFAULT 0,
+  user_turns          INTEGER NOT NULL DEFAULT 0,   -- what a human would call a 'turn'
   thread_count        INTEGER NOT NULL DEFAULT 0,
   forked_from         TEXT,          -- conversation.id of the parent, if declared
   head_id             TEXT,          -- currently-selected leaf; the only mutable notion

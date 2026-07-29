@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "chat_search",
+  "project_id": "7e59193b-8ec3-43c3-aee0-98f5fe1fd126"
+}

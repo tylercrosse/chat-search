@@ -9,3 +9,8 @@ poc/rust/target/
 *.db-shm
 /archive/
 /raw/
+
+# Beads / Dolt files (added by bd init)
+.dolt/
+.beads-credential-key
+.beads/proxieddb/

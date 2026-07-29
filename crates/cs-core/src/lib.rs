@@ -16,4 +16,6 @@ pub use index::{
 };
 pub use model::{Conversation, Kind, Message, Role, Titles};
 pub use schema::IMPORTER_VERSION;
-pub use search::{explain, search, search_grouped, Explain, Field, Group, Hit, Query};
+pub use search::{
+    explain, is_blank, recent, search, search_grouped, Explain, Field, Group, Hit, Query,
+};

@@ -133,7 +133,19 @@ impl<'a> Query<'a> {
     }
 }
 
+/// True when a query carries no searchable term — empty, whitespace, or only punctuation.
+///
+/// Checked against the *tokenised* form rather than the raw string, because `"-"` and `"??"`
+/// are non-empty input that still produce no terms, and an empty FTS5 MATCH expression is a
+/// syntax error rather than an empty result.
+pub fn is_blank(query: &str) -> bool {
+    to_match_expr_opts(query, false).is_empty()
+}
+
 pub fn search(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Hit>> {
+    if is_blank(q.text) {
+        return Ok(Vec::new());
+    }
     let table = q.field.table();
     // bm25() and MATCH need the literal table name — an alias raises "no such column".
     let sql = format!(
@@ -330,6 +342,39 @@ pub struct Group {
 /// sustained discussion break ties.
 pub const REPEAT_WEIGHT: f64 = 0.25;
 
+/// Most recently active conversations, carrying no nested hits.
+///
+/// A typeahead UI has to draw something before the first keystroke, and below
+/// [`MIN_PREFIX_LEN`] a token is matched exactly rather than as a prefix, so one or two
+/// characters return noise rather than a narrowing list. Recency is the only ranking
+/// available without a query and it is also the one people expect — the conversation you
+/// want is usually among the last few you had.
+pub fn recent(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Group>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, source, title, ended_at, user_turns, resume_cmd, deleted_upstream_at
+         FROM conversation
+         WHERE (?1 IS NULL OR source = ?1)
+         -- `NULLS LAST` is not portable to older SQLite; this expresses the same order.
+         ORDER BY ended_at IS NULL, ended_at DESC
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![q.source, q.limit], |r| {
+        Ok(Group {
+            conv_id: r.get(0)?,
+            source: r.get(1)?,
+            title: r.get(2)?,
+            ended_at: r.get(3)?,
+            user_turns: r.get(4)?,
+            score: 0.0,
+            match_count: 0,
+            resume_cmd: r.get(5)?,
+            deleted_upstream: r.get::<_, Option<i64>>(6)?.is_some(),
+            hits: Vec::new(),
+        })
+    })?;
+    rows.collect()
+}
+
 /// Conversations matching `q`, best-first, each carrying up to `nested` messages.
 ///
 /// Scores are pulled ungrouped and folded here rather than in SQL: FTS5 auxiliary functions
@@ -340,65 +385,150 @@ pub fn search_grouped(
     q: &Query,
     nested: usize,
 ) -> rusqlite::Result<Vec<Group>> {
+    if is_blank(q.text) {
+        return recent(conn, q);
+    }
     // Pull well beyond `limit` conversations' worth of messages, since one conversation can
     // account for many hits and would otherwise crowd out the tail.
     let ceiling = (q.limit * 50).clamp(500, 5_000);
-    let hits = search(conn, &Query { limit: ceiling, ..*q })?;
+
+    // Ranking reads no message text. `message.text` is by far the widest column, and a broad
+    // prefix puts thousands of rows through this query while only `limit * nested` of them are
+    // ever shown — so text is fetched in `hydrate` afterwards, for the survivors only.
+    // Warm, at limit=200, against building a snippet per candidate: "the" 432ms -> 79ms,
+    // "cod" 380ms -> 32ms, "code" 469ms -> 98ms.
+    let table = q.field.table();
+    let sql = format!(
+        "SELECT m.id, m.conv_id,
+                bm25({table}) / (1.0 + 0.3 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
+         FROM {table}
+         JOIN message m      ON m.rowid = {table}.rowid
+         JOIN conversation c ON c.id = m.conv_id
+         WHERE {table} MATCH ?2
+           AND (?3 = 1 OR m.on_head_path = 1)
+           AND (?4 IS NULL OR c.source = ?4)
+         ORDER BY score
+         LIMIT ?5"
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let rows = stmt.query_map(
+        params![
+            q.now_ms,
+            to_match_expr_opts(q.text, q.prefix),
+            q.include_off_path as i64,
+            q.source,
+            ceiling
+        ],
+        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?)),
+    )?;
 
     let mut order: Vec<String> = Vec::new();
-    let mut by_conv: std::collections::HashMap<String, Vec<Hit>> = std::collections::HashMap::new();
-    for h in hits {
-        if !by_conv.contains_key(&h.conv_id) {
-            order.push(h.conv_id.clone());
+    let mut by_conv: std::collections::HashMap<String, Vec<(String, f64)>> = Default::default();
+    for row in rows {
+        let (msg_id, conv_id, score) = row?;
+        if !by_conv.contains_key(&conv_id) {
+            order.push(conv_id.clone());
         }
-        by_conv.entry(h.conv_id.clone()).or_default().push(h);
+        by_conv.entry(conv_id).or_default().push((msg_id, score));
     }
 
-    let mut groups = Vec::with_capacity(order.len());
+    let mut ranked: Vec<(String, f64, usize, Vec<String>)> = Vec::with_capacity(order.len());
     for conv_id in order {
-        let mut hits = by_conv.remove(&conv_id).unwrap_or_default();
+        let hits = by_conv.remove(&conv_id).unwrap_or_default();
         // bm25 is negative and better is more negative, so the best hit is the minimum.
-        let best = hits.iter().map(|h| h.score).fold(f64::INFINITY, f64::min);
-        let total: f64 = hits.iter().map(|h| h.score).sum();
+        let best = hits.iter().map(|(_, s)| *s).fold(f64::INFINITY, f64::min);
+        let total: f64 = hits.iter().map(|(_, s)| *s).sum();
         let score = best + REPEAT_WEIGHT * (total - best);
-
-        let first = hits.first().cloned();
         let match_count = hits.len();
-        hits.truncate(nested);
-
-        groups.push(Group {
-            conv_id,
-            source: first.as_ref().map(|h| h.source.clone()).unwrap_or_default(),
-            title: first.as_ref().and_then(|h| h.title.clone()),
-            ended_at: None,
-            user_turns: 0,
-            score,
-            match_count,
-            resume_cmd: first.as_ref().and_then(|h| h.resume_cmd.clone()),
-            deleted_upstream: first.as_ref().is_some_and(|h| h.deleted_upstream),
-            hits,
-        });
+        let shown = hits.into_iter().take(nested).map(|(id, _)| id).collect();
+        ranked.push((conv_id, score, match_count, shown));
     }
 
     // Ties broken by conv_id so the order is stable across runs — results that reshuffle
     // between identical queries read as a bug even when the ranking is the same.
-    groups.sort_by(|a, b| {
-        a.score.partial_cmp(&b.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.conv_id.cmp(&b.conv_id))
+    ranked.sort_by(|a, b| {
+        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.0.cmp(&b.0))
     });
-    groups.truncate(q.limit as usize);
+    ranked.truncate(q.limit as usize);
 
-    // Conversation metadata is fetched only for the groups actually being returned. Doing it
-    // during the fold costs one query per *matching* conversation, which a broad typeahead
-    // prefix like "h" turns into thousands — measured at 2.5s before this was moved.
-    let mut stmt =
-        conn.prepare_cached("SELECT ended_at, user_turns FROM conversation WHERE id = ?1")?;
-    for g in &mut groups {
-        if let Ok((ended_at, user_turns)) =
-            stmt.query_row(params![g.conv_id], |r| Ok((r.get(0)?, r.get(1)?)))
-        {
-            g.ended_at = ended_at;
-            g.user_turns = user_turns;
+    hydrate(conn, q, ranked)
+}
+
+/// Turn ranked `(conv_id, score, match_count, shown message ids)` into full `Group`s.
+///
+/// Split out from ranking so the expensive columns — message text, and the snippet built from
+/// it — are touched only for rows that survived. One prepared statement reused across the
+/// survivors beats an `IN (...)` list, which would need rebuilding per query and lose the
+/// statement cache.
+fn hydrate(
+    conn: &Connection,
+    q: &Query,
+    ranked: Vec<(String, f64, usize, Vec<String>)>,
+) -> rusqlite::Result<Vec<Group>> {
+    let mut meta = conn.prepare_cached(
+        "SELECT source, title, resume_cmd, deleted_upstream_at, ended_at, user_turns
+         FROM conversation WHERE id = ?1",
+    )?;
+    let mut msg = conn.prepare_cached(
+        "SELECT m.id, m.conv_id, m.role, m.kind, m.ts, m.text, m.on_head_path,
+                m.is_sidechain, m.thread_key,
+                c.source, c.title, c.resume_cmd, c.deleted_upstream_at
+         FROM message m JOIN conversation c ON c.id = m.conv_id
+         WHERE m.id = ?1",
+    )?;
+
+    let mut groups = Vec::with_capacity(ranked.len());
+    for (conv_id, score, match_count, shown) in ranked {
+        let m = meta
+            .query_row(params![conv_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<i64>>(3)?.is_some(),
+                    r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, i64>(5)?,
+                ))
+            })
+            .ok();
+
+        let mut hits = Vec::with_capacity(shown.len());
+        for id in shown {
+            if let Ok(h) = msg.query_row(params![id], |r| {
+                let text: String = r.get(5)?;
+                Ok(Hit {
+                    msg_id: r.get(0)?,
+                    conv_id: r.get(1)?,
+                    role: r.get(2)?,
+                    kind: r.get(3)?,
+                    ts: r.get(4)?,
+                    snippet: snippet(&text, q.text, 160),
+                    on_head_path: r.get::<_, i64>(6)? != 0,
+                    is_sidechain: r.get::<_, i64>(7)? != 0,
+                    thread_key: r.get(8)?,
+                    source: r.get(9)?,
+                    title: r.get(10)?,
+                    resume_cmd: r.get(11)?,
+                    deleted_upstream: r.get::<_, Option<i64>>(12)?.is_some(),
+                    score,
+                })
+            }) {
+                hits.push(h);
+            }
         }
+
+        groups.push(Group {
+            conv_id,
+            source: m.as_ref().map(|m| m.0.clone()).unwrap_or_default(),
+            title: m.as_ref().and_then(|m| m.1.clone()),
+            resume_cmd: m.as_ref().and_then(|m| m.2.clone()),
+            deleted_upstream: m.as_ref().is_some_and(|m| m.3),
+            ended_at: m.as_ref().and_then(|m| m.4),
+            user_turns: m.as_ref().map(|m| m.5).unwrap_or(0),
+            score,
+            match_count,
+            hits,
+        });
     }
     Ok(groups)
 }
@@ -439,6 +569,59 @@ mod group_tests {
         assert!(damped(&[-11.0]) < damped(&four_times));
         // pure max would ignore repetition entirely
         assert_eq!(damped(&once), once[0]);
+    }
+
+    #[test]
+    fn a_query_with_no_terms_is_blank_however_it_is_spelled() {
+        for q in ["", "   ", "-", "??", "  *  "] {
+            assert!(is_blank(q), "{q:?} yields no FTS terms, so it cannot be MATCHed");
+        }
+        assert!(!is_blank("hov"));
+        assert!(!is_blank("a"));
+    }
+
+    #[test]
+    fn a_blank_query_falls_back_to_recent_conversations() {
+        let conn = crate::open(":memory:").unwrap();
+        // ended_at descending, with the NULL sorted last rather than first
+        for (id, ended) in [("c:a", Some(300i64)), ("c:b", Some(100)), ("c:z", None), ("c:c", Some(200))] {
+            conn.execute(
+                "INSERT INTO conversation(id, source, native_id, title, ended_at, user_turns)
+                 VALUES (?1, 'codex', ?1, ?1, ?2, 3)",
+                params![id, ended],
+            )
+            .unwrap();
+        }
+
+        let q = Query { limit: 10, ..Query::new("") };
+        // An empty MATCH expression is a syntax error, so the point is that this does not
+        // merely return nothing — it returns something useful, which is what a TUI opens on.
+        let groups = search_grouped(&conn, &q, 3).unwrap();
+        let ids: Vec<_> = groups.iter().map(|g| g.conv_id.as_str()).collect();
+        assert_eq!(ids, ["c:a", "c:c", "c:b", "c:z"]);
+        assert!(groups.iter().all(|g| g.hits.is_empty()), "no query means no hits to nest");
+
+        // and the flat path stays empty rather than raising
+        assert!(search(&conn, &q).unwrap().is_empty());
+    }
+
+    #[test]
+    fn recent_respects_the_source_filter_and_limit() {
+        let conn = crate::open(":memory:").unwrap();
+        for (id, source) in [("a", "codex"), ("b", "claude-code"), ("c", "codex")] {
+            conn.execute(
+                "INSERT INTO conversation(id, source, native_id, ended_at, user_turns)
+                 VALUES (?1, ?2, ?1, 1, 1)",
+                params![id, source],
+            )
+            .unwrap();
+        }
+        let got = recent(&conn, &Query { limit: 10, source: Some("codex"), ..Query::new("") }).unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(got.iter().all(|g| g.source == "codex"));
+
+        let capped = recent(&conn, &Query { limit: 1, ..Query::new("") }).unwrap();
+        assert_eq!(capped.len(), 1);
     }
 
     #[test]

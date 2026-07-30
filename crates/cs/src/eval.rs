@@ -713,6 +713,7 @@ mod tests {
             conv_id: conv_id.into(),
             source: "codex".into(),
             title: Some(title.into()),
+            cwd: None,
             ended_at: Some(0),
             ended_date: Some("2026-01-01".into()),
             user_turns: 3,

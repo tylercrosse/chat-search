@@ -356,6 +356,12 @@ pub struct Group {
     pub msg_count: i64,
     /// Prose messages only, which is what a prose search could possibly have matched.
     pub prose_count: i64,
+    /// Working directory the conversation ran in, for sources that have one.
+    ///
+    /// `None` for every ChatGPT conversation, which is 2,011 of the corpus — a client must
+    /// render that as "this source has no such thing" rather than as missing data
+    /// (chat-search-6eb.26). Derived, so ADR 16 forbids it ever reaching an id.
+    pub cwd: Option<String>,
     pub score: f64,
     /// Total matching messages, including any not shown.
     pub match_count: usize,
@@ -392,7 +398,7 @@ pub const REPEAT_WEIGHT: f64 = 0.25;
 pub fn recent(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Group>> {
     let mut stmt = conn.prepare(
         "SELECT id, source, title, ended_at, user_turns, resume_cmd, deleted_upstream_at,
-                msg_count, prose_count
+                msg_count, prose_count, cwd
          FROM conversation
          WHERE (?1 IS NULL OR source = ?1)
          -- `NULLS LAST` is not portable to older SQLite; this expresses the same order.
@@ -410,6 +416,7 @@ pub fn recent(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Group>> {
             user_turns: r.get(4)?,
             msg_count: r.get(7)?,
             prose_count: r.get(8)?,
+            cwd: r.get(9)?,
             score: 0.0,
             match_count: 0,
             // No query, so nothing matched and there is no shape to draw.
@@ -566,7 +573,7 @@ pub fn match_density(seqs: &[i64], msg_count: i64) -> String {
 fn hydrate(conn: &Connection, q: &Query, ranked: Vec<Ranked>) -> rusqlite::Result<Vec<Group>> {
     let mut meta = conn.prepare_cached(
         "SELECT source, title, resume_cmd, deleted_upstream_at, ended_at, user_turns,
-                msg_count, prose_count
+                msg_count, prose_count, cwd
          FROM conversation WHERE id = ?1",
     )?;
     let mut msg = conn.prepare_cached(
@@ -590,6 +597,7 @@ fn hydrate(conn: &Connection, q: &Query, ranked: Vec<Ranked>) -> rusqlite::Resul
                     r.get::<_, i64>(5)?,
                     r.get::<_, i64>(6)?,
                     r.get::<_, i64>(7)?,
+                    r.get::<_, Option<String>>(8)?,
                 ))
             })
             .ok();
@@ -631,6 +639,7 @@ fn hydrate(conn: &Connection, q: &Query, ranked: Vec<Ranked>) -> rusqlite::Resul
             user_turns: m.as_ref().map(|m| m.5).unwrap_or(0),
             msg_count: m.as_ref().map(|m| m.6).unwrap_or(0),
             prose_count: m.as_ref().map(|m| m.7).unwrap_or(0),
+            cwd: m.as_ref().and_then(|m| m.8.clone()),
             score,
             match_count,
             match_seqs: seqs,

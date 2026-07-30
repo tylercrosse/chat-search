@@ -75,15 +75,28 @@ results `Min(8)`, preview `Length(12)`. The preview is never dropped for width; 
 only on the explicit toggle. A user who narrows a window has not asked to lose the preview.
 
 *Column level.* Progressive shedding with a floor on Title. fast-resume's plan
-(`render.rs:507-534`) sheds Directory first at `<72`; we shed **Turns** first, because for this
-corpus the directory is a stronger retrieval cue than the message count — you remember
-*the thing in `personal-site`* more reliably than you remember it ran long.
+(`render.rs:507-534`) sheds Directory first at `<72`; we shed **Msgs** first and the density
+strip second, because for this corpus the directory is a stronger retrieval cue than either —
+`6eb.26` measured date and project as the strongest recognition cues, "stronger than anything in
+the text."
 
-| inner width | agent | dir | msgs | age | title |
-| ---: | ---: | ---: | ---: | ---: | --- |
-| ≥100 | 15 | 32 | 7 | 10 | remainder, floor 16 |
-| ≥72 | 13 | 24 | 0 | 9 | remainder, floor 16 |
-| <72 | 13 | 0 | 0 | 8 | remainder, floor 16 |
+| inner width | agent | dir | density | msgs | age | title |
+| ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| ≥116 | 13 | 30 | 10 | 6 | 9 | remainder, floor 16 |
+| ≥100 | 13 | 28 | 10 | 0 | 9 | remainder, floor 16 |
+| ≥72 | 12 | 22 | 0 | 0 | 8 | remainder, floor 16 |
+| <72 | 12 | 0 | 0 | 0 | 7 | remainder, floor 16 |
+
+One blank column separates each *visible* pair; a hidden column consumes no gap. Implemented in
+`cs-tui/src/layout.rs`, whose tests assert over a width sweep that no two visible columns overlap.
+
+**These widths are the results pane's inner width, not the terminal's**, and the two are far
+apart while the preview is up: 62% of a 116-column terminal is 71, so the widest column plan does
+not appear until roughly 190 terminal columns — or at 118 with the preview toggled off. That is
+the intended trade. Msgs is the least load-bearing column, so needing room to spare before it
+appears is correct, and the `116` here is numerically equal to `SPLIT_MIN_WIDTH` by coincidence
+rather than by derivation. The two thresholds are free to move apart and the code keeps them
+separate deliberately.
 
 **Path truncation must not be tail-elided.** fast-resume's `truncate` (`tui/text.rs:27-44`)
 appends `...` after a head slice, so `~/dev/projects/personal-site` at width 20 becomes

@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 cs-archive = { path = "../cs-archive" }
 cs-core = { path = "../cs-core" }
+cs-tui = { path = "../cs-tui" }
 cs-import = { path = "../cs-import" }
 anyhow = { workspace = true }
 clap = { workspace = true }

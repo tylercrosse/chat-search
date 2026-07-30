@@ -1,0 +1,13 @@
+[package]
+name = "cs-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cs-core = { path = "../cs-core" }
+# The search API takes a Connection, so the type has to be in scope here too.
+rusqlite = { workspace = true }
+ratatui = { workspace = true }
+unicode-width = { workspace = true }
+anyhow = { workspace = true }

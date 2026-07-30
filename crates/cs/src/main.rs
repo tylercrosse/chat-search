@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 mod eval;
 mod query;
+mod tui;
 
 #[derive(Parser)]
 #[command(name = "cs", about = "Search your AI conversations across every tool", version)]
@@ -52,6 +53,21 @@ enum Command {
         tool_text_limit: usize,
         #[arg(long)]
         json: bool,
+    },
+    /// Search interactively, as you type.
+    ///
+    /// Same index and same ranking as `cs search`, in-process rather than per keystroke
+    /// (ADR 14). A subcommand rather than its own binary so a separately-installed client
+    /// cannot drift from the `cs` that built the index it is reading.
+    Tui {
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Restrict to one source id.
+        #[arg(long)]
+        source: Option<String>,
+        /// Conversations per search.
+        #[arg(long, default_value = "100")]
+        limit: i64,
     },
     /// Search indexed conversations.
     Search {
@@ -191,6 +207,9 @@ fn main() -> Result<()> {
         Command::Scan { source, json } => scan(&config_path, source.as_deref(), json),
         Command::Index { db, tool_text_limit, json } => {
             query::index(&config_path, db, tool_text_limit, json)
+        }
+        Command::Tui { db, source, limit } => {
+            tui::run(&config_path, db, source.as_deref(), limit)
         }
         Command::Search { query: q, limit, db, source, tools, include_off_path, prefix, nested, flat, json } => {
             query::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)

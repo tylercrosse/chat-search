@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/cs-archive", "crates/cs-core", "crates/cs-import", "crates/cs"]
+members = ["crates/cs-archive", "crates/cs-core", "crates/cs-import", "crates/cs-tui", "crates/cs"]
 # The PoC is a throwaway measurement instrument kept for its results, not part of the
 # product. Excluding it keeps its pinned deps out of the workspace lockfile.
 exclude = ["poc/rust"]
@@ -29,6 +29,9 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # Dev-only, everywhere: pinning a named zone is what makes DST behaviour testable off a
 # machine that happens to sit in the right timezone. Production reads the system zone.
 chrono-tz = "0.10"
+# ratatui re-exports crossterm, so the backend is never a separate version to keep in step.
+ratatui = { version = "0.30", features = ["crossterm"] }
+unicode-width = "0.2"
 
 [profile.release]
 opt-level = 3

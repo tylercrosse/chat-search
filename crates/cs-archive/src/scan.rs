@@ -49,6 +49,33 @@ pub struct FileChange {
     pub change: Change,
     /// `None` only for `Vanished`, where there is no longer a file to fingerprint.
     pub fingerprint: Option<Fingerprint>,
+    /// Blocks the filesystem has handed this file, in bytes — what it occupies, as against
+    /// the `fingerprint.size` it claims. `0` for `Vanished`, which occupies nothing.
+    ///
+    /// Reporting a capture's cost in terms of `size` overstates it: block rounding aside,
+    /// an append re-captures the whole file, so the same bytes are billed on every scan
+    /// (chat-search-a7k.6).
+    pub allocated_bytes: u64,
+}
+
+/// Bytes the filesystem has actually allocated to a file, as against the size the file
+/// reports. `len()` is what a file claims to be; this is what it occupies, and the two
+/// differ in both directions — block rounding makes a one-byte file cost a whole block,
+/// while a sparse or transparently compressed file occupies less than it claims.
+///
+/// POSIX fixes `st_blocks` at 512-byte units whatever the filesystem's own block size is,
+/// so the conversion is a constant and not something to interrogate the volume for.
+#[cfg(unix)]
+pub fn allocated_bytes(meta: &std::fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.blocks().saturating_mul(512)
+}
+
+/// No portable equivalent of `st_blocks` exists off Unix, so apparent size is the closest
+/// honest answer. Callers get one number either way rather than an optional one.
+#[cfg(not(unix))]
+pub fn allocated_bytes(meta: &std::fs::Metadata) -> u64 {
+    meta.len()
 }
 
 #[derive(Debug)]
@@ -85,8 +112,10 @@ pub fn scan_source(source: &Source, manifest: &Manifest) -> Result<SourceScan> {
         }
         present.insert(rel.clone());
 
+        // One stat answers all three questions: identity, freshness, and occupancy.
         let meta = std::fs::metadata(&abs).at(&abs)?;
         let size = meta.len();
+        let allocated = allocated_bytes(&meta);
         let mtime_ms = meta
             .modified()
             .ok()
@@ -105,6 +134,7 @@ pub fn scan_source(source: &Source, manifest: &Manifest) -> Result<SourceScan> {
                     abs_path: abs,
                     change: Change::Unchanged,
                     fingerprint: Some(p.fingerprint.clone()),
+                    allocated_bytes: allocated,
                 });
                 continue;
             }
@@ -116,6 +146,7 @@ pub fn scan_source(source: &Source, manifest: &Manifest) -> Result<SourceScan> {
             abs_path: abs,
             change,
             fingerprint: Some(fingerprint),
+            allocated_bytes: allocated,
         });
     }
 
@@ -127,6 +158,7 @@ pub fn scan_source(source: &Source, manifest: &Manifest) -> Result<SourceScan> {
                 abs_path: source.path.join(rel),
                 change: Change::Vanished,
                 fingerprint: None,
+                allocated_bytes: 0,
             });
         }
     }
@@ -401,6 +433,53 @@ mod tests {
         f.write("a.jsonl", "a\n");
         f.write("b.txt", "b\n");
         assert_eq!(f.scan(&Manifest::default()).changes.len(), 2);
+    }
+
+    #[test]
+    fn a_change_reports_what_the_file_occupies_not_only_what_it_claims() {
+        let f = Fixture::new(&["**/*.jsonl"]);
+        // 100 KB, comfortably past any filesystem's inline-data threshold, so this
+        // genuinely owns blocks on every platform the test can run on.
+        f.write("a.jsonl", &"line\n".repeat(20_000));
+
+        let s = f.scan(&Manifest::default());
+        let c = &s.changes[0];
+        assert_eq!(c.fingerprint.as_ref().unwrap().size, 100_000, "apparent size");
+        assert!(c.allocated_bytes > 0, "a 100 KB file must occupy something");
+        // Deliberately not asserted: allocated > apparent. Block rounding usually makes it
+        // so, but a compressing or inlining filesystem legitimately allocates less than the
+        // file claims — which is exactly why the two are worth reporting separately.
+        #[cfg(unix)]
+        assert_eq!(c.allocated_bytes % 512, 0, "st_blocks is fixed at 512-byte units");
+    }
+
+    #[test]
+    fn the_unchanged_fast_path_still_reports_allocation() {
+        // The stat-only path skips the read, and it would be easy to skip the occupancy
+        // with it — leaving a steady-state scan claiming the archive occupies nothing.
+        let f = Fixture::new(&["**/*.jsonl"]);
+        f.write("a.jsonl", &"line\n".repeat(20_000));
+        let mut m = Manifest::default();
+        let s = f.scan(&m);
+        f.commit(&mut m, &s);
+
+        let s = f.scan(&m);
+        assert_eq!(s.count(Change::Unchanged), 1);
+        assert!(s.changes[0].allocated_bytes > 0, "occupancy must survive the fast path");
+    }
+
+    #[test]
+    fn a_vanished_file_occupies_nothing() {
+        let f = Fixture::new(&["**/*.jsonl"]);
+        f.write("a.jsonl", "x\n");
+        let mut m = Manifest::default();
+        let s = f.scan(&m);
+        f.commit(&mut m, &s);
+
+        std::fs::remove_file(f.root.join("a.jsonl")).unwrap();
+        let s = f.scan(&m);
+        assert_eq!(s.changes[0].change, Change::Vanished);
+        assert_eq!(s.changes[0].allocated_bytes, 0, "there is no file left to occupy blocks");
     }
 
     #[test]

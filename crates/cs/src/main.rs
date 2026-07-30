@@ -124,6 +124,38 @@ fn main() -> Result<()> {
     }
 }
 
+/// Byte accounting for a capture run. Three numbers rather than one, because "how big are
+/// these files" and "what did this cost me" are different questions (chat-search-a7k.6).
+///
+/// `apparent` is the size the captured files report. It is not a cost: an append re-captures
+/// the whole file, so a transcript that grows by a few KB every five minutes bills its full
+/// size again on every scan, forever.
+///
+/// `allocated` is the blocks the filesystem actually gave those files, which is what they
+/// occupy. `cloned`/`copied` split that by how the bytes got in: a reflinked capture shares
+/// its blocks with the source (ADR 20) and so adds nothing to the volume until the two
+/// diverge, while a copied one is genuinely new bytes on disk.
+#[derive(Default, Clone, Copy)]
+struct Bytes {
+    apparent: u64,
+    allocated: u64,
+    cloned: u64,
+    copied: u64,
+}
+
+impl std::ops::AddAssign for Bytes {
+    fn add_assign(&mut self, o: Self) {
+        self.apparent += o.apparent;
+        self.allocated += o.allocated;
+        self.cloned += o.cloned;
+        self.copied += o.copied;
+    }
+}
+
+fn mb(bytes: u64) -> f64 {
+    bytes as f64 / 1_048_576.0
+}
+
 fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool) -> Result<()> {
     let cfg = Config::load(config_path)
         .with_context(|| format!("reading {}", config_path.display()))?;
@@ -137,7 +169,8 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
 
     let started = std::time::Instant::now();
     let mut reports = Vec::new();
-    let (mut tot_cloned, mut tot_copied, mut tot_bytes) = (0u64, 0u64, 0u64);
+    let (mut tot_cloned, mut tot_copied) = (0u64, 0u64);
+    let mut tot = Bytes::default();
 
     for source in &cfg.sources {
         if only.is_some_and(|o| o != source.id) || source.layout == Layout::Bundle {
@@ -147,7 +180,8 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
             .with_context(|| format!("scanning {}", source.id))?;
 
         let t0 = std::time::Instant::now();
-        let (mut cloned, mut copied, mut bytes) = (0u64, 0u64, 0u64);
+        let (mut cloned, mut copied) = (0u64, 0u64);
+        let mut bytes = Bytes::default();
         let mut events = Vec::new();
 
         for c in &scan.changes {
@@ -159,19 +193,30 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
                 Change::Unchanged => continue, // nothing observed worth recording
             };
 
-            if c.change.needs_capture() && !dry_run {
-                let kind = cs_archive::capture_file(
-                    &machine_dir, &source.id, &c.rel_path, &c.abs_path, c.change,
-                    cs_archive::manifest::now_ms(),
-                )
-                .with_context(|| format!("capturing {}", c.abs_path.display()))?;
-                match kind {
-                    CaptureKind::Cloned => cloned += 1,
-                    CaptureKind::Copied => copied += 1,
+            if c.change.needs_capture() {
+                bytes.apparent += c.fingerprint.as_ref().map_or(0, |fp| fp.size);
+                bytes.allocated += c.allocated_bytes;
+
+                if !dry_run {
+                    let kind = cs_archive::capture_file(
+                        &machine_dir, &source.id, &c.rel_path, &c.abs_path, c.change,
+                        cs_archive::manifest::now_ms(),
+                    )
+                    .with_context(|| format!("capturing {}", c.abs_path.display()))?;
+                    // Bill the destination's occupancy against how it got there: the source's
+                    // allocation is the right proxy either way, since a clone and a copy both
+                    // land the same blocks — they differ only in whether those blocks are new.
+                    match kind {
+                        CaptureKind::Cloned => {
+                            cloned += 1;
+                            bytes.cloned += c.allocated_bytes;
+                        }
+                        CaptureKind::Copied => {
+                            copied += 1;
+                            bytes.copied += c.allocated_bytes;
+                        }
+                    }
                 }
-            }
-            if let Some(fp) = &c.fingerprint {
-                bytes += if c.change.needs_capture() { fp.size } else { 0 };
             }
 
             events.push(Event {
@@ -198,7 +243,7 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
 
         tot_cloned += cloned;
         tot_copied += copied;
-        tot_bytes += bytes;
+        tot += bytes;
         reports.push(serde_json::json!({
             "source": scan.source,
             "new": scan.count(Change::New),
@@ -206,7 +251,15 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
             "rewritten": scan.count(Change::Rewritten),
             "vanished": scan.count(Change::Vanished),
             "unchanged": scan.count(Change::Unchanged),
-            "cloned": cloned, "copied": copied, "bytes": bytes,
+            "cloned": cloned, "copied": copied,
+            // `bytes` is kept as-is for consumers that already read it, but it is apparent
+            // size, not cost. `apparent_bytes` is the same number under a name that says so;
+            // prefer it, and prefer `allocated_bytes` when you want the disk figure.
+            "bytes": bytes.apparent,
+            "apparent_bytes": bytes.apparent,
+            "allocated_bytes": bytes.allocated,
+            "cloned_bytes": bytes.cloned,
+            "copied_bytes": bytes.copied,
             "ms": t0.elapsed().as_millis() as u64,
         }));
     }
@@ -214,7 +267,12 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
     if json {
         println!("{:#}", serde_json::json!({
             "dry_run": dry_run, "archive": machine_dir, "sources": reports,
-            "cloned": tot_cloned, "copied": tot_copied, "bytes": tot_bytes,
+            "cloned": tot_cloned, "copied": tot_copied,
+            "bytes": tot.apparent,
+            "apparent_bytes": tot.apparent,
+            "allocated_bytes": tot.allocated,
+            "cloned_bytes": tot.cloned,
+            "copied_bytes": tot.copied,
             "ms": started.elapsed().as_millis() as u64,
         }));
     } else {
@@ -231,9 +289,12 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
                      g("new"), g("appended"), g("rewritten"), g("vanished"),
                      g("unchanged"), g("cloned"), g("copied"), g("ms"));
         }
-        println!("\n  {:.1} MB captured · {} cloned · {} copied · {} ms",
-                 tot_bytes as f64 / 1_048_576.0, tot_cloned, tot_copied,
-                 started.elapsed().as_millis());
+        println!("\n  {:.1} MB apparent size · {:.1} MB allocated blocks · {} ms",
+                 mb(tot.apparent), mb(tot.allocated), started.elapsed().as_millis());
+        if !dry_run {
+            println!("  {} cloned ({:.1} MB, shares blocks with the source) · {} copied ({:.1} MB new on disk)",
+                     tot_cloned, mb(tot.cloned), tot_copied, mb(tot.copied));
+        }
         println!("  archive: {}", machine_dir.display());
     }
     Ok(())
@@ -269,9 +330,16 @@ fn scan(config_path: &PathBuf, only: Option<&str>, json: bool) -> Result<()> {
             "rewritten": scan.count(Change::Rewritten),
             "vanished": scan.count(Change::Vanished),
             "unchanged": scan.count(Change::Unchanged),
+            // `bytes_to_capture` keeps its existing meaning — apparent size — for consumers
+            // that already read it. `allocated_to_capture` is what those files occupy, which
+            // is the figure that answers "what will this cost me".
             "bytes_to_capture": scan.changes.iter()
                 .filter(|c| c.change.needs_capture())
                 .filter_map(|c| c.fingerprint.as_ref().map(|f| f.size))
+                .sum::<u64>(),
+            "allocated_to_capture": scan.changes.iter()
+                .filter(|c| c.change.needs_capture())
+                .map(|c| c.allocated_bytes)
                 .sum::<u64>(),
             "ms": t0.elapsed().as_millis() as u64,
         }));
@@ -298,9 +366,10 @@ fn scan(config_path: &PathBuf, only: Option<&str>, json: bool) -> Result<()> {
                      g("files"), g("new"), g("appended"), g("rewritten"),
                      g("vanished"), g("unchanged"), g("ms"));
         }
-        let bytes: u64 = reports.iter().filter_map(|r| r.get("bytes_to_capture")?.as_u64()).sum();
-        println!("\n  {:.1} MB would be captured · {} ms total",
-                 bytes as f64 / 1_048_576.0, started.elapsed().as_millis());
+        let sum = |k: &str| -> u64 { reports.iter().filter_map(|r| r.get(k)?.as_u64()).sum() };
+        println!("\n  {:.1} MB apparent size · {:.1} MB allocated blocks would be captured · {} ms total",
+                 mb(sum("bytes_to_capture")), mb(sum("allocated_to_capture")),
+                 started.elapsed().as_millis());
     }
     Ok(())
 }

@@ -18,6 +18,9 @@ thing. Where a claim has been checked against this corpus, the result is marked
 | Codex `history_mode: paginated` persists messages differently | **not present** (584 pre-mode, 90 `legacy`) | none |
 | Claude Code writes cumulative chunks under one `message.id` | 2,029 multi-entry ids but **0 prefix-extensions** | none; revisit if duplicates appear |
 | ChatGPT export sharded into `conversations-NNN.json` | **verified here** — 21 shards | already handled |
+| Claude desktop keeps no conversations locally | **false here** — 30 MB of plaintext `audit.jsonl` | new source, see below |
+| ChatGPT desktop store is decryptable with a derived key | **false** — Keychain access group, not a password | closed; export is the only route |
+| The Codex merge moved chats to a new local store | **not present** — `~/Documents/Codex/` is artifacts only | none |
 
 ---
 
@@ -131,6 +134,104 @@ written against decompiled Claude Code 2.1.88.
   scan races partial trailing writes — tolerate a malformed tail.
 - Records with a repeated id **replace** the earlier one in place.
 - Inline tool results live at `result[].functionResponse.response.output`.
+
+## Claude desktop — local agent mode
+
+Surveyed 2026-07-30 on this machine. The Cowork and Chat tabs write full transcripts to disk in
+the clear; only the cloud-synced claude.ai conversations are absent. Earlier notes concluded
+"needs export or API" after looking at IndexedDB alone, which is the wrong directory.
+
+- Root is `~/Library/Application Support/Claude/local-agent-mode-sessions/<account>/<org>/`,
+  nested by **account uuid then org uuid** — a two-level prefix before anything session-shaped.
+  A glob anchored one level too shallow finds nothing.
+- Each session is a **pair**: `local_<uuid>.json` (metadata) and `local_<uuid>/` (working
+  directory). The transcript is `local_<uuid>/audit.jsonl`; the sibling `.json` holds `title`,
+  `cwd`, `model`, `createdAt`, `lastActivityAt`, `initialMessage`, `systemPrompt`. **Neither is
+  sufficient alone** — content without a title, or a title without content.
+- **Not every session has an `audit.jsonl`.** 165 JSON files here yield only 14 transcripts;
+  the rest are settings, plugin manifests and caches. Decline by shape, the way `gemini.rs`
+  declines `logs.json`, rather than trusting the glob.
+- Shape is **Claude Agent SDK stream-json, not Claude Code's JSONL**, and the divergence is
+  snake_case: `session_id`, `parent_tool_use_id` here vs `sessionId`, `parentUuid` there.
+  `type` ∈ `user` | `assistant` | `system` | `result` | `tool_use_summary` | `rate_limit_event`.
+  Close enough to invite a glob widening, different enough that one would silently import zero.
+- `parent_tool_use_id` is **not** a message-to-message parent pointer — it marks a subagent's
+  messages as belonging to a tool call. There is no DAG here; the file is linear. Feeding it to
+  `parent_native_id` would break `on_head_path`, which requires a parent the importer emitted.
+- The working directory also holds `uploads/`, `outputs/` and plugin trees. Only `audit.jsonl`
+  is conversation-bearing.
+- The audit log is **HMAC-chained**. Nothing here needs to verify it, but it means the format
+  is intended as tamper-evident and is unlikely to be rewritten in place.
+
+## Claude.ai — export and internal API
+
+- **Export**: Settings → Privacy → Export data, emailed, **link expires 24 h**. Minutes of
+  latency, not hours. Whole-account snapshot, no incremental option, no scheduling.
+- ZIP holds `conversations.json`, `projects.json`, `memories.json`, `users.json`.
+  `message_feedback`-style files are absent; all four of these are worth reading except `users`.
+- **Projects have no join key to conversations.** `projects.json` and `conversations.json`
+  cannot be related without heuristics. Treat project membership as unavailable, not as a
+  parsing problem to solve.
+- **Attachment binaries are not in the export** — metadata only.
+- `conversations.json` routinely exceeds 100 MB; it is one document, so stream it.
+- Message shape: `{uuid, name, created_at, updated_at, chat_messages: [{uuid, sender:
+  "human"|"assistant", text, created_at, attachments, files}]}`. Note `sender`, not `role`, and
+  `human`, not `user`.
+- **Internal API** (what the desktop app itself calls, read out of its own IndexedDB cache):
+  `GET /api/organizations/<org>/chat_conversations` to list, then
+  `?tree=True&rendering_mode=messages` per conversation for the full tree. `?tree=True` returns
+  **branches the UI does not show**, so it is strictly richer than the export.
+- Org id comes from the `lastActiveOrg` cookie; auth is `sessionKey`. Both live in the desktop
+  app's own `Cookies` DB (Chromium Safe Storage, so Keychain-wrapped but derivable).
+- **The rate limits are the real constraint**, not the parsing. `__cf_bm` rotates every ~30 min
+  and `sessionKey` expires monthly. Prior art settles on batches of 5 with 500 ms between them,
+  exponential backoff on 429, and Chrome TLS impersonation to survive Cloudflare's JA3
+  fingerprinting — plain HTTP clients get challenged.
+
+## Gemini Apps (Takeout)
+
+- **Two Takeout products are named "Gemini" and the obvious one is wrong.** The top-level
+  *Gemini* product exports Gems configuration. Conversations are under **My Activity → Gemini
+  Apps**, landing at `Takeout/My Activity/Gemini Apps/MyActivity.json`.
+- **JSON is not the default** — My Activity records export as HTML unless the format is changed
+  explicitly in Takeout's per-product options.
+- **It is an activity log, not a conversation tree.** Each record is one prompt plus one
+  response plus a timestamp. There is no branching, and **no stable conversation identifier** —
+  which is a genuine modelling problem, not a parsing one. ADR 2's stated revisit trigger is
+  *"a source appears whose native ids are not stable across exports"*; this is that source.
+  Grouping into conversations has to be synthesised, and a synthesised key must not become part
+  of an id (ADR 16).
+- **Schedulable**: "every 2 months for 1 year" delivered to **Google Drive**, which is the only
+  automatable route any of these three surfaces offers. Email links expire in ~7 days and allow
+  5 downloads; scheduling is unavailable under Advanced Protection.
+- **Retention bounds the ceiling**: Gemini Apps Activity auto-deletes at 18 months by default.
+  Anything older than the retention window was never exportable, so a gap there is not a bug.
+- Google AI Studio is a **different source** with a better route — prompts save as JSON into a
+  Drive folder literally named `Google AI Studio`, shaped as `chunkedPrompt.chunks`. Reachable
+  live via the Drive API with no export step. It does not cover gemini.google.com.
+- **No API exists for the Gemini app's history.** Verified absent from the Data Portability
+  API's scope list — there is no `myactivity.gemini`, and the Gemini API's own interaction
+  state is a different thing entirely.
+
+## ChatGPT desktop — why the local store is out of reach
+
+Recorded so this is not investigated a third time.
+
+- `~/Library/Application Support/com.openai.chat/conversations-v3-<uuid>/*.data`, one file per
+  conversation, 204 of them / 18 MB here. Confirmed high-entropy with no magic bytes.
+- AES-256-GCM: 12-byte nonce, ciphertext, 16-byte tag.
+- **The key sits behind a Keychain *access group*** (`2DC432GLL2.com.openai.shared`), not behind
+  a `Safe Storage` password. This is the whole difference. Chrome's cookie key is a password
+  that any process can read and stretch with PBKDF2; an access-group item is readable only by a
+  binary code-signed with OpenAI's Team ID. **There is nothing to reimplement.**
+- The v1 store was plaintext until July 2024, when it was encrypted after public disclosure.
+  Anything written since is unreachable without a user-consented manual key export.
+- `cass` is sometimes described as reading this store. It does not — it requires the user to
+  supply `CHATGPT_ENCRYPTION_KEY` themselves.
+- **The 2026-07-09 Codex merge did not change this.** The merged app writes artifacts to
+  `~/Documents/Codex/<date>/<title-slug>/` — `outputs/`, `work/`, `research/` — with no
+  transcript among them. The slug and date leak that a conversation happened, and nothing else.
+  ChatGPT Atlas is discontinued 2026-08-09, so its Chromium profile is not worth targeting.
 
 ---
 

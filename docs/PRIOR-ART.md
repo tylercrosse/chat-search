@@ -45,9 +45,9 @@ Source-verified.
 
 | Tool | Sources | Surfaces | Storage | Search | **Archive or live-read** | Licence | Last activity | Price |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| **[agentsview](https://github.com/kenn-io/agentsview)** | **~40 agents, all five of ours** — Claude Code, Codex, Gemini CLI, OpenCode + **ChatGPT export ZIP** and Claude.ai export. Decrypts the Antigravity store | CLI, daemon, **web UI**, **Tauri desktop app**, MCP, Docker, S3/Postgres/DuckDB targets | SQLite primary archive (`messages.content`, `thinking_text` copied in); optional Postgres/DuckDB | **FTS5 + sqlite-vec**, hybrid | **Archive.** ChatGPT is import-only, so it exists *only* as a copy. No reaping of vanished sources found | MIT | 2026-07-28 · v0.39.0 · **4,595 stars** | Free OSS. Sends an anonymous `daemon_active` telemetry ping, opt-out by env var |
+| **[agentsview](https://github.com/kenn-io/agentsview)** | **~40 agents, all five of ours** — Claude Code, Codex, Gemini CLI, OpenCode + **ChatGPT export ZIP** and Claude.ai export. **Does not** decrypt the Antigravity store — see the correction below | CLI, daemon, **web UI**, **Tauri desktop app**, MCP, Docker, S3/Postgres/DuckDB targets | SQLite primary archive (`messages.content`, `thinking_text` copied in); optional Postgres/DuckDB | **FTS5 + sqlite-vec**, hybrid | **Archive.** ChatGPT is import-only, so it exists *only* as a copy. No reaping of vanished sources found | MIT | 2026-07-28 · v0.39.0 · **4,595 stars** | Free OSS. Sends an anonymous `daemon_active` telemetry ping, opt-out by env var |
 | [Polylogue](https://github.com/Sinity/polylogue) | ChatGPT **export**, Claude.ai export, Claude Code, Codex, Gemini CLI, AI Studio, Hermes, Antigravity. **No OpenCode** | CLI, Python API, local HTTP reader, MCP server, MV3 capture extension, daemon | Split SQLite: `source.db` (raw evidence), `index.db` (derived), `embeddings.db`, `user.db` (overlays), `ops.db` (disposable) + SHA-256 content-addressed blob store | FTS5 contentless + BM25; lanes for dialogue/actions/semantic; hybrid via RRF | **Archive.** `source.db` is "the rebuild root"; ingest idempotent by content hash; documented backup/restore and tier-durability classes | MIT | 2026-07-28 | Free OSS |
-| [cass](https://github.com/Dicklesworthstone/coding_agent_session_search) | 23 agents incl. Codex, Claude Code, Gemini CLI, **OpenCode**, Cursor, Aider, Cline, Copilot, Antigravity + **ChatGPT desktop app store** (not the export ZIP) | TUI, CLI, HTML export; third-party MCP bridges | SQLite archive + Tantivy index generations + raw mirror per source | Tantivy BM25 with edge n-grams + optional MiniLM ONNX + hybrid RRF | **Archive.** "SQLite is the source of truth"; rsync sync additive-only, remote deletions never propagate; has a `remote_source_pruned` gap code | **MIT + "Anthropic Rider"** — GitHub reports NOASSERTION, not OSI-clean | 2026-07-28 · 1,027 stars | Free OSS |
+| [cass](https://github.com/Dicklesworthstone/coding_agent_session_search) | 23 agents incl. Codex, Claude Code, Gemini CLI, **OpenCode**, Cursor, Aider, Cline, Copilot, Antigravity + the **ChatGPT desktop app store** — but only with a key you supply yourself, see the correction below | TUI, CLI, HTML export; third-party MCP bridges | SQLite archive + Tantivy index generations + raw mirror per source | Tantivy BM25 with edge n-grams + optional MiniLM ONNX + hybrid RRF | **Archive.** "SQLite is the source of truth"; rsync sync additive-only, remote deletions never propagate; has a `remote_source_pruned` gap code | **MIT + "Anthropic Rider"** — GitHub reports NOASSERTION, not OSI-clean | 2026-07-28 · 1,027 stars | Free OSS |
 | [claude-code-history-viewer](https://github.com/jhlee0409/claude-code-history-viewer) | 28 providers, CLI-agent only. No ChatGPT web | Tauri desktop app + headless server | **None** | Plain scan; no FTS, no index, no embeddings | **Live-read.** Reads provider files in place every time | MIT | 2026-07-23 · **1,957 stars** | Free OSS |
 | [Agent Sessions](https://github.com/jazzyalex/agent-sessions) | Codex, Claude Code, OpenCode, Cursor Agent, Hermes, Copilot CLI, Antigravity. No Gemini CLI, no ChatGPT | macOS desktop app | `~/Library/Application Support/AgentSessions/index.db` | SQLite FTS5, external-content tables | **Live-read despite having a DB.** Stores only a 48k-char sample per session, prunes tool IO by recency, deletes rows for vanished files, re-reads originals to display | MIT | 2026-07-24 · 740 stars | Free OSS |
 | [fast-resume](https://github.com/angristan/fast-resume) | 11 agents incl. Claude Code, Codex, OpenCode, Cursor CLI. No Gemini CLI, no ChatGPT | TUI + CLI | `~/.cache/fast-resume/tantivy_index` | Tantivy, typo-tolerant, title-boosted | **Live-read.** Prunes vanished sessions; rebuilds on schema change; its own path says `.cache` | MIT | 2026-07-24 · 135 stars | Free OSS |
@@ -83,6 +83,34 @@ README- and marketing-level only.
 | Chrome extensions: [Claude Toolbox](https://chromewebstore.google.com/detail/claude-toolbox-chat-histo/camddjjmcemmmlndbciaodchkodhgibh), [Search for Claude Chats](https://chromewebstore.google.com/detail/search-for-claude-chats/lnfpjppihlpggjclgilbflbfccdliphd), [ChatGPT History Search](https://chromewebstore.google.com/detail/chatgpt-conversation-hist/jhllfdbccclcdiafljibcabipbmkfoem) | one web UI each | Extension | DOM scrape | Partial, fragile | **Proprietary** | free/freemium |
 
 ---
+
+## Corrections — three tools do less than the tables above claimed
+
+Re-checked 2026-07-30 against the projects' own source and READMEs. Each of these was
+overstated in the first survey, and each overstatement pointed at work that looked solved.
+
+- **agentsview does not decrypt the Antigravity store.** Its README says the `.pb` files are
+  encrypted and that it invents no schema. Full transcripts require running **`agy-reader`**
+  separately, which does not decrypt either — it asks Antigravity's own language-server daemon
+  for `GetCascadeTrajectory` and writes the answer to a sidecar that agentsview's watcher picks
+  up. Without it, agentsview degrades to heuristic "summary mode": prompts and tool names.
+  The one project that *does* decrypt directly (`antigravity_decryptor`) reports AES-128-CTR
+  where agentsview reports AES-GCM, so the generations differ — trust neither over our own files.
+- **cass does not read the encrypted ChatGPT desktop store unaided.** It documents a
+  `CHATGPT_ENCRYPTION_KEY` env var that the user must supply, and refuses key files looser than
+  0600. Nobody has extracted this key, because it is behind a Keychain access group rather than
+  a derivable password — see [FORMAT-NOTES](./FORMAT-NOTES.md).
+- **Polylogue's extension is not continuous capture.** Its README says plainly that it does not
+  watch page mutations or capture while you type. It is button-driven — *Capture page*, *Sync
+  open tabs* — plus an explicitly-started backfill with cursor and lease state in IndexedDB and
+  MV3 alarms to resume after the service worker is killed. That last part is the genuinely hard
+  engineering and the reason to read it, but it is not the always-on capture the row implied.
+
+**Worth reusing rather than writing.** [`rusty-leveldb`](https://crates.io/crates/rusty-leveldb)
+reads Chromium `Local Storage`/`IndexedDB` trees in pure Rust.
+[`cookie-scoop`](https://github.com/jimmystridh/cookie-scoop) already implements the macOS
+Chromium cookie path — Safe Storage password from the Keychain, PBKDF2-SHA1 at 1003 iterations,
+AES-128-CBC — which is exactly what reading a desktop app's own session cookie requires.
 
 ## Where these tools cluster
 
@@ -132,8 +160,10 @@ every one is occupied.**
   capture. **This is the one idea the survey did not find anywhere.**
 - **Strict zero-network operation.** agentsview pings PostHog by default (opt-out available);
   cass and Polylogue arguably already occupy the absolutist position.
-- **Continuous web-chat capture without a manual export.** Export ZIPs are point-in-time;
-  Polylogue's opt-in MV3 extension is the only attempt, and it is explicitly a fallback.
+- **Continuous web-chat capture without a manual export.** Export ZIPs are point-in-time, and
+  the gap is wider than first written: Polylogue's MV3 extension is the only attempt, and it is
+  button-driven rather than continuous. **Nobody captures a web surface unattended.** ADR 21
+  takes the cookie-jar route at this, which no surveyed tool tries.
 
 ## Not found
 

@@ -582,3 +582,102 @@ archived file only once its source disappears and it starts occupying real block
 best space/effort curve but adds a background compaction job. Probably too clever for v1.
 
 **Revisit when.** Free space drops below ~10 GB, or measured growth exceeds 1.5 GB/month.
+
+## 21. Server-side sources are fetched into the archive, never into the index
+
+`accepted` · 2026-07-30
+
+**Context — three surfaces are dark and they are dark for different reasons.** The index holds
+2,935 conversations from `chatgpt-export`, `codex` and `claude-code`. Gemini used through the
+web, Claude used through claude.ai, and ChatGPT used through the web contribute nothing, and the
+newest ChatGPT export here ends 2026-07-10. ADR 16 defines a source as a *watched location*,
+which is exactly the definition a server-side source does not satisfy — it has no path.
+
+A survey of this machine on 2026-07-30 found the constraint is not uniform, so a single policy
+would be wrong. Details in [FORMAT-NOTES](./FORMAT-NOTES.md); the load-bearing facts:
+
+| surface | what is actually reachable |
+| --- | --- |
+| Claude desktop (Cowork / Chat tabs) | **30 MB of plaintext `audit.jsonl` already on disk** |
+| claude.ai | server-side; but `sessionKey` + `lastActiveOrg` sit in the app's own cookie jar, and the endpoint it calls is known |
+| ChatGPT | server-side; local store is AES-256-GCM behind a Keychain **access group**, so the key is not derivable by anyone but OpenAI |
+| Gemini web | server-side; no API exists, but Takeout schedules **every 2 months → Google Drive** |
+| Gemini / ChatGPT desktop apps | verified to store no conversation content at all |
+
+**The architectural question is where network code is allowed to live**, because ADR 1 makes
+importers pure functions over `(logical_path, bytes)` with no filesystem access, and the whole
+reparse-the-archive-against-a-better-parser property depends on it.
+
+**Options.**
+
+_A. Manual export only_
+
+- Pro: zero new machinery; `chatgpt-export` already proves the shape works.
+- Pro: no credentials, no ToS surface, no breakage when a vendor changes an endpoint.
+- Con: every day without an export is an unrecoverable gap, and the gap is unbounded because
+  nothing forces the export to happen.
+
+_B. A fetcher that writes export-shaped files into a watched directory_ **← recommended**
+
+- Pro: **preserves ADR 1 and ADR 16 exactly.** The fetcher is not an archiver and not an
+  importer; it materialises bytes into a directory the archiver already scans. `cs-archive` and
+  `cs-import` stay offline and pure, and the archive stays reparseable.
+- Pro: reuses the credentials already on the machine rather than asking for new ones.
+- Pro: `?tree=True` returns branches the claude.ai UI does not show, so this is strictly richer
+  than the official export, not merely fresher.
+- Con: unofficial endpoint. `__cf_bm` rotates every ~30 min, `sessionKey` expires monthly, and
+  prior art needs Chrome TLS impersonation to get past Cloudflare's fingerprinting.
+- Con: reading the cookie jar means Keychain access and a decrypt step — new dependencies
+  (`cookie-scoop`-shaped) for something orthogonal to search.
+
+_C. An MV3 browser extension sidecar_
+
+- Pro: the only route that survives Cloudflare indefinitely, because it *is* the browser.
+- Con: a second codebase in a second language, and an extension cannot read
+  `~/.claude/projects` — so it can never be this tool's primary shape, only an appendage.
+- Con: contradicts the framing in [README](../README.md) that ~80% of the corpus is reachable
+  without a browser.
+
+_D. Scheduled Takeout → Drive_
+
+- Pro: the only **officially sanctioned** automation of any of the three surfaces.
+- Con: 2 months is the shortest cadence offered, so staleness is bounded but bounded loosely.
+- Con: Gemini only.
+
+**Decision.** **Per surface, because the constraint is per surface** — _accepted 2026-07-30_.
+Claude desktop becomes an ordinary local source, no fetching involved. claude.ai takes **B**.
+ChatGPT stays on **A**. Gemini web takes **D**, with its downloaded archives landing in a
+watched directory exactly as B's output does.
+
+**The invariant that makes B legal, stated so it is not eroded later:** a fetcher's only output
+is files in a watched directory. It never writes to `index.db`, never calls an importer, and
+lives outside `cs-archive` and `cs-import`. If the fetcher is deleted, the archive still
+reparses and the index still rebuilds. Anything that cannot be expressed as "write bytes to a
+path" does not belong in it.
+
+**Constraint on how snapshots are named — this one is a data-loss trap.** `_superseded/` is
+written by `capture.rs` and **read by nothing**; `ArchiveReader::files()` walks
+`<machine_dir>/<source_id>` only, and `_superseded` is a sibling. A fetcher writing to a stable
+path would classify every run as `Rewritten` and silently retire the previous snapshot out of
+the index. Each run must therefore land under a **unique path**, the way each ChatGPT export
+unpacks into its own `Conversations__<hash>-chatgpt-NNNN/`. Index-side dedup then folds the
+overlap on the conversation id, which is already tested.
+
+**Rejected — C, the browser extension.** Polylogue reached for it and recorded the reason in its
+own architecture notes ("Cloudflare friction on Claude.ai"), so the route is real. It is rejected
+here because an extension cannot reach the 80% of this corpus that is local, which makes it a
+second codebase serving a minority of the data. If B proves unmaintainable, C is the fallback —
+not A, because A is what B is trying to escape.
+
+**Rejected — fetching directly into the index.** It is less code and it is wrong: it would make
+`index.db` hold something that is not a pure function of (archive, importer version), which is
+the one invariant this project has been most careful about.
+
+**Accepted risk.** B may break without warning; it has no compatibility promise. The mitigation
+is already specified — `chat-search-a7k.10`'s staleness nag treats "never fetched" and "fetched
+today" as different states, so a silently dead fetcher surfaces as a stale source rather than as
+an empty one. Claude.ai degrades to A when B breaks, which is a worse day, not a lost archive.
+
+**Revisit when.** An official conversation-history API appears for any of the three surfaces —
+that collapses B and D into a supported route and this ADR should be rewritten, not amended. Or
+B breaks twice in one quarter, at which point C stops being theoretical.

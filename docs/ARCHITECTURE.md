@@ -23,8 +23,8 @@
 ```mermaid
 flowchart TB
     subgraph SRC["1 · Sources — live, mutating"]
-        LOCAL["Local agent CLIs — Codex · Claude Code<br/>Gemini CLI · OpenCode · …<br/>write transcript files locally"]
-        REMOTE["ChatGPT · Claude.ai<br/>no local files — a data export,<br/>downloaded and unpacked by hand"]
+        LOCAL["Local agent CLIs — Codex · Claude Code<br/>Gemini CLI · OpenCode · Claude desktop · …<br/>write transcript files locally"]
+        REMOTE["ChatGPT · claude.ai · Gemini web<br/>no local files — an export or a fetch,<br/>landing in a watched directory (ADR 21)"]
     end
 
     subgraph CAP["2 · Capture — never parses content"]
@@ -240,7 +240,7 @@ carries what would falsify it, so a doubtful reader settles it in about a second
 
 ### Built in part — the state neither a table nor the code admits to
 
-Three things read as finished from either end and are not. They are here because this is the
+Four things read as finished from either end and are not. They are here because this is the
 only place that can say so: the schema looks complete, the code compiles, and the gap is a
 missing edge rather than a missing file.
 
@@ -271,6 +271,16 @@ missing edge rather than a missing file.
   gives. Nothing is lost yet: the archive holds 692 rollouts and no `.zst` at all. When the
   first compressed one lands it will be captured correctly and read as an empty conversation,
   which is a silent miss, not an error.
+- **Superseded copies have a writer and no reader.** On a `Rewritten` change the archiver moves
+  the old copy to `_superseded/<source_id>/<rel_path>.<ts_ms>` rather than overwriting it, which
+  reads as "the previous version is kept". It is kept on disk and it is unreachable:
+  `ArchiveReader::files()` walks `<machine_dir>/<source_id>`, and `_superseded` is a *sibling* of
+  those directories, not a child. `grep -rn _superseded crates --include='*.rs'` returns
+  `capture.rs` and its tests — one writer, no reader, nothing in `cs-import` or `cs`. Nothing is
+  lost yet because no source here has been rewritten (`ls ~/.chat-archive/raw/*/_superseded`
+  finds no such directory). It matters prospectively: ADR 21's fetchers write whole-account
+  snapshots, and one that wrote to a stable path would park each previous snapshot here and
+  silently drop it out of the index. That is why ADR 21 requires a unique path per run.
 
 ### What would keep this honest
 

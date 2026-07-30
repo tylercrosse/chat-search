@@ -55,7 +55,11 @@ fmt() {
     [ $cmd,
       "\(.title // "(untitled)")",
       "\(.source)  \($date)  \(.user_turns)t",
-      $snippet
+      $snippet,
+      # Field 5 is hidden like field 1. It exists so the selection can be recorded against
+      # the query that produced it, which is the only ground truth the ranking ever gets
+      # without somebody sitting down to grade results by hand.
+      .conv_id
     ] | @tsv'
 }
 
@@ -101,8 +105,9 @@ export CS_BIN="$CS" CS_FZF_LIMIT="$LIMIT"
 # fzf draws on /dev/tty when its stdout is captured, so the UI still works inside $( ).
 # An empty query lands on `cs`'s recent-conversations path, so the list is populated
 # before the first keystroke rather than opening blank.
-choice="$(
+out="$(
   fmt "" | fzf \
+    --print-query \
     --disabled --no-sort --reverse --height=90% --border \
     --delimiter=$'\t' --with-nth='2,3' \
     --prompt='chat ▸ ' \
@@ -114,8 +119,22 @@ choice="$(
     --bind 'ctrl-y:execute-silent(printf %s {1} | pbcopy)+abort'
 )" || exit 0
 
+# `--print-query` puts the query buffer on the first line, so a run that was aborted without
+# picking anything is exactly one line long. Split with parameter expansion rather than
+# mapfile, which needs bash 4 and macOS still ships 3.2 as /bin/bash.
+query="${out%%$'\n'*}"
+choice="${out#*$'\n'}"
+[[ "$choice" == "$query" ]] && exit 0
+
 cmd="${choice%%$'\t'*}"
 [[ -z "$cmd" ]] && exit 0
+# Field 5, last on the row and hidden from the display. Recording which conversation won a
+# given query is what turns everyday use into eval data — see `cs needs`. Never allowed to
+# break the pick: the point of the tool is to open the conversation.
+conv_id="${choice##*$'\t'}"
+if [[ -n "$conv_id" && "$conv_id" != "$choice" ]]; then
+  "$CS" pick "$conv_id" --query "$query" --quiet >/dev/null 2>&1 || true
+fi
 
 if [[ -n "${RUN:-}" ]]; then
   printf '\033[2m%s\033[0m\n' "$cmd" >&2

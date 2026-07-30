@@ -1,0 +1,37 @@
+# An eval set: the queries whose answers you know.
+#
+# Copy this to `ranking.toml` (gitignored) and replace these with your own. Queries are
+# hand-written and this file is never rewritten by the tool, so comments survive.
+#
+#   cs eval judge --set evals/ranking.toml    grade pooled results, append-only
+#   cs eval run   --set evals/ranking.toml    score the ranking against those grades
+#
+# Grades are given during judging, not written here — they land in
+# `ranking.judgments.jsonl` beside this file, one JSON object per line, last one winning.
+#
+# What makes a query worth including:
+#
+#   - It has a right answer you can recognise. If you cannot tell a good result from a bad
+#     one, neither can the score.
+#   - Several conversations plausibly match. A query that only one conversation could
+#     possibly answer tests recall, not ranking, and will read as 1.000 forever.
+#   - It is phrased the way you would actually type it — short, lowercase, half-remembered.
+#     Queries written by reading a title back are a test of string matching.
+#
+# Aim for a spread: some where you want one specific conversation, some where you want the
+# best of many, some where the right answer is old and something newer keeps winning.
+
+[[query]]
+id = "borrow-checker"
+q = "borrow checker lifetimes"
+note = "the long Rust session where lifetimes finally clicked, not every passing mention"
+
+[[query]]
+id = "fts5-ranking"
+q = "fts5 bm25 ranking"
+note = "designing this tool's own ranking — recent, and there should be several"
+
+[[query]]
+id = "tax-deadline"
+q = "estimated tax payment deadline"
+note = "old, ChatGPT, and the sort of thing recency decay would bury under nothing"

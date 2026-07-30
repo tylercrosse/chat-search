@@ -3,6 +3,7 @@ use clap::{Parser, Subcommand};
 use cs_archive::{machine, CaptureKind, Change, Config, Event, Fingerprint, Layout, Manifest, ManifestWriter, Op};
 use std::path::PathBuf;
 
+mod eval;
 mod query;
 
 #[derive(Parser)]
@@ -45,9 +46,6 @@ enum Command {
     Index {
         #[arg(long)]
         db: Option<PathBuf>,
-        /// Index a ChatGPT export directly, until export ingest lands.
-        #[arg(long)]
-        chatgpt_export: Option<PathBuf>,
         /// Bytes of each tool call/result to keep. 0 drops tool text entirely; it is all
         /// reproducible from the archive.
         #[arg(long, default_value = "1024")]
@@ -83,12 +81,44 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Record that a search ended in opening this conversation, and print its resume command.
+    ///
+    /// The selection is the ground truth an eval set cannot invent: the query says what was
+    /// wanted, and this says what answered it.
+    Pick {
+        conv_id: String,
+        /// The search that produced the result list this was chosen from.
+        #[arg(long, default_value = "")]
+        query: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        source: Option<String>,
+        /// How deep the list the choice was made from went.
+        #[arg(long, default_value = "200")]
+        limit: i64,
+        /// Record the pick without printing the resume command.
+        #[arg(long)]
+        quiet: bool,
+    },
+    /// What you have searched for, and what answered it.
+    Needs {
+        #[arg(long, default_value = "40")]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// Why a conversation did not come back for a query.
     Explain {
         conv_id: String,
         query: String,
         #[arg(long)]
         db: Option<PathBuf>,
+    },
+    /// Measure the ranking against judged queries.
+    Eval {
+        #[command(subcommand)]
+        command: EvalCommand,
     },
     /// Capture changed files into the archive and record what was observed.
     Archive {
@@ -103,6 +133,54 @@ enum Command {
     },
 }
 
+#[derive(Subcommand)]
+enum EvalCommand {
+    /// Write one gradeable sheet per query, for editing in whatever you edit text in.
+    Sheet {
+        #[arg(long, default_value = "evals/ranking.toml")]
+        set: PathBuf,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Results per query to pool from each ranking variant.
+        #[arg(long, default_value_t = eval::DEPTH)]
+        depth: usize,
+        /// Write a single query's sheet.
+        #[arg(long)]
+        only: Option<String>,
+        /// Rewrite sheets even where that discards grades not yet collected.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Read the grade columns back out of the sheets and record them.
+    Collect {
+        #[arg(long, default_value = "evals/ranking.toml")]
+        set: PathBuf,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Record grades against conversation ids this index does not hold. Normally a
+        /// mistyped id, so it is refused by default.
+        #[arg(long)]
+        allow_unknown: bool,
+    },
+    /// Score the current ranking against the judgements.
+    Run {
+        #[arg(long, default_value = "evals/ranking.toml")]
+        set: PathBuf,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long, default_value_t = eval::DEPTH)]
+        depth: usize,
+        /// Override the repeat-match damping, for a tuning sweep (chat-search-6eb.13).
+        #[arg(long, default_value_t = cs_core::REPEAT_WEIGHT)]
+        repeat_weight: f64,
+        /// Override the recency decay, for a tuning sweep.
+        #[arg(long, default_value_t = cs_core::DECAY)]
+        decay: f64,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let config_path = cli.config.unwrap_or_else(Config::default_path);
@@ -111,13 +189,28 @@ fn main() -> Result<()> {
         Command::Init { machine_alias, force } => init(&config_path, machine_alias, force),
         Command::Status { json } => status(&config_path, json),
         Command::Scan { source, json } => scan(&config_path, source.as_deref(), json),
-        Command::Index { db, chatgpt_export, tool_text_limit, json } => {
-            query::index(&config_path, db, chatgpt_export, tool_text_limit, json)
+        Command::Index { db, tool_text_limit, json } => {
+            query::index(&config_path, db, tool_text_limit, json)
         }
         Command::Search { query: q, limit, db, source, tools, include_off_path, prefix, nested, flat, json } => {
             query::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)
         }
+        Command::Pick { conv_id, query: q, db, source, limit, quiet } => {
+            query::pick(&config_path, db, &conv_id, &q, source.as_deref(), limit, quiet)
+        }
+        Command::Needs { limit, json } => query::needs(&config_path, limit, json),
         Command::Explain { conv_id, query: q, db } => query::explain(&config_path, db, &conv_id, &q),
+        Command::Eval { command } => match command {
+            EvalCommand::Sheet { set, db, depth, only, force } => {
+                eval::sheet(&config_path, db, &set, depth, only.as_deref(), force)
+            }
+            EvalCommand::Collect { set, db, allow_unknown } => {
+                eval::collect(&config_path, db, &set, allow_unknown)
+            }
+            EvalCommand::Run { set, db, depth, repeat_weight, decay, json } => {
+                eval::run(&config_path, db, &set, depth, repeat_weight, decay, json)
+            }
+        },
         Command::Archive { source, dry_run, json } => {
             archive(&config_path, source.as_deref(), dry_run, json)
         }

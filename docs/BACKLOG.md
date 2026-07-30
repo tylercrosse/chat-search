@@ -42,11 +42,23 @@ eval itself. Everything else is post-MVP regardless of how it is grouped.
 as real dependencies — `bd ready` will not offer the eval until all three are closed:
 
 
-| blocker                                              | why it corrupts an eval                                     |
-| ------------------------------------------------------ | ------------------------------------------------------------- |
-| ChatGPT reaches the index only via`--chatgpt-export` | 69% of the corpus vanishes silently if the flag is omitted  |
-| `ymd()` renders UTC                                  | a wrong date makes "is this the one I meant" unanswerable   |
-| injected markup in titles                            | 42 conversations (1.4%) show garbage as their result header |
+| blocker                                              | why it corrupts an eval                                     | state |
+| ------------------------------------------------------ | ------------------------------------------------------------- | ------- |
+| ChatGPT reaches the index only via`--chatgpt-export` | 69% of the corpus vanishes silently if the flag is omitted  | closed 2026-07-30 |
+| `ymd()` renders UTC                                  | a wrong date makes "is this the one I meant" unanswerable   | closed 2026-07-30 |
+| injected markup in titles                            | 42 conversations (1.4%) show garbage as their result header | closed 2026-07-30 |
+
+**All three cleared as of 2026-07-30.** A bare `cs index` now reaches 2,963 conversations /
+172k messages, and a source that contributes nothing gets a row saying why instead of
+vanishing. The eval harness (`cs eval judge` / `cs eval run`, see `evals/README.md`) and a
+24-query seed set are in; what remains is the judging pass, which is the part nobody else can
+do. Until queries are judged the score is `—`, not zero — an unjudged set reports as
+unscorable rather than reporting a number nobody should trust.
+
+The corpus is 2,963 and not the 3,032 previously reported: `IndexStats.conversations` counted
+conversation *objects* rather than rows, so 69 conversations that span several transcript
+files (ADR 7) were each counted twice. The same bug made a re-delivered ChatGPT export report
+4,022 for a corpus of 2,011 — dedup was correct throughout, only the number was wrong.
 
 **Not in it:** embeddings, clustering, `library.db`, any GUI, OpenCode, Gemini, tool-output
 search. Skipping `library.db` is safe only while nothing authored is written into

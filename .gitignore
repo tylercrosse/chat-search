@@ -10,6 +10,13 @@ poc/rust/target/
 /archive/
 /raw/
 
+# A real eval set is conversation content by another name: the queries say what was being
+# worked on and the judged ids point straight at it. The harness is committed, the example
+# is committed, the judgements never are.
+/evals/*
+!/evals/example.toml
+!/evals/README.md
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 .beads-credential-key

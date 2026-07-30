@@ -256,7 +256,10 @@ dependencies = [
  "cs-core",
  "cs-import",
  "rusqlite",
+ "serde",
  "serde_json",
+ "toml",
+ "uuid",
 ]
 
 [[package]]

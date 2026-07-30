@@ -14,5 +14,10 @@ cs-core = { path = "../cs-core" }
 cs-import = { path = "../cs-import" }
 anyhow = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 rusqlite = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+uuid = { workspace = true }

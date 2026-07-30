@@ -3,6 +3,18 @@ use serde::Serialize;
 
 const YEAR_MS: f64 = 365.0 * 24.0 * 60.0 * 60.0 * 1000.0;
 
+/// How hard age pushes a result down: a score is divided by `1 + DECAY * age_in_years`.
+///
+/// It divides rather than multiplies because bm25 is negative — multiplying makes an old
+/// score *more* negative and therefore ranks it higher, which is what this did until it was
+/// measured. At 0.3, a year-old conversation needs roughly a 30% better bm25 to hold its
+/// place against a fresh one, and a three-year-old one nearly twice as good.
+///
+/// Settable per query via [`Query::decay`] so the eval harness can pool candidates from a
+/// recency-blind ranker as well as this one — judging only what today's constants return is
+/// how a tuning run learns that today's constants are optimal (chat-search-6eb.13).
+pub const DECAY: f64 = 0.3;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Field {
     Prose,
@@ -117,6 +129,10 @@ pub struct Query<'a> {
     /// Treat the final token as a prefix, for typeahead.
     pub prefix: bool,
     pub now_ms: i64,
+    /// See [`REPEAT_WEIGHT`], which is the default.
+    pub repeat_weight: f64,
+    /// See [`DECAY`], which is the default.
+    pub decay: f64,
 }
 
 impl<'a> Query<'a> {
@@ -129,6 +145,8 @@ impl<'a> Query<'a> {
             include_off_path: false,
             prefix: false,
             now_ms: 0,
+            repeat_weight: REPEAT_WEIGHT,
+            decay: DECAY,
         }
     }
 }
@@ -152,7 +170,7 @@ pub fn search(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Hit>> {
         "SELECT m.id, m.conv_id, m.role, m.kind, m.ts, m.text, m.on_head_path,
                 m.is_sidechain, m.thread_key,
                 c.source, c.title, c.resume_cmd, c.deleted_upstream_at,
-                bm25({table}) / (1.0 + 0.3 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
+                bm25({table}) / (1.0 + ?6 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
          FROM {table}
          JOIN message m      ON m.rowid = {table}.rowid
          JOIN conversation c ON c.id = m.conv_id
@@ -165,7 +183,7 @@ pub fn search(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Hit>> {
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
-        params![q.now_ms, to_match_expr_opts(q.text, q.prefix), q.include_off_path as i64, q.source, q.limit],
+        params![q.now_ms, to_match_expr_opts(q.text, q.prefix), q.include_off_path as i64, q.source, q.limit, q.decay],
         |r| {
             let text: String = r.get(5)?;
             Ok(Hit {
@@ -333,9 +351,22 @@ pub struct Group {
     pub ended_date: Option<String>,
     /// What a human would call a turn: user prose, not raw message count.
     pub user_turns: i64,
+    /// Every message, tool traffic included. The denominator [`Group::match_seqs`] positions
+    /// are relative to.
+    pub msg_count: i64,
+    /// Prose messages only, which is what a prose search could possibly have matched.
+    pub prose_count: i64,
     pub score: f64,
     /// Total matching messages, including any not shown.
     pub match_count: usize,
+    /// Where the matches sit, as 0-based message positions, ascending.
+    ///
+    /// Three matches at the start of a forty-message conversation and three at the very end
+    /// mean different things — the topic, or an aside someone raised on the way out. A long
+    /// conversation covering several subjects is common enough here that a match count alone
+    /// cannot answer "is this conversation about my query": 58% of conversations over 15
+    /// turns span more than four hours, so most of them are several sittings.
+    pub match_seqs: Vec<i64>,
     pub resume_cmd: Option<String>,
     pub deleted_upstream: bool,
     pub hits: Vec<Hit>,
@@ -347,6 +378,8 @@ pub struct Group {
 /// returns to a topic ten times ranks no higher. 1.0 would be pure sum, which lets long
 /// agent sessions win on volume alone. 0.25 keeps the best hit leading while letting
 /// sustained discussion break ties.
+///
+/// Settable per query via [`Query::repeat_weight`]; see [`DECAY`] for why.
 pub const REPEAT_WEIGHT: f64 = 0.25;
 
 /// Most recently active conversations, carrying no nested hits.
@@ -358,7 +391,8 @@ pub const REPEAT_WEIGHT: f64 = 0.25;
 /// want is usually among the last few you had.
 pub fn recent(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Group>> {
     let mut stmt = conn.prepare(
-        "SELECT id, source, title, ended_at, user_turns, resume_cmd, deleted_upstream_at
+        "SELECT id, source, title, ended_at, user_turns, resume_cmd, deleted_upstream_at,
+                msg_count, prose_count
          FROM conversation
          WHERE (?1 IS NULL OR source = ?1)
          -- `NULLS LAST` is not portable to older SQLite; this expresses the same order.
@@ -374,8 +408,12 @@ pub fn recent(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Group>> {
             ended_at,
             ended_date: ended_at.and_then(crate::time::local_ymd),
             user_turns: r.get(4)?,
+            msg_count: r.get(7)?,
+            prose_count: r.get(8)?,
             score: 0.0,
             match_count: 0,
+            // No query, so nothing matched and there is no shape to draw.
+            match_seqs: Vec::new(),
             resume_cmd: r.get(5)?,
             deleted_upstream: r.get::<_, Option<i64>>(6)?.is_some(),
             hits: Vec::new(),
@@ -408,8 +446,8 @@ pub fn search_grouped(
     // "cod" 380ms -> 32ms, "code" 469ms -> 98ms.
     let table = q.field.table();
     let sql = format!(
-        "SELECT m.id, m.conv_id,
-                bm25({table}) / (1.0 + 0.3 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
+        "SELECT m.id, m.conv_id, m.seq,
+                bm25({table}) / (1.0 + ?6 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
          FROM {table}
          JOIN message m      ON m.rowid = {table}.rowid
          JOIN conversation c ON c.id = m.conv_id
@@ -419,6 +457,8 @@ pub fn search_grouped(
          ORDER BY score
          LIMIT ?5"
     );
+    // Bound rather than interpolated: a decay swept across a range would otherwise mint a
+    // new statement per value and defeat the cache this call relies on.
     let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt.query_map(
         params![
@@ -426,41 +466,95 @@ pub fn search_grouped(
             to_match_expr_opts(q.text, q.prefix),
             q.include_off_path as i64,
             q.source,
-            ceiling
+            ceiling,
+            q.decay
         ],
-        |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, f64>(2)?)),
+        |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)?,
+                r.get::<_, f64>(3)?,
+            ))
+        },
     )?;
 
     let mut order: Vec<String> = Vec::new();
-    let mut by_conv: std::collections::HashMap<String, Vec<(String, f64)>> = Default::default();
+    let mut by_conv: std::collections::HashMap<String, Vec<(String, i64, f64)>> = Default::default();
     for row in rows {
-        let (msg_id, conv_id, score) = row?;
+        let (msg_id, conv_id, seq, score) = row?;
         if !by_conv.contains_key(&conv_id) {
             order.push(conv_id.clone());
         }
-        by_conv.entry(conv_id).or_default().push((msg_id, score));
+        by_conv.entry(conv_id).or_default().push((msg_id, seq, score));
     }
 
-    let mut ranked: Vec<(String, f64, usize, Vec<String>)> = Vec::with_capacity(order.len());
+    let mut ranked: Vec<Ranked> = Vec::with_capacity(order.len());
     for conv_id in order {
         let hits = by_conv.remove(&conv_id).unwrap_or_default();
         // bm25 is negative and better is more negative, so the best hit is the minimum.
-        let best = hits.iter().map(|(_, s)| *s).fold(f64::INFINITY, f64::min);
-        let total: f64 = hits.iter().map(|(_, s)| *s).sum();
-        let score = best + REPEAT_WEIGHT * (total - best);
+        let best = hits.iter().map(|(_, _, s)| *s).fold(f64::INFINITY, f64::min);
+        let total: f64 = hits.iter().map(|(_, _, s)| *s).sum();
+        let score = best + q.repeat_weight * (total - best);
         let match_count = hits.len();
-        let shown = hits.into_iter().take(nested).map(|(id, _)| id).collect();
-        ranked.push((conv_id, score, match_count, shown));
+        // Every match's position, not just the shown ones: the point of the strip is the
+        // shape of the whole conversation, which `nested` would otherwise truncate to three.
+        let mut seqs: Vec<i64> = hits.iter().map(|(_, seq, _)| *seq).collect();
+        seqs.sort_unstable();
+        let shown = hits.into_iter().take(nested).map(|(id, _, _)| id).collect();
+        ranked.push(Ranked { conv_id, score, match_count, seqs, shown });
     }
 
     // Ties broken by conv_id so the order is stable across runs — results that reshuffle
     // between identical queries read as a bug even when the ranking is the same.
     ranked.sort_by(|a, b| {
-        a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal).then_with(|| a.0.cmp(&b.0))
+        a.score
+            .partial_cmp(&b.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.conv_id.cmp(&b.conv_id))
     });
     ranked.truncate(q.limit as usize);
 
     hydrate(conn, q, ranked)
+}
+
+/// One conversation that survived ranking, before its display columns are fetched.
+struct Ranked {
+    conv_id: String,
+    score: f64,
+    match_count: usize,
+    seqs: Vec<i64>,
+    /// Message ids to nest under the conversation, capped at `nested`.
+    shown: Vec<String>,
+}
+
+/// Ten cells showing where in a conversation the matches fall, densest marked heaviest.
+///
+/// Rendered here rather than by each client for the same reason as [`Group::ended_date`]:
+/// every surface wants it, and a second implementation is a second chance to get the
+/// bucketing subtly different from the first.
+pub fn match_density(seqs: &[i64], msg_count: i64) -> String {
+    const CELLS: usize = 10;
+    const LEVELS: [char; 4] = ['·', '▁', '▄', '█'];
+    if seqs.is_empty() || msg_count <= 0 {
+        return LEVELS[0].to_string().repeat(CELLS);
+    }
+    let mut buckets = [0usize; CELLS];
+    for &s in seqs {
+        // `seq` is 0-based and dense per conversation, so this is a straight proportion.
+        // Clamped anyway: a seq at or past msg_count would otherwise index off the end.
+        let b = ((s.max(0) as usize) * CELLS / (msg_count as usize).max(1)).min(CELLS - 1);
+        buckets[b] += 1;
+    }
+    buckets
+        .iter()
+        .map(|&n| match n {
+            0 => LEVELS[0],
+            1 => LEVELS[1],
+            2..=3 => LEVELS[2],
+            _ => LEVELS[3],
+        })
+        .collect()
 }
 
 /// Turn ranked `(conv_id, score, match_count, shown message ids)` into full `Group`s.
@@ -469,13 +563,10 @@ pub fn search_grouped(
 /// it — are touched only for rows that survived. One prepared statement reused across the
 /// survivors beats an `IN (...)` list, which would need rebuilding per query and lose the
 /// statement cache.
-fn hydrate(
-    conn: &Connection,
-    q: &Query,
-    ranked: Vec<(String, f64, usize, Vec<String>)>,
-) -> rusqlite::Result<Vec<Group>> {
+fn hydrate(conn: &Connection, q: &Query, ranked: Vec<Ranked>) -> rusqlite::Result<Vec<Group>> {
     let mut meta = conn.prepare_cached(
-        "SELECT source, title, resume_cmd, deleted_upstream_at, ended_at, user_turns
+        "SELECT source, title, resume_cmd, deleted_upstream_at, ended_at, user_turns,
+                msg_count, prose_count
          FROM conversation WHERE id = ?1",
     )?;
     let mut msg = conn.prepare_cached(
@@ -487,7 +578,7 @@ fn hydrate(
     )?;
 
     let mut groups = Vec::with_capacity(ranked.len());
-    for (conv_id, score, match_count, shown) in ranked {
+    for Ranked { conv_id, score, match_count, seqs, shown } in ranked {
         let m = meta
             .query_row(params![conv_id], |r| {
                 Ok((
@@ -497,6 +588,8 @@ fn hydrate(
                     r.get::<_, Option<i64>>(3)?.is_some(),
                     r.get::<_, Option<i64>>(4)?,
                     r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, i64>(7)?,
                 ))
             })
             .ok();
@@ -536,8 +629,11 @@ fn hydrate(
             ended_at,
             ended_date: ended_at.and_then(crate::time::local_ymd),
             user_turns: m.as_ref().map(|m| m.5).unwrap_or(0),
+            msg_count: m.as_ref().map(|m| m.6).unwrap_or(0),
+            prose_count: m.as_ref().map(|m| m.7).unwrap_or(0),
             score,
             match_count,
+            match_seqs: seqs,
             hits,
         });
     }
@@ -673,6 +769,97 @@ mod group_tests {
         assert_eq!(groups[0].ended_at, Some(ended));
         assert_eq!(groups[0].ended_date, crate::time::local_ymd(ended));
         assert!(groups[0].ended_date.is_some(), "an indexed conversation always has a day");
+    }
+
+    /// A conversation whose messages are `texts`, indexed and searchable.
+    fn seed(conn: &Connection, conv_id: &str, ended: i64, texts: &[&str]) {
+        conn.execute(
+            "INSERT INTO conversation(id, source, native_id, title, ended_at, user_turns)
+             VALUES (?1, 'codex', ?1, ?1, ?2, 1)",
+            params![conv_id, ended],
+        )
+        .unwrap();
+        for (i, text) in texts.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO message(id, conv_id, thread_key, seq, role, kind, ts, text)
+                 VALUES (?1, ?2, 'main', ?3, 'user', 'prose', ?4, ?5)",
+                params![format!("{conv_id}:m{i}"), conv_id, i as i64, ended, text],
+            )
+            .unwrap();
+            let rowid = conn.last_insert_rowid();
+            conn.execute("INSERT INTO fts_prose(rowid, text) VALUES (?1, ?2)", params![rowid, text])
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn the_density_strip_distinguishes_the_subject_from_an_aside() {
+        // The whole reason it exists: same match count, same conversation length, and the
+        // two deserve different grades because one is what the conversation was about and
+        // the other is something raised on the way out.
+        let subject = match_density(&[0, 1, 2, 3], 40);
+        let aside = match_density(&[36, 37, 38, 39], 40);
+        assert_ne!(subject, aside);
+        assert!(subject.starts_with('█') && subject.ends_with('·'), "got {subject}");
+        assert!(aside.starts_with('·') && aside.ends_with('█'), "got {aside}");
+        assert_eq!(subject.chars().count(), 10);
+    }
+
+    #[test]
+    fn the_strip_is_ten_cells_whatever_it_is_given() {
+        // It is rendered into a fixed-width column, so a ragged one would break alignment.
+        for (seqs, n) in [
+            (vec![], 40),
+            (vec![0], 1),
+            (vec![0, 0, 0, 0, 0], 3),
+            ((0..500).collect::<Vec<i64>>(), 500),
+            (vec![-5, 9_999], 40), // out of range both ways: clamped, never panicking
+            (vec![3], 0),          // a conversation claiming no messages
+        ] {
+            assert_eq!(match_density(&seqs, n).chars().count(), 10, "{seqs:?} of {n}");
+        }
+        assert_eq!(match_density(&[], 40), "··········", "nothing matched, nothing drawn");
+    }
+
+    #[test]
+    fn repeat_weight_actually_moves_the_order_it_claims_to() {
+        // Guards a sweep over a dead knob. `cs eval run --repeat-weight` would report a flat
+        // line across every value if this stopped being plumbed through, and a flat line
+        // reads as "the current value is fine" rather than as a broken experiment.
+        let conn = crate::open(":memory:").unwrap();
+        // One short, dense hit against four long, diluted ones — the exact contest the
+        // constant exists to arbitrate.
+        seed(&conn, "c:one-strong", 1_000, &["widget widget widget"]);
+        let diluted = "widget among a great many other entirely unrelated filler words here";
+        seed(&conn, "c:many-weak", 1_000, &[diluted, diluted, diluted, diluted]);
+
+        let top = |w: f64| {
+            let q = Query { limit: 10, repeat_weight: w, decay: 0.0, ..Query::new("widget") };
+            search_grouped(&conn, &q, 1).unwrap()[0].conv_id.clone()
+        };
+        assert_eq!(top(0.0), "c:one-strong", "pure max: the single best hit is the whole score");
+        assert_eq!(top(1.0), "c:many-weak", "pure sum: volume wins, which is what damping prevents");
+    }
+
+    #[test]
+    fn the_decay_actually_moves_the_order_it_claims_to() {
+        let conn = crate::open(":memory:").unwrap();
+        let text = "widget";
+        let year = 365 * 24 * 60 * 60 * 1000i64;
+        // Identical text, three years apart. Ids chosen so the *older* one wins the
+        // conv_id tiebreak, which is what makes the decay=0 case prove something: without
+        // decay the two scores are equal and alphabetical order decides.
+        seed(&conn, "c:a-old", 0, &[text]);
+        seed(&conn, "c:b-new", 3 * year, &[text]);
+
+        let top = |d: f64| {
+            let q = Query {
+                limit: 10, decay: d, now_ms: 3 * year, ..Query::new("widget")
+            };
+            search_grouped(&conn, &q, 1).unwrap()[0].conv_id.clone()
+        };
+        assert_eq!(top(0.0), "c:a-old", "recency-blind: equal scores, tie broken by id");
+        assert_eq!(top(DECAY), "c:b-new", "three years of age is enough to lose the top slot");
     }
 
     #[test]

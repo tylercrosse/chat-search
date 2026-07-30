@@ -34,8 +34,19 @@ pub struct Config {
     /// Overrides the auto-derived machine slug (ADR 17). Cosmetic only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine_alias: Option<String>,
+    /// Record what was searched for and what was opened, into [`Config::query_log`].
+    ///
+    /// On by default: the log never leaves the machine, and it is the only source of real
+    /// information needs this project has. An eval set of invented queries measures invented
+    /// needs, so switching this off costs the ranking its ground truth.
+    #[serde(default = "yes")]
+    pub log_queries: bool,
     #[serde(default)]
     pub sources: Vec<Source>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -43,6 +54,7 @@ impl Default for Config {
         Self {
             archive_root: expand_tilde("~/.chat-archive"),
             machine_alias: None,
+            log_queries: true,
             sources: detect_sources(),
         }
     }
@@ -99,6 +111,17 @@ impl Config {
     pub fn default_db(&self) -> PathBuf {
         self.archive_root.join("index.db")
     }
+
+    /// Where searches and selections are recorded.
+    ///
+    /// Beside `index.db` but the opposite kind of file: the index is a pure function of the
+    /// archive and can be deleted at will, while this cannot be reconstructed from anything
+    /// and should be backed up. Kept outside `raw/` so it never looks like captured source
+    /// data, and it is the first thing here that will belong in `library.db` once that
+    /// exists (chat-search-6eb.14).
+    pub fn query_log(&self) -> PathBuf {
+        self.archive_root.join("queries.jsonl")
+    }
 }
 
 /// Known source locations, in the order they should be archived. Only those that
@@ -154,6 +177,7 @@ mod tests {
         let bad = |id: &str| Config {
             archive_root: PathBuf::from("/tmp/a"),
             machine_alias: None,
+            log_queries: true,
             sources: vec![Source {
                 id: id.into(),
                 path: PathBuf::from("/tmp/s"),
@@ -181,6 +205,7 @@ mod tests {
         let cfg = Config {
             archive_root: PathBuf::from("/tmp/a"),
             machine_alias: None,
+            log_queries: true,
             sources: vec![src("codex"), src("codex")],
         };
         assert!(cfg.validate().is_err());
@@ -193,6 +218,7 @@ mod tests {
         let cfg = Config {
             archive_root: expand_tilde_with("~/.chat-archive", Some(PathBuf::from("/Users/test"))),
             machine_alias: None,
+            log_queries: true,
             sources: vec![],
         };
         assert_eq!(cfg.default_db(), PathBuf::from("/Users/test/.chat-archive/index.db"));

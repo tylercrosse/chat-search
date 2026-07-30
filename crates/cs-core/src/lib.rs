@@ -8,12 +8,15 @@
 //! `time` holds what every client needs and no client should re-derive: the clock, and the
 //! rule for naming the local day an instant fell on.
 
+pub mod eval;
 pub mod index;
 pub mod model;
+pub mod querylog;
 pub mod schema;
 pub mod search;
 pub mod time;
 
+pub use eval::{Grade, Judged, QueryScore, Report};
 pub use index::{
     open, open_fresh, reset, write_conversations, write_conversations_with, IndexOptions,
     IndexStats, TOOL_TEXT_MAX,
@@ -21,6 +24,7 @@ pub use index::{
 pub use model::{Conversation, Kind, Message, Role, Titles};
 pub use schema::IMPORTER_VERSION;
 pub use search::{
-    explain, is_blank, recent, search, search_grouped, Explain, Field, Group, Hit, Query,
+    explain, is_blank, match_density, recent, search, search_grouped, Explain, Field, Group, Hit,
+    Query, DECAY, REPEAT_WEIGHT,
 };
 pub use time::{local_ymd, now_ms, ymd_in};

@@ -45,9 +45,21 @@ fn clip_tool_text(text: &str, limit: usize) -> String {
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct IndexStats {
+    /// Distinct conversation *rows* written — what the index actually holds.
+    ///
+    /// Not the number of conversation objects the importers produced, which is larger
+    /// whenever the same conversation arrives twice. A ChatGPT export is a whole-account
+    /// snapshot, so a second export re-delivers every conversation in the first: counting
+    /// objects reported 4,022 for a corpus of 2,011, and the dedup it looked like a failure
+    /// of was working correctly the whole time (chat-search-a7k.8).
     pub conversations: u64,
+    /// Conversation objects that folded into a row already present. Two legitimate causes:
+    /// one conversation split across several transcript files (ADR 7), and a re-delivered
+    /// snapshot.
+    pub merged: u64,
     pub messages: u64,
     pub prose: u64,
+    /// Messages already present, by id. Same idea as `merged`, one level down.
     pub duplicates: u64,
     pub text_bytes: u64,
 }
@@ -135,6 +147,15 @@ fn write_one(
     let head_id = c.resolved_head().map(|h| c.message_id(h));
     let on_path = on_head_path(c);
 
+    // Asked before the upsert because the upsert cannot answer it: `ON CONFLICT DO UPDATE`
+    // reports one changed row whether it inserted or merged, so there is no way to tell
+    // afterwards. A point lookup on the primary key is the cost of the report being true.
+    let already: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM conversation WHERE id = ?1)",
+        params![conv_id],
+        |r| r.get(0),
+    )?;
+
     // COALESCE rather than first-write-wins: a conversation can be assembled from several
     // transcript files and only some carry the title, cwd or model (ADR 7).
     tx.execute(
@@ -217,7 +238,11 @@ fn write_one(
         stats.text_bytes += stored_text.len() as u64;
     }
 
-    stats.conversations += 1;
+    if already {
+        stats.merged += 1;
+    } else {
+        stats.conversations += 1;
+    }
     Ok(())
 }
 
@@ -413,6 +438,26 @@ mod tests {
         assert_eq!(second.duplicates, 1);
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM message", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn a_re_delivered_snapshot_is_counted_as_merged_rather_than_as_a_second_conversation() {
+        // A ChatGPT export is a whole-account snapshot, so a second export re-delivers every
+        // conversation in the first. Counting objects rather than rows reported 4,022 for a
+        // corpus of 2,011 and made working dedup look broken (chat-search-a7k.8).
+        let path = std::env::temp_dir().join(format!("cs-snap-{}.db", uuid::Uuid::new_v4()));
+        let mut conn = open(path.to_str().unwrap()).unwrap();
+        let c = conv(vec![m("a", None, 1, "main", false, "hello")]);
+
+        // Both copies in one pass, which is what indexing two archived exports looks like.
+        let stats = write_conversations(&mut conn, [&c, &c]).unwrap();
+        assert_eq!(stats.conversations, 1, "one row, so one conversation");
+        assert_eq!(stats.merged, 1, "and the second delivery said so rather than vanishing");
+
+        let rows: i64 =
+            conn.query_row("SELECT COUNT(*) FROM conversation", [], |r| r.get(0)).unwrap();
+        assert_eq!(rows, stats.conversations as i64, "the count must be what the table holds");
         std::fs::remove_file(&path).ok();
     }
 }

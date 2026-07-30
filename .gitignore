@@ -14,3 +14,10 @@ poc/rust/target/
 .dolt/
 .beads-credential-key
 .beads/proxieddb/
+
+# Dolt drops a commented-out server config template in the repo root; not ours.
+/config.yaml
+# bd's auto-import staging file; .beads/issues.jsonl is the one to commit.
+.beads/.auto-import-issues.jsonl
+# bd's pre-migration backup of the whole workspace, embedded Dolt DB and all.
+.beads.bak/

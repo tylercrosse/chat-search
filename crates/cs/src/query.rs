@@ -11,6 +11,7 @@ fn import_source(source_id: &str, logical_path: &str, bytes: &[u8]) -> Vec<Conve
         "codex" => cs_import::codex::import(logical_path, bytes).into_iter().collect(),
         "claude-code" => cs_import::claude_code::import(logical_path, bytes).into_iter().collect(),
         "chatgpt-export" => cs_import::chatgpt_export::import_all(bytes),
+        "gemini-cli" => cs_import::gemini::import(logical_path, bytes).into_iter().collect(),
         _ => Vec::new(),
     }
 }

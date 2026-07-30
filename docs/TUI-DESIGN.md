@@ -438,10 +438,13 @@ how a tool-field hit becomes visible instead of mysterious.
 | `prose` | role sigil + the **matching** line, else the first non-empty line |
 | `reasoning` | `⋯ reasoning · 34 lines` |
 | `tool_call` | `⚙ Read(schema.rs)` — name plus primary argument |
-| `tool_result` | `↳ 1.2 KB · 34 lines`, or the error text when it failed |
+| `tool_result` | **omitted** — except a failure, which keeps its error text |
 
-A failed tool result stays legible when collapsed, in the error colour. "The tool broke here" is
-recognition information.
+**Revised 2026-07-30, from first use.** `tool_result` was specced as a collapsed one-liner
+alongside `tool_call`; omit it instead. The result is a blob whose existence the call already
+implies, so a line saying `↳ 1.2 KB` spends a row to repeat what `⚙ Read(schema.rs)` just said.
+The failure case survives the change: "the tool broke here" is recognition information, and it
+stays legible in the error colour.
 
 ### Outline mode
 

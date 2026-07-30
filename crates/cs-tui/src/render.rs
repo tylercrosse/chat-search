@@ -12,7 +12,7 @@ use ratatui::Frame;
 
 use crate::layout::{self, Col, Columns};
 use crate::rows::Row;
-use crate::state::App;
+use crate::state::{self, App};
 use crate::text;
 use crate::theme;
 
@@ -69,6 +69,18 @@ fn search(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         spans.push(Span::raw(app.query.clone()));
     }
+    if app.holding() {
+        // Ghost text rather than a status line: the explanation belongs beside the thing it
+        // explains, and the list below is recent conversations, not partial matches.
+        spans.push(Span::styled(
+            format!(
+                "   {} more character{} to search",
+                state::MIN_QUERY_CHARS - app.query.trim().chars().count(),
+                if state::MIN_QUERY_CHARS - app.query.trim().chars().count() == 1 { "" } else { "s" }
+            ),
+            app.theme.dim,
+        ));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
 
     // The caret is the terminal's, not a drawn glyph, so it blinks like every other input.
@@ -108,7 +120,9 @@ fn results(frame: &mut Frame, area: Rect, app: &App) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(app.theme.border)
-        .title(" Conversations ");
+        // Named for what the list *is*: under a blank or still-too-short query these are the
+        // most recent conversations, and calling them results would imply they matched.
+        .title(if app.is_blank() || app.holding() { " Recent " } else { " Matches " });
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {

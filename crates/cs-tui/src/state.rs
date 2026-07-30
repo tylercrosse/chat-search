@@ -15,6 +15,13 @@ use rusqlite::Connection;
 use crate::rows::{self, Row};
 use crate::theme::Theme;
 
+/// Characters required before a query is run.
+///
+/// Tied to `cs_core`'s prefix threshold rather than picked for feel: below it the final
+/// token is matched exactly instead of expanded, so a shorter query returns matches for a
+/// word nobody typed.
+pub const MIN_QUERY_CHARS: usize = cs_core::search::MIN_PREFIX_LEN;
+
 pub struct App {
     conn: Connection,
     /// Corpus size, for the header's "shown / indexed". Read once: the index is rebuilt by a
@@ -90,22 +97,30 @@ impl App {
     /// truth is "the index could not be read".
     pub fn search(&mut self) {
         self.now = cs_core::now_ms();
+        // Held back below the prefix threshold, and the reason is correctness before cost:
+        // `to_match_expr` only expands the final token when it is at least
+        // `MIN_PREFIX_LEN` long, so `em` searches for the literal word "em" rather than for
+        // a prefix of "embedding". The handful of rows that come back are not an early view
+        // of the answer, they are a different question — and the corpus is scanned once per
+        // keystroke to produce them. Recent conversations are the honest thing to show
+        // while a query is still too short to mean anything.
+        let text = if self.holding() { String::new() } else { self.query.clone() };
         let t0 = std::time::Instant::now();
         let q = cs_core::Query {
-            text: &self.query,
+            text: &text,
             limit: self.limit,
             source: self.source.as_deref(),
             // The TUI is typeahead by definition, so the word being typed is always open-ended.
             prefix: true,
             now_ms: self.now,
-            ..cs_core::Query::new(&self.query)
+            ..cs_core::Query::new(&text)
         };
         match cs_core::search_grouped(&self.conn, &q, rows::MAX_HITS) {
             Ok(groups) => {
                 self.last_ms = t0.elapsed().as_secs_f64() * 1000.0;
                 self.groups = groups;
                 self.status = None;
-                self.rows = rows::build(&self.groups, &self.expanded, self.is_blank());
+                self.rows = rows::build(&self.groups, &self.expanded, cs_core::is_blank(&text));
                 // A query edit is a new question, so the cursor belongs on the best answer to
                 // it. Following the previously-selected conversation here — which an earlier
                 // version did — drags the cursor down the ranking as the query narrows: type
@@ -132,6 +147,21 @@ impl App {
     /// form: `"-"` and `"??"` are non-empty input that still produce no terms.
     pub fn is_blank(&self) -> bool {
         cs_core::is_blank(&self.query)
+    }
+
+    /// Something has been typed, but not yet enough to search on.
+    ///
+    /// The list underneath is recent conversations, not a partial answer, so the UI has to
+    /// say which it is showing — silently listing recent conversations under a half-typed
+    /// query reads as "your query matched these".
+    pub fn holding(&self) -> bool {
+        Self::holds(&self.query)
+    }
+
+    /// [`App::holding`] as a pure function, so the threshold is testable without an index.
+    pub fn holds(query: &str) -> bool {
+        let typed = query.trim().chars().count();
+        typed > 0 && typed < MIN_QUERY_CHARS
     }
 
     pub fn selected_group(&self) -> Option<&Group> {
@@ -364,5 +394,19 @@ mod tests {
         assert_eq!(rank, Some(2), "1-based rank within the list actually shown");
         assert_eq!(n, 2);
         assert!(conv_id.ends_with("c1"));
+    }
+}
+
+#[cfg(test)]
+mod hold_tests {
+    use super::*;
+
+    #[test]
+    fn a_short_query_is_held_rather_than_run() {
+        assert!(!App::holds(""), "blank is not holding — it is the recent list");
+        assert!(App::holds("e"));
+        assert!(App::holds("em"));
+        assert!(!App::holds("emb"), "the prefix threshold is where searching starts");
+        assert!(App::holds("  e  "), "whitespace is not typing");
     }
 }

@@ -324,6 +324,13 @@ pub struct Group {
     pub source: String,
     pub title: Option<String>,
     pub ended_at: Option<i64>,
+    /// `ended_at` as a local `YYYY-MM-DD`, rendered here so no client re-derives it.
+    ///
+    /// Redundant with `ended_at` on purpose: every client wants the day, and each one that
+    /// computes it from the epoch value gets its own chance to compute it in UTC and name
+    /// tomorrow for an evening conversation — which is precisely how cs-fzf's jq and the
+    /// binary's formatter came to disagree.
+    pub ended_date: Option<String>,
     /// What a human would call a turn: user prose, not raw message count.
     pub user_turns: i64,
     pub score: f64,
@@ -359,11 +366,13 @@ pub fn recent(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Group>> {
          LIMIT ?2",
     )?;
     let rows = stmt.query_map(params![q.source, q.limit], |r| {
+        let ended_at: Option<i64> = r.get(3)?;
         Ok(Group {
             conv_id: r.get(0)?,
             source: r.get(1)?,
             title: r.get(2)?,
-            ended_at: r.get(3)?,
+            ended_at,
+            ended_date: ended_at.and_then(crate::time::local_ymd),
             user_turns: r.get(4)?,
             score: 0.0,
             match_count: 0,
@@ -517,13 +526,15 @@ fn hydrate(
             }
         }
 
+        let ended_at = m.as_ref().and_then(|m| m.4);
         groups.push(Group {
             conv_id,
             source: m.as_ref().map(|m| m.0.clone()).unwrap_or_default(),
             title: m.as_ref().and_then(|m| m.1.clone()),
             resume_cmd: m.as_ref().and_then(|m| m.2.clone()),
             deleted_upstream: m.as_ref().is_some_and(|m| m.3),
-            ended_at: m.as_ref().and_then(|m| m.4),
+            ended_at,
+            ended_date: ended_at.and_then(crate::time::local_ymd),
             user_turns: m.as_ref().map(|m| m.5).unwrap_or(0),
             score,
             match_count,
@@ -600,6 +611,11 @@ mod group_tests {
         let ids: Vec<_> = groups.iter().map(|g| g.conv_id.as_str()).collect();
         assert_eq!(ids, ["c:a", "c:c", "c:b", "c:z"]);
         assert!(groups.iter().all(|g| g.hits.is_empty()), "no query means no hits to nest");
+        // The day rides along with the epoch value on this path too — a typeahead UI opens
+        // on `recent` before the first keystroke, so it is where a client would first be
+        // tempted to derive the date itself.
+        assert_eq!(groups[0].ended_date, crate::time::local_ymd(300));
+        assert!(groups[3].ended_date.is_none(), "no ended_at, no day to name");
 
         // and the flat path stays empty rather than raising
         assert!(search(&conn, &q).unwrap().is_empty());
@@ -622,6 +638,41 @@ mod group_tests {
 
         let capped = recent(&conn, &Query { limit: 1, ..Query::new("") }).unwrap();
         assert_eq!(capped.len(), 1);
+    }
+
+    #[test]
+    fn a_matched_conversation_carries_its_local_day_as_well_as_its_timestamp() {
+        let conn = crate::open(":memory:").unwrap();
+        // 2026-07-18 21:00 PDT: the evening case that used to be filed under the 19th. What
+        // day that is depends on the machine's zone, so the assertion is that the rendered
+        // field agrees with the one rule rather than a literal — time.rs pins a zone and
+        // checks the rule itself.
+        let ended = 1_784_433_600_000i64; // 2026-07-19T04:00Z
+        conn.execute(
+            "INSERT INTO conversation(id, source, native_id, title, ended_at, user_turns)
+             VALUES ('c:1', 'codex', 'n1', 'borrow checker', ?1, 2)",
+            params![ended],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO message(id, conv_id, thread_key, seq, role, kind, ts, text)
+             VALUES ('m:1', 'c:1', 'main', 1, 'user', 'prose', ?1, 'the borrow checker again')",
+            params![ended],
+        )
+        .unwrap();
+        // fts5 here is contentless, so postings are written explicitly rather than by trigger.
+        let rowid = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO fts_prose(rowid, text) VALUES (?1, 'the borrow checker again')",
+            params![rowid],
+        )
+        .unwrap();
+
+        let groups = search_grouped(&conn, &Query { limit: 5, ..Query::new("borrow") }, 3).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].ended_at, Some(ended));
+        assert_eq!(groups[0].ended_date, crate::time::local_ymd(ended));
+        assert!(groups[0].ended_date.is_some(), "an indexed conversation always has a day");
     }
 
     #[test]

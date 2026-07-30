@@ -23,6 +23,12 @@ globset = "0.4"
 reflink-copy = "0.1"
 uuid = { version = "1", features = ["v4"] }
 clap = { version = "4", features = ["derive"] }
+# `clock` is the whole reason this is here — reading the machine's zone. Everything else
+# chrono offers by default (wasm bindings, its own serde impls, locales) is dead weight.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Dev-only, everywhere: pinning a named zone is what makes DST behaviour testable off a
+# machine that happens to sit in the right timezone. Production reads the system zone.
+chrono-tz = "0.10"
 
 [profile.release]
 opt-level = 3

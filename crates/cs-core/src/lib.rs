@@ -4,11 +4,15 @@
 //! `index.db`. `search` queries it. Index and search are one crate on purpose: they share
 //! the tokenizer, the schema and the ranking, and splitting them produces silent recall
 //! bugs rather than compile errors.
+//!
+//! `time` holds what every client needs and no client should re-derive: the clock, and the
+//! rule for naming the local day an instant fell on.
 
 pub mod index;
 pub mod model;
 pub mod schema;
 pub mod search;
+pub mod time;
 
 pub use index::{
     open, open_fresh, reset, write_conversations, write_conversations_with, IndexOptions,
@@ -19,3 +23,4 @@ pub use schema::IMPORTER_VERSION;
 pub use search::{
     explain, is_blank, recent, search, search_grouped, Explain, Field, Group, Hit, Query,
 };
+pub use time::{local_ymd, now_ms, ymd_in};

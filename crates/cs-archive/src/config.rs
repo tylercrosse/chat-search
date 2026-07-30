@@ -88,6 +88,17 @@ impl Config {
     pub fn default_path() -> PathBuf {
         expand_tilde("~/.config/chat-search/config.toml")
     }
+
+    /// Where the search index lives by default. Sits beside the archive but is disposable —
+    /// deleting it costs a rebuild, never data (ADR 1).
+    ///
+    /// Path resolution lives here rather than in cs-core because it is a question about the
+    /// config, and cs-core knows nothing about configs: pointing it at one would run the
+    /// dependency backwards and drag toml and the globs into the search crate. Every client
+    /// already loads a `Config` to find the archive, so this costs them nothing.
+    pub fn default_db(&self) -> PathBuf {
+        self.archive_root.join("index.db")
+    }
 }
 
 /// Known source locations, in the order they should be archived. Only those that
@@ -173,6 +184,18 @@ mod tests {
             sources: vec![src("codex"), src("codex")],
         };
         assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn the_index_resolves_against_the_expanded_archive_root() {
+        // Resolution happens after `load` expanded `~`, so a client that only ever sees the
+        // loaded config gets an openable path rather than a literal tilde.
+        let cfg = Config {
+            archive_root: expand_tilde_with("~/.chat-archive", Some(PathBuf::from("/Users/test"))),
+            machine_alias: None,
+            sources: vec![],
+        };
+        assert_eq!(cfg.default_db(), PathBuf::from("/Users/test/.chat-archive/index.db"));
     }
 
     #[test]

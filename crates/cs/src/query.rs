@@ -5,12 +5,6 @@ use cs_archive::{machine, ArchiveReader, Config};
 use cs_core::model::Conversation;
 use std::path::{Path, PathBuf};
 
-/// Default index location. Sits beside the archive but is disposable — deleting it costs a
-/// rebuild, never data (ADR 1).
-pub fn default_db(cfg: &Config) -> PathBuf {
-    cfg.archive_root.join("index.db")
-}
-
 /// Which importer handles a source. Keyed on the source id, which is permanent (ADR 16).
 fn import_source(source_id: &str, logical_path: &str, bytes: &[u8]) -> Vec<Conversation> {
     match source_id {
@@ -33,7 +27,7 @@ pub fn index(
         .with_context(|| format!("reading {}", config_path.display()))?;
     let m = machine::load_or_create(&cfg.archive_root, cfg.machine_alias.as_deref())?;
     let reader = ArchiveReader::new(m.dir(&cfg.archive_root));
-    let db_path = db_path.unwrap_or_else(|| default_db(&cfg));
+    let db_path = db_path.unwrap_or_else(|| cfg.default_db());
 
     let started = std::time::Instant::now();
     let mut conn = cs_core::open_fresh(db_path.to_str().context("db path is not utf-8")?)
@@ -144,7 +138,7 @@ pub fn search(
     json: bool,
 ) -> Result<()> {
     let cfg = Config::load(config_path)?;
-    let db_path = db_path.unwrap_or_else(|| default_db(&cfg));
+    let db_path = db_path.unwrap_or_else(|| cfg.default_db());
     let t0 = std::time::Instant::now();
     let conn = rusqlite_open(&db_path)?;
     let q = cs_core::Query {
@@ -154,7 +148,7 @@ pub fn search(
         source,
         include_off_path,
         prefix,
-        now_ms: now_ms(),
+        now_ms: cs_core::now_ms(),
     };
 
     if !flat {
@@ -196,7 +190,7 @@ pub fn search(
 
 pub fn explain(config_path: &Path, db_path: Option<PathBuf>, conv_id: &str, query: &str) -> Result<()> {
     let cfg = Config::load(config_path)?;
-    let db_path = db_path.unwrap_or_else(|| default_db(&cfg));
+    let db_path = db_path.unwrap_or_else(|| cfg.default_db());
     let conn = rusqlite_open(&db_path)?;
     let e = cs_core::explain(&conn, conv_id, query)?;
     println!("{:#}", serde_json::to_value(&e)?);
@@ -206,13 +200,6 @@ pub fn explain(config_path: &Path, db_path: Option<PathBuf>, conv_id: &str, quer
 fn rusqlite_open(path: &Path) -> Result<rusqlite::Connection> {
     rusqlite::Connection::open(path)
         .with_context(|| format!("opening {} (run `cs index` first?)", path.display()))
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 /// Conversation-grouped output: the conversation is the result, its best matching messages
@@ -234,8 +221,10 @@ fn render_groups(groups: &[cs_core::Group], query: &str, ms: f64, json: bool) ->
     }
     for (i, g) in groups.iter().enumerate() {
         let mut meta = vec![g.source.clone()];
-        if let Some(ts) = g.ended_at {
-            meta.push(ymd(ts));
+        // Rendered by cs-core, not here: this is the same string the JSON hands a GUI, so
+        // the terminal and every other client cannot disagree about which day a session was.
+        if let Some(date) = &g.ended_date {
+            meta.push(date.clone());
         }
         meta.push(format!("{} turns", g.user_turns));
         if g.deleted_upstream {
@@ -267,19 +256,4 @@ fn render_groups(groups: &[cs_core::Group], query: &str, ms: f64, json: bool) ->
     }
     println!("{} conversations · {:.1} ms", groups.len(), ms);
     Ok(())
-}
-
-/// Date only, from epoch millis — enough for a result line, and avoids a date dependency.
-fn ymd(ms: i64) -> String {
-    let days = ms.div_euclid(86_400_000);
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    format!("{:04}-{:02}-{:02}", if m <= 2 { y + 1 } else { y }, m, d)
 }

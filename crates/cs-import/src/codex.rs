@@ -113,7 +113,9 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         }
 
         if kind == Kind::Prose && role == Role::User && first_user.is_none() {
-            first_user = Some(title_from(text));
+            // May yield nothing when the turn is a bare command line, in which case the
+            // next user message gets its turn.
+            first_user = title_from(text);
         }
 
         let native_id = format!("{thread_key}:{seq:06}");
@@ -250,8 +252,99 @@ fn flatten(v: Option<&Value>) -> String {
     }
 }
 
-fn title_from(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(TITLE_MAX_CHARS).collect()
+/// A user message reduced to a title, or `None` when the turn is a command rather than a
+/// prompt, in which case the next user message is tried. Codex has no rename and no
+/// auto-title, so a file that holds nothing but commands ends up with no title at all —
+/// which is still the right answer, and the same one Claude Code already gives for a turn
+/// that is nothing but a slash-command expansion.
+fn title_from(s: &str) -> Option<String> {
+    if is_command_line(s) {
+        return None;
+    }
+    let title: String = unwrap_skill_links(s)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(TITLE_MAX_CHARS)
+        .collect();
+    if title.is_empty() {
+        None
+    } else {
+        Some(title)
+    }
+}
+
+/// A turn the user aimed at the harness, not at the model.
+///
+/// Codex records a slash command as an ordinary `user_message` with no markup around it —
+/// Claude Code wraps its own in `<command-name>` tags, Codex just writes the line — so the
+/// command *is* the text and there is nothing to strip. It configures the session rather
+/// than describing the work (the one observed argument is a model name), so the whole turn
+/// is declined; 3 conversations on the reference corpus were titled `/status` or
+/// `/model luna`.
+///
+/// The guards are what keep prose out: the whole message must be one line, and the name
+/// must be lowercase ASCII running to a space or to the end. A pasted path (`/Users/…`,
+/// `/usr/local/bin`), a leading year (`/2026 was …`) and anything that goes on for a second
+/// line therefore all read as prose.
+fn is_command_line(s: &str) -> bool {
+    let s = s.trim();
+    if s.contains('\n') {
+        return false;
+    }
+    let Some(rest) = s.strip_prefix('/') else { return false };
+    let name = rest.split_whitespace().next().unwrap_or("");
+    name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Rewrite Codex's skill mentions back to what the user typed.
+///
+/// Typing `$commit` expands to a markdown link to the skill file, so the turn is stored as
+/// `Can you [$commit](/Users/…/.codex/skills/commit/SKILL.md) the current work`. The name
+/// is the user's word and belongs in the title; the path is machinery, and it filled 7
+/// titles on the reference corpus — 2 of them with nothing else in them at all.
+///
+/// Literal, in the same spirit as Claude Code's tag stripping: only a well-formed
+/// `[$name](target)` is rewritten, and anything else — an unclosed link, a `[$` in prose —
+/// is copied through exactly as written rather than swallowing the rest of the message.
+///
+/// The name is padded with spaces because the expansion swallows the one the user typed:
+/// `Can you run $humanizer on …` is stored as `Can you run[$humanizer](…) on …`. Titles are
+/// whitespace-collapsed afterwards, so the padding never shows up doubled.
+fn unwrap_skill_links(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+
+    while let Some(open) = rest.find("[$") {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 2..];
+
+        let link = after.find("](").and_then(|name_end| {
+            let (name, target) = (&after[..name_end], &after[name_end + 2..]);
+            let close = target.find(')')?;
+            let named = !name.is_empty()
+                && name.chars().all(|c| c.is_alphanumeric() || matches!(c, '-' | '_' | ':'));
+            named.then(|| (name, &target[close + 1..]))
+        });
+
+        match link {
+            Some((name, tail)) => {
+                out.push(' ');
+                out.push_str(name);
+                out.push(' ');
+                rest = tail;
+            }
+            None => {
+                out.push_str("[$");
+                rest = after;
+            }
+        }
+    }
+
+    out.push_str(rest);
+    out
 }
 
 /// RFC3339 -> epoch milliseconds.
@@ -773,4 +866,91 @@ not json at all
         assert_eq!(c.titles.first_user.as_deref(), Some("why is the loader slow"));
     }
 
+    #[test]
+    fn a_bare_slash_command_is_a_turn_at_the_harness_and_never_becomes_the_title() {
+        let commands = r#"
+{"type":"session_meta","payload":{"id":"s"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"/status"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"/model luna\n"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"why is the loader slow"}}
+"#;
+        let c = conv("rollout-commands.jsonl", commands);
+        // Every one is still a message; only the title declines them.
+        assert_eq!(c.messages.len(), 3);
+        assert_eq!(c.titles.resolve(), Some("why is the loader slow"));
+
+        // Nothing but commands leaves the conversation untitled rather than titled `/status`.
+        let only = r#"
+{"type":"session_meta","payload":{"id":"s"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"/status"}}
+"#;
+        assert_eq!(conv("rollout-only-commands.jsonl", only).titles.resolve(), None);
+    }
+
+    #[test]
+    fn text_that_merely_starts_with_a_slash_is_still_prose() {
+        let prose = r#"
+{"type":"session_meta","payload":{"id":"s"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"/Users/x/dev/app is the repo"}}
+"#;
+        assert_eq!(
+            conv("rollout-path.jsonl", prose).titles.resolve(),
+            Some("/Users/x/dev/app is the repo")
+        );
+
+        // The guards, one per line, where a fixture each would only add noise: a command
+        // with and without an argument, then an uppercase or punctuated first segment, an
+        // embedded slash, a second line, a slash mid-sentence, and the degenerate inputs.
+        assert!(is_command_line("/status"));
+        assert!(is_command_line("  /model luna\n"));
+        assert!(is_command_line("/compact-2 keep the plan"));
+        assert!(!is_command_line("/Users/x/dev"));
+        assert!(!is_command_line("/usr/local/bin"));
+        assert!(!is_command_line("/.git is 7 GB"));
+        assert!(!is_command_line("/2026 was the year"));
+        assert!(!is_command_line("/status\nand then what?"));
+        assert!(!is_command_line("why is /.git so big?"));
+        assert!(!is_command_line("/"));
+        assert!(!is_command_line(""));
+    }
+
+    #[test]
+    fn a_skill_mention_titles_as_the_skill_name_not_its_file_path() {
+        let skills = r#"
+{"type":"session_meta","payload":{"id":"s"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"Can you [$commit](/Users/x/.codex/skills/commit/SKILL.md) the current work?"}}
+"#;
+        assert_eq!(
+            conv("rollout-skill.jsonl", skills).titles.resolve(),
+            Some("Can you commit the current work?")
+        );
+
+        // A mention with nothing around it: the name is all there is, and it beats a path.
+        let bare = r#"
+{"type":"session_meta","payload":{"id":"s"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"[$add-job-posting](/Users/x/.codex/skills/add-job-posting/SKILL.md)"}}
+"#;
+        assert_eq!(conv("rollout-bare-skill.jsonl", bare).titles.resolve(), Some("add-job-posting"));
+
+        // The expansion eats the space the user typed before the `$`, so the name is padded
+        // and the collapse in `title_from` puts exactly one back.
+        let unspaced = r#"
+{"type":"session_meta","payload":{"id":"s"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"Can you run[$humanizer](/Users/x/.claude/skills/humanizer/SKILL.md) on the intro?"}}
+"#;
+        assert_eq!(
+            conv("rollout-unspaced.jsonl", unspaced).titles.resolve(),
+            Some("Can you run humanizer on the intro?")
+        );
+
+        // Malformed or merely dollar-ish text is copied through, never swallowed.
+        assert_eq!(unwrap_skill_links("plain prose"), "plain prose");
+        assert_eq!(unwrap_skill_links("a [$ b"), "a [$ b");
+        assert_eq!(unwrap_skill_links("[$ ](y) is not a name"), "[$ ](y) is not a name");
+        assert_eq!(
+            unwrap_skill_links("[$commit](unclosed and on we go"),
+            "[$commit](unclosed and on we go"
+        );
+        assert_eq!(unwrap_skill_links("[$a](p) then [$b](q)"), " a  then  b ");
+    }
 }

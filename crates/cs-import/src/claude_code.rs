@@ -340,7 +340,14 @@ fn clamp_title(s: &str) -> String {
 /// Tags Claude Code injects into user turns whose *contents* are machinery, not prose.
 /// Dropped whole, tag and body, so a turn that is nothing but a slash-command expansion
 /// leaves no title behind and the next user message gets the job.
-const DROPPED_TAGS: [&str; 8] = [
+///
+/// The `ide_*` three come from the editor extension rather than the slash-command
+/// machinery, but they arrive the same way: their own user text block, closed, with nothing
+/// after the closing tag in any of the 353 `ide_opened_file` and 66 `ide_selection` blocks
+/// on the reference corpus. Left in, they titled 16 conversations with a sentence about
+/// which file happened to be focused. `ide_diagnostics` has only been seen on `attachment`
+/// events, which never become messages, but it is the same injection and costs a line.
+const DROPPED_TAGS: [&str; 11] = [
     "command-message",
     "command-name",
     "command-contents",
@@ -349,6 +356,9 @@ const DROPPED_TAGS: [&str; 8] = [
     "local-command-caveat",
     "system-reminder",
     "system_reminder",
+    "ide_opened_file",
+    "ide_selection",
+    "ide_diagnostics",
 ];
 
 /// `<command-args>` is the one exception: its body is literally what the user typed after
@@ -356,9 +366,37 @@ const DROPPED_TAGS: [&str; 8] = [
 /// the tag is removed. `/research how do X` should title as `how do X`, not as nothing.
 const UNWRAPPED_TAGS: [&str; 1] = ["command-args"];
 
+/// …except after a built-in that takes a *setting* rather than a prompt. `/model opus` and
+/// `/fast off` argue with the harness, not about the work, and the setting is the only
+/// thing that survives stripping: all 9 conversations that titled from `<command-args>` on
+/// the reference corpus came out as a bare model name — `opus`, `fable`,
+/// `claude-fable-5[1m]`. These two also account for every one of the 110 non-empty
+/// `<command-args>` bodies there, so the exception above survives only for the custom
+/// commands it was written for, where the args really are a prompt.
+const SETTING_COMMANDS: [&str; 2] = ["/model", "/fast"];
+
+/// Bracketed notices the harness writes into the transcript as though the user had typed
+/// them. They are the entire turn when they appear, so a session the user interrupted
+/// before saying anything titles itself with the interruption — 3 conversations on the
+/// reference corpus. Literal strings rather than a pattern: these two spellings are the
+/// only ones in 119 occurrences.
+const HARNESS_NOTICES: [&str; 2] =
+    ["[Request interrupted by user for tool use]", "[Request interrupted by user]"];
+
 /// A user message reduced to a title, or `None` if it was all markup.
 fn title_candidate(raw: &str) -> Option<String> {
-    let stripped = strip_injected_markup(raw);
+    // Whether `<command-args>` is a prompt or a setting is decided by the sibling
+    // `<command-name>`, which is why this is read from the whole turn rather than left to
+    // the tag-at-a-time scan below.
+    let args_are_prose = !SETTING_COMMANDS
+        .iter()
+        .any(|name| raw.contains(&format!("<command-name>{name}</command-name>")));
+
+    let mut stripped = strip_injected_markup(raw, args_are_prose);
+    for notice in HARNESS_NOTICES {
+        stripped = stripped.replace(notice, " ");
+    }
+
     let title = clamp_title(&stripped);
     if title.is_empty() {
         None
@@ -370,7 +408,10 @@ fn title_candidate(raw: &str) -> Option<String> {
 /// Remove Claude Code's injected pseudo-XML. Deliberately literal — these are fixed tags
 /// the tool emits, not a general XML parser, and unbalanced markup must degrade rather than
 /// swallow the rest of the message.
-fn strip_injected_markup(s: &str) -> String {
+///
+/// `args_are_prose` false drops `<command-args>` like any other machinery tag; see
+/// `SETTING_COMMANDS`.
+fn strip_injected_markup(s: &str, args_are_prose: bool) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
 
@@ -382,7 +423,7 @@ fn strip_injected_markup(s: &str) -> String {
             let Some(body) = at_tag.strip_prefix(format!("<{tag}>").as_str()) else { continue };
             match body.find(format!("</{tag}>").as_str()) {
                 Some(end) => {
-                    if UNWRAPPED_TAGS.contains(tag) {
+                    if args_are_prose && UNWRAPPED_TAGS.contains(tag) {
                         out.push(' ');
                         out.push_str(&body[..end]);
                         out.push(' ');
@@ -768,8 +809,86 @@ mod tests {
 
     #[test]
     fn an_unterminated_tag_does_not_swallow_the_rest_of_the_message() {
-        assert_eq!(strip_injected_markup("<system-reminder>tail"), "tail");
-        assert_eq!(strip_injected_markup("a < b and c <d> e"), "a < b and c <d> e");
+        assert_eq!(strip_injected_markup("<system-reminder>tail", true), "tail");
+        assert_eq!(strip_injected_markup("a < b and c <d> e", true), "a < b and c <d> e");
+        // An unclosed `ide_` tag is the same story: drop the marker, keep reading.
+        assert_eq!(strip_injected_markup("<ide_selection>the rest", true), "the rest");
+    }
+
+    #[test]
+    fn ide_context_injections_do_not_reach_titles() {
+        // The editor extension's blob is its own user text block, closed, with nothing
+        // after it — so the turn yields no title and the next message gets the job.
+        let c = import_main(&[
+            r#"{"type":"user","sessionId":"s-1","uuid":"u1","message":{"content":
+                "<ide_opened_file>The user opened the file /w/notes.md in the IDE.
+                 This may or may not be related to the current task.</ide_opened_file>"}}"#,
+            r#"{"type":"user","sessionId":"s-1","uuid":"u2","parentUuid":"u1","message":{"content":
+                "<ide_selection>The user selected the lines 1 to 8 from /w/notes.md:
+                 - a bullet</ide_selection>"}}"#,
+            &user("u3", "u2", "why is the loader slow"),
+        ]);
+
+        // All three are still messages; only the title rejects the injected two.
+        assert_eq!(c.messages.len(), 3);
+        assert_eq!(c.titles.first_user.as_deref(), Some("why is the loader slow"));
+
+        // Prose typed alongside the injection survives it.
+        let mixed = import_main(&[
+            r#"{"type":"user","sessionId":"s-1","uuid":"u1","message":{"content":
+                "<ide_opened_file>The user opened the file /w/notes.md in the IDE.</ide_opened_file>what changed here?"}}"#,
+        ]);
+        assert_eq!(mixed.titles.first_user.as_deref(), Some("what changed here?"));
+    }
+
+    #[test]
+    fn a_setting_command_argues_with_the_harness_and_never_becomes_the_title() {
+        // `/model opus` would otherwise title the conversation `opus`, because the args are
+        // all that survives stripping.
+        let c = import_main(&[
+            r#"{"type":"user","sessionId":"s-1","uuid":"u1","message":{"content":
+                "<command-name>/model</command-name>
+                 <command-message>model</command-message>
+                 <command-args>opus</command-args>"}}"#,
+            r#"{"type":"user","sessionId":"s-1","uuid":"u2","parentUuid":"u1","message":{"content":
+                "<command-name>/fast</command-name>
+                 <command-message>fast</command-message>
+                 <command-args>off</command-args>"}}"#,
+            &user("u3", "u2", "now the actual question"),
+        ]);
+        assert_eq!(c.titles.first_user.as_deref(), Some("now the actual question"));
+
+        // The exception in `UNWRAPPED_TAGS` still holds for every other command: a setting
+        // command in the same turn is what turns it off, not the mere presence of args.
+        let custom = import_main(&[
+            r#"{"type":"user","sessionId":"s-1","uuid":"u1","message":{"content":
+                "<command-name>/research</command-name><command-args>how does fts5 rank</command-args>"}}"#,
+        ]);
+        assert_eq!(custom.titles.first_user.as_deref(), Some("how does fts5 rank"));
+    }
+
+    #[test]
+    fn a_harness_interruption_notice_is_not_prose_and_never_becomes_the_title() {
+        let c = import_main(&[
+            &user("u1", "", "[Request interrupted by user]"),
+            &user("u2", "u1", "[Request interrupted by user for tool use]"),
+            &user("u3", "u2", "ok, do it this way instead"),
+        ]);
+
+        // Still messages — the notices are part of the transcript — but not titles.
+        assert_eq!(c.messages.len(), 3);
+        assert_eq!(c.titles.first_user.as_deref(), Some("ok, do it this way instead"));
+
+        // Prose around a notice survives it.
+        let mixed = import_main(&[&user(
+            "u1",
+            "",
+            "stop [Request interrupted by user] and read the file first",
+        )]);
+        assert_eq!(
+            mixed.titles.first_user.as_deref(),
+            Some("stop and read the file first")
+        );
     }
 
     #[test]

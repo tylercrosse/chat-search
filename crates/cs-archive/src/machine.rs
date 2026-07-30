@@ -1,4 +1,9 @@
 use crate::error::{Error, IoContext, Result};
+// Capture's clock lives in `manifest`, not in `cs_core::time`. Depending on cs-core would
+// point capture at the index crate, and ADR 16 keeps that direction free so transcripts can
+// be reparsed retroactively. It also returns `u64` to match the manifest `Event.ts` wire
+// format, where `cs_core::now_ms` returns `i64`.
+use crate::manifest::now_ms;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -100,13 +105,6 @@ fn hostname() -> String {
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "unknown".to_string())
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 /// Lowercase, alphanumeric, dash-separated. Apostrophes are dropped rather than turned

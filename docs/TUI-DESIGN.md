@@ -566,5 +566,7 @@ stated AC. Worth splitting rather than discovering mid-build.
 - Whether hit rows are reachable by `Tab`/`j`-`k` only, or also collapsible per conversation.
 - Whether outline mode renders forks as indented branches, or stays linear over the head path
   and leaves branch display to the off-path toggle.
-- Mouse support: fast-resume hit-tests scroll by pane (`tui/layout.rs:60-77`), which is ~20
-  lines. Probably worth it, unclear if it is worth it *first*.
+- Whether the results list needs a scroll offset independent of the selection. Today the
+  window is derived from the cursor, so a wheel over the results moves the selection rather
+  than scrolling past it. That is the more useful behaviour when the selection drives the
+  preview, but it means you cannot look ahead without committing.

@@ -49,7 +49,6 @@ pub struct App {
     pub expanded: HashSet<String>,
 
     pub show_preview: bool,
-    pub preview_scroll: u16,
     /// The selected conversation's messages, loaded on selection change rather than per
     /// frame. `None` before the first load and whenever the read failed — the pane says so
     /// rather than rendering as though the conversation were empty.
@@ -85,7 +84,6 @@ impl App {
             selected: 0,
             expanded: HashSet::new(),
             show_preview: true,
-            preview_scroll: 0,
             preview: None,
             status: None,
             last_ms: 0.0,
@@ -141,7 +139,6 @@ impl App {
                 // expansion toggle, and the background reindex of `6eb.16`), which is why it
                 // lives in `rebuild_rows` and not here.
                 self.selected = 0;
-                self.preview_scroll = 0;
                 self.sync_preview();
             }
             Err(e) => self.status = Some(format!("search failed: {e}")),
@@ -152,7 +149,6 @@ impl App {
     fn rebuild_rows(&mut self, previous: Option<&str>) {
         self.rows = rows::build(&self.groups, &self.expanded, self.is_blank());
         self.selected = rows::reselect(&self.rows, &self.groups, previous, self.selected);
-        self.preview_scroll = 0;
         self.sync_preview();
     }
 
@@ -190,6 +186,16 @@ impl App {
     /// Keyed on `conv_id`, not on the row index: moving between a header and its own hit
     /// rows is the same conversation, and rereading it there would throw away the fold state
     /// the user just set.
+    /// Scroll the preview so the focused message is visible, given the pane's height.
+    ///
+    /// The height is only known at render time, so the caller passes it. Focus that does not
+    /// drag the viewport with it is focus you cannot see.
+    pub fn follow_preview_focus(&mut self, viewport_rows: usize) {
+        if let Some(p) = self.preview.as_mut() {
+            p.follow_focus(viewport_rows);
+        }
+    }
+
     pub fn sync_preview(&mut self) {
         let wanted = self.selected_conv().map(str::to_owned);
         let have = self.preview.as_ref().map(|p| p.conv_id.clone());
@@ -207,6 +213,32 @@ impl App {
         self.selected_group().map(|g| g.conv_id.as_str())
     }
 
+    /// Scroll the preview without moving the list cursor. Wheel over the preview pane.
+    pub fn scroll_preview(&mut self, delta: isize) {
+        if let Some(p) = self.preview.as_mut() {
+            p.scroll = if delta < 0 {
+                p.scroll.saturating_sub(delta.unsigned_abs() as u16)
+            } else {
+                p.scroll.saturating_add(delta as u16)
+            };
+        }
+    }
+
+    /// Select a row directly, as a click does.
+    pub fn select(&mut self, index: usize) {
+        if index >= self.rows.len() {
+            return;
+        }
+        self.selected = index;
+        self.sync_preview();
+    }
+
+    /// Filter to one source, or clear the filter by choosing the active one again.
+    pub fn set_source(&mut self, source: Option<String>) {
+        self.source = if source.is_some() && source == self.source { None } else { source };
+        self.search();
+    }
+
     pub fn move_selection(&mut self, delta: isize) {
         if self.rows.is_empty() {
             self.selected = 0;
@@ -214,7 +246,6 @@ impl App {
         }
         let max = self.rows.len() as isize - 1;
         self.selected = (self.selected as isize + delta).clamp(0, max) as usize;
-        self.preview_scroll = 0;
         self.sync_preview();
     }
 
@@ -445,6 +476,27 @@ mod tests {
         }
         assert!(app.pick_event().is_some());
         assert!(app.abandon_event().is_none(), "a pick already recorded what mattered");
+    }
+
+    #[test]
+    fn clicking_the_active_facet_clears_it() {
+        // The chip that is on is the chip you press to turn it off, so the bar needs no
+        // separate gesture for "all" beyond the chip already labelled All.
+        let mut app = app_with(&[("c0", "alpha")]);
+        app.set_source(Some("codex".into()));
+        assert_eq!(app.source.as_deref(), Some("codex"));
+        app.set_source(Some("codex".into()));
+        assert_eq!(app.source, None, "pressing it again clears the filter");
+    }
+
+    #[test]
+    fn selecting_out_of_range_is_ignored_rather_than_clamped() {
+        // A click lands on a row number, and a stale one can name a row that no longer
+        // exists. Clamping would silently select something the user did not point at.
+        let mut app = app_with(&[("c0", "alpha"), ("c1", "alpha beta")]);
+        let before = app.selected;
+        app.select(999);
+        assert_eq!(app.selected, before);
     }
 
     #[test]

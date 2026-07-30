@@ -96,21 +96,21 @@ fn search(frame: &mut Frame, area: Rect, app: &App) {
 /// that is `me9.14`, and it needs config the TUI deliberately does not have (§1).
 fn filters(frame: &mut Frame, area: Rect, app: &App) {
     let mut spans = Vec::new();
-    let all_active = app.source.is_none();
-    spans.push(Span::styled(
-        " All ",
-        if all_active { app.theme.selected } else { app.theme.dim },
-    ));
-    for (source, count) in &app.facets {
-        let active = app.source.as_deref() == Some(source.as_str());
-        let style = if active {
-            app.theme.selected
-        } else {
-            theme::source_style(source)
-        };
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(format!(" {} ", theme::source_badge(source)), style));
-        spans.push(Span::styled(format!("· {count}"), app.theme.dim));
+    for (source, _, _) in facet_boxes(app) {
+        match source {
+            None => spans.push(Span::styled(
+                " All ",
+                if app.source.is_none() { app.theme.selected } else { app.theme.dim },
+            )),
+            Some(s) => {
+                let active = app.source.as_deref() == Some(s.as_str());
+                let style = if active { app.theme.selected } else { theme::source_style(&s) };
+                let count = app.facets.iter().find(|(f, _)| *f == s).map_or(0, |(_, c)| *c);
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(format!(" {} ", theme::source_badge(&s)), style));
+                spans.push(Span::styled(format!("· {count}"), app.theme.dim));
+            }
+        }
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -145,7 +145,7 @@ fn results(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let height = body.height as usize;
-    let first = app.selected.saturating_sub(height.saturating_sub(1));
+    let first = first_visible(app, height);
     for (offset, row) in app.rows[first..].iter().take(height).enumerate() {
         let y = body.y + offset as u16;
         let selected = first + offset == app.selected;
@@ -154,6 +154,39 @@ fn results(frame: &mut Frame, area: Rect, app: &App) {
             Row::Hit { group, hit } => hit_row(frame, body, y, &cols, app, *group, *hit, selected),
         }
     }
+}
+
+/// Index of the first row drawn, given the body height.
+///
+/// Shared with mouse hit-testing rather than recomputed there: a click that disagrees with
+/// the renderer about which row is at the top selects the wrong conversation, and the two
+/// drifting apart would be invisible until someone clicked.
+pub fn first_visible(app: &App, body_height: usize) -> usize {
+    first_visible_from(app.selected, body_height)
+}
+
+fn first_visible_from(selected: usize, body_height: usize) -> usize {
+    selected.saturating_sub(body_height.saturating_sub(1))
+}
+
+/// Where each facet chip sits, as `(source, x, width)`. `None` is the "All" chip.
+///
+/// Built once and used for both drawing and hit-testing, for the same reason as
+/// [`first_visible`].
+pub fn facet_boxes(app: &App) -> Vec<(Option<String>, u16, u16)> {
+    let mut out = Vec::new();
+    let mut x = 0u16;
+    let all = " All ";
+    out.push((None, x, all.len() as u16));
+    x += all.len() as u16;
+    for (source, count) in &app.facets {
+        let label = format!(" {} ", theme::source_badge(source));
+        let tail = format!("· {count}");
+        x += 1;
+        out.push((Some(source.clone()), x, (label.len() + tail.len()) as u16));
+        x += (label.len() + tail.len()) as u16;
+    }
+    out
 }
 
 fn column_headings(frame: &mut Frame, inner: Rect, cols: &Columns, app: &App) {
@@ -299,7 +332,7 @@ fn preview(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     frame.render_widget(
-        Paragraph::new(lines).scroll((app.preview_scroll, 0)),
+        Paragraph::new(lines).scroll((app.preview.as_ref().map_or(0, |p| p.scroll), 0)),
         inner,
     );
 }
@@ -325,7 +358,8 @@ fn footer(frame: &mut Frame, area: Rect, app: &App) {
         ("⌥↑↓", " message  "),
         ("⌥⏎", " fold  "),
         ("^P", " pane  "),
-        ("Esc", " quit"),
+        ("Esc", " quit  "),
+        ("", "mouse: wheel scrolls the pane under it, click selects"),
     ] {
         spans.push(Span::styled(format!(" {k} "), key));
         spans.push(Span::styled(label, app.theme.dim));
@@ -371,4 +405,24 @@ fn home() -> Option<String> {
 /// The first `n` chars of `s`, for measuring caret offset.
 fn sub(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The renderer and the click handler both derive the top row from this. If they ever
+    /// disagreed, a click would select a different conversation than the one under the
+    /// pointer — and nothing would look wrong until someone noticed the preview was off.
+    #[test]
+    fn the_visible_window_ends_at_the_selection() {
+        // Selection inside the first screenful: the list has not scrolled.
+        assert_eq!(super::first_visible_from(0, 20), 0);
+        assert_eq!(super::first_visible_from(19, 20), 0);
+        // Past it: the selection sits on the last drawn row.
+        assert_eq!(super::first_visible_from(20, 20), 1);
+        assert_eq!(super::first_visible_from(57, 20), 38);
+        // A pane too short to draw anything must not underflow.
+        assert_eq!(super::first_visible_from(3, 0), 3);
+    }
 }

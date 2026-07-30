@@ -10,7 +10,10 @@ use std::path::PathBuf;
 use anyhow::Context;
 use cs_core::querylog::Event;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{self, Event as CEvent, KeyCode, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event as CEvent, KeyCode, KeyEventKind,
+    KeyModifiers, MouseButton, MouseEventKind,
+};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -94,9 +97,37 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
     loop {
         term.draw(|f| render::draw(f, app))?;
 
+        // Geometry for this frame, so a click and the renderer agree about what is where.
+        let area = term.size().ok().map(|s| ratatui::layout::Rect::new(0, 0, s.width, s.height));
+        let panes = area.map(|a| layout::app(a, app.show_preview));
+
         // Blocking read: with no background work there is nothing to poll for, and a timeout
         // would just wake the process to redraw an unchanged screen.
-        let CEvent::Key(key) = event::read()? else { continue };
+        let ev = event::read()?;
+        if let CEvent::Mouse(m) = ev {
+            let (Some(area), Some(panes)) = (area, panes) else { continue };
+            let target = layout::scroll_target(area, app.show_preview, m.column, m.row);
+            match m.kind {
+                // Routed by where the pointer is, not by focus. Three rows a notch is the
+                // usual terminal convention and keeps a wheel flick from overshooting.
+                MouseEventKind::ScrollDown => match target {
+                    Some(layout::ScrollTarget::Preview) => app.scroll_preview(3),
+                    Some(layout::ScrollTarget::Results) => app.move_selection(3),
+                    None => {}
+                },
+                MouseEventKind::ScrollUp => match target {
+                    Some(layout::ScrollTarget::Preview) => app.scroll_preview(-3),
+                    Some(layout::ScrollTarget::Results) => app.move_selection(-3),
+                    None => {}
+                },
+                MouseEventKind::Down(MouseButton::Left) => {
+                    click(app, &panes, m.column, m.row);
+                }
+                _ => {}
+            }
+            continue;
+        }
+        let CEvent::Key(key) = ev else { continue };
         // Windows reports press and release; acting on both double-types every character.
         if key.kind != KeyEventKind::Press {
             continue;
@@ -105,6 +136,10 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
         // Alt is the preview's modifier and Ctrl the application's, so the two cursors —
         // the result list and the message inside it — never fight over a key.
         if key.modifiers.contains(KeyModifiers::ALT) {
+            let rows = panes
+                .and_then(|p| p.main.preview())
+                // Minus the border and the two header lines the pane draws above the body.
+                .map_or(10, |r| r.height.saturating_sub(5) as usize);
             if let Some(p) = app.preview.as_mut() {
                 match key.code {
                     KeyCode::Up => p.move_focus(-1),
@@ -113,6 +148,7 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
                     _ => {}
                 }
             }
+            app.follow_preview_focus(rows);
             continue;
         }
         match (key.code, ctrl) {
@@ -162,6 +198,33 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
 /// swallow the entire interface and the user would stare at a blank terminal. fzf solves
 /// the same problem by opening /dev/tty; stderr costs nothing extra and keeps working when
 /// there is no controlling terminal to open.
+/// Act on a left click, by where it landed.
+fn click(app: &mut state::App, panes: &layout::AppLayout, col: u16, row: u16) {
+    // Facet bar: pick a source, or clear the filter. Clicking the active one clears it, so
+    // the bar needs no separate "all" gesture beyond the chip that already says All.
+    if row == panes.filters.y {
+        for (source, x, w) in render::facet_boxes(app) {
+            if col >= panes.filters.x + x && col < panes.filters.x + x + w {
+                app.set_source(source);
+                return;
+            }
+        }
+        return;
+    }
+
+    let results = panes.main.results();
+    // +1 for the border, +1 for the column headings.
+    let body_top = results.y + 2;
+    let body_height = results.height.saturating_sub(3) as usize;
+    if col >= results.x && col < results.right() && row >= body_top {
+        let offset = (row - body_top) as usize;
+        let index = render::first_visible(app, body_height) + offset;
+        if index < app.rows.len() {
+            app.select(index);
+        }
+    }
+}
+
 type Term = Terminal<CrosstermBackend<std::io::Stderr>>;
 
 /// Raw mode and the alternate screen, restored on drop however the loop ends.
@@ -171,7 +234,11 @@ impl Screen {
     fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
         let mut out = std::io::stderr();
-        execute!(out, EnterAlternateScreen)?;
+        // Mouse capture is a real trade: the terminal stops handling drag-to-select, so
+        // copying text out of the pane needs Shift held. Worth it because a mouse event
+        // carries a position, which is what lets a wheel scroll whichever pane it is over
+        // without the app needing any notion of focus at all.
+        execute!(out, EnterAlternateScreen, EnableMouseCapture)?;
         Ok(Screen(Some(Terminal::new(CrosstermBackend::new(out))?)))
     }
 
@@ -185,7 +252,7 @@ impl Drop for Screen {
         // Best-effort, and deliberately silent: this runs while unwinding from whatever went
         // wrong, and a restore error would replace the real one.
         let _ = disable_raw_mode();
-        let _ = execute!(std::io::stderr(), LeaveAlternateScreen);
+        let _ = execute!(std::io::stderr(), DisableMouseCapture, LeaveAlternateScreen);
         if let Some(mut t) = self.0.take() {
             let _ = t.show_cursor();
         }

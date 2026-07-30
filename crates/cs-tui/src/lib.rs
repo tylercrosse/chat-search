@@ -128,7 +128,14 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
     }
 }
 
-type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
+/// Drawn on **stderr**, deliberately.
+///
+/// Stdout is the return channel — `cs tui` prints the resume command there so a shell
+/// wrapper can `eval "$(cs tui)"`. If the UI shared it, capturing that command would
+/// swallow the entire interface and the user would stare at a blank terminal. fzf solves
+/// the same problem by opening /dev/tty; stderr costs nothing extra and keeps working when
+/// there is no controlling terminal to open.
+type Term = Terminal<CrosstermBackend<std::io::Stderr>>;
 
 /// Raw mode and the alternate screen, restored on drop however the loop ends.
 struct Screen(Option<Term>);
@@ -136,7 +143,7 @@ struct Screen(Option<Term>);
 impl Screen {
     fn enter() -> anyhow::Result<Self> {
         enable_raw_mode()?;
-        let mut out = std::io::stdout();
+        let mut out = std::io::stderr();
         execute!(out, EnterAlternateScreen)?;
         Ok(Screen(Some(Terminal::new(CrosstermBackend::new(out))?)))
     }
@@ -151,7 +158,7 @@ impl Drop for Screen {
         // Best-effort, and deliberately silent: this runs while unwinding from whatever went
         // wrong, and a restore error would replace the real one.
         let _ = disable_raw_mode();
-        let _ = execute!(std::io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(std::io::stderr(), LeaveAlternateScreen);
         if let Some(mut t) = self.0.take() {
             let _ = t.show_cursor();
         }

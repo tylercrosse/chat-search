@@ -58,18 +58,33 @@ pub fn to_match_expr(query: &str) -> String {
     to_match_expr_opts(query, false)
 }
 
-/// Shortest token that may be expanded into a prefix match.
+/// Shortest token that may be expanded into a prefix match **when it is the only term**.
 ///
 /// A one- or two-character prefix matches a large fraction of the corpus, and BM25 has to
 /// score *every* matching row before it can sort, so the cost is in ranking rather than
 /// lookup and no index fixes it. Measured on 40k prose messages: `h*` 2510ms, `ho*` 51ms,
-/// `hov*` 16ms, `hove*` 6ms. Below this length the token is matched exactly instead, which
-/// is what typeahead UIs do anyway — results simply start appearing at the third keystroke.
+/// `hov*` 16ms, `hove*` 6ms.
+///
+/// The "only term" qualifier is load-bearing, and was missing until 2026-07-30. Applying the
+/// floor to the final token of a *multi-term* query makes the result set **grow** as the
+/// query gets longer, which is the opposite of what typing is for: `deep le` became
+/// `"deep" "le"` — conversations containing the literal word "le", six of them — while one
+/// more keystroke gave `"deep" "lea"*` and 845. The user reported it as "I'd expect longer
+/// queries to reduce the result set", which is exactly right.
+///
+/// A preceding term also removes the reason for the floor. The cost it guards against is an
+/// unbounded posting list, and an earlier term bounds it: measured on the 172k-message
+/// index, `"le"*` alone matches 14,135 rows, while `"deep" "le"*` matches 845 in 6 ms and
+/// `"deep" "l"*` 922 in 35 ms. So the floor applies only when there is nothing else to
+/// intersect with.
 pub const MIN_PREFIX_LEN: usize = 3;
 
 /// With `prefix`, the *final* token becomes a prefix match — the typeahead shape, where
 /// every completed word is exact and only the one still being typed is open-ended.
 /// A trailing separator means the last word is finished, so no prefix is applied.
+///
+/// [`MIN_PREFIX_LEN`] gates this only for a lone term, so that adding characters always
+/// narrows. See that constant for why.
 pub fn to_match_expr_opts(query: &str, prefix: bool) -> String {
     let terms: Vec<String> = query
         .split(|c: char| !c.is_alphanumeric() && c != '_')
@@ -85,7 +100,8 @@ pub fn to_match_expr_opts(query: &str, prefix: bool) -> String {
         .iter()
         .enumerate()
         .map(|(i, t)| {
-            if prefix && ends_open && i == last && t.chars().count() >= MIN_PREFIX_LEN {
+            let long_enough = t.chars().count() >= MIN_PREFIX_LEN || terms.len() > 1;
+            if prefix && ends_open && i == last && long_enough {
                 format!("\"{t}\"*")
             } else {
                 format!("\"{t}\"")
@@ -652,6 +668,26 @@ fn hydrate(conn: &Connection, q: &Query, ranked: Vec<Ranked>) -> rusqlite::Resul
 #[cfg(test)]
 mod group_tests {
     use super::*;
+
+    #[test]
+    fn adding_characters_never_widens_the_result_set() {
+        // Reported from the TUI 2026-07-30: `deep le` returned 6 conversations and
+        // `deep lea` returned over 100. The floor was being applied to the final token of a
+        // multi-term query, so `le` was matched as a literal word while `lea` became a
+        // prefix — the semantics flipped mid-word and the set grew.
+        assert_eq!(to_match_expr_opts("deep l", true), "\"deep\" \"l\"*");
+        assert_eq!(to_match_expr_opts("deep le", true), "\"deep\" \"le\"*");
+        assert_eq!(to_match_expr_opts("deep lea", true), "\"deep\" \"lea\"*");
+    }
+
+    #[test]
+    fn a_lone_short_term_keeps_the_floor() {
+        // Nothing to intersect with, so the posting list is unbounded and the floor is the
+        // only thing standing between a keystroke and scoring a large fraction of the corpus.
+        assert_eq!(to_match_expr_opts("l", true), "\"l\"");
+        assert_eq!(to_match_expr_opts("le", true), "\"le\"");
+        assert_eq!(to_match_expr_opts("lea", true), "\"lea\"*");
+    }
 
     #[test]
     fn prefix_applies_only_to_an_unfinished_final_token() {

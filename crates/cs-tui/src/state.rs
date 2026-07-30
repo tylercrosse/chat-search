@@ -159,9 +159,16 @@ impl App {
     }
 
     /// [`App::holding`] as a pure function, so the threshold is testable without an index.
+    ///
+    /// Only a *lone* short term is held. With another term present the prefix is bounded by
+    /// the intersection, so it is both meaningful and cheap — and holding it would reproduce
+    /// the widening bug in the UI, since `deep le` would show recent conversations while
+    /// `deep lea` searched.
     pub fn holds(query: &str) -> bool {
-        let typed = query.trim().chars().count();
-        typed > 0 && typed < MIN_QUERY_CHARS
+        let trimmed = query.trim();
+        let typed = trimmed.chars().count();
+        let lone = !trimmed.contains(char::is_whitespace);
+        lone && typed > 0 && typed < MIN_QUERY_CHARS
     }
 
     pub fn selected_group(&self) -> Option<&Group> {
@@ -407,6 +414,8 @@ mod hold_tests {
         assert!(App::holds("e"));
         assert!(App::holds("em"));
         assert!(!App::holds("emb"), "the prefix threshold is where searching starts");
-        assert!(App::holds("  e  "), "whitespace is not typing");
+        assert!(App::holds("  e  "), "surrounding whitespace is not typing");
+        assert!(!App::holds("deep l"), "a second term bounds the prefix, so it is searchable");
+        assert!(!App::holds("deep le"));
     }
 }

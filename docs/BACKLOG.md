@@ -50,7 +50,7 @@ as real dependencies — `bd ready` will not offer the eval until all three are 
 
 **All three cleared as of 2026-07-30.** A bare `cs index` now reaches 2,963 conversations /
 172k messages, and a source that contributes nothing gets a row saying why instead of
-vanishing. The eval harness (`cs eval judge` / `cs eval run`, see `evals/README.md`) and a
+vanishing. The eval harness (`cs eval sheet` / `collect` / `run`, see `evals/README.md`) and a
 24-query seed set are in; what remains is the judging pass, which is the part nobody else can
 do. Until queries are judged the score is `—`, not zero — an unjudged set reports as
 unscorable rather than reporting a number nobody should trust.

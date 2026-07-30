@@ -471,6 +471,7 @@ dependencies = [
  "cs-core",
  "ratatui",
  "rusqlite",
+ "serde_json",
  "unicode-width",
 ]
 

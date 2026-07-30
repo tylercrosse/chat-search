@@ -8,6 +8,7 @@
 
 pub mod capture;
 pub mod config;
+pub mod drift;
 pub mod error;
 pub mod machine;
 pub mod manifest;
@@ -16,6 +17,7 @@ pub mod scan;
 
 pub use capture::{capture_file, CaptureKind};
 pub use config::{Config, Layout, Source};
+pub use drift::Drift;
 pub use error::{Error, Result};
 pub use machine::Machine;
 pub use reader::{ArchivedFile, ArchiveReader};

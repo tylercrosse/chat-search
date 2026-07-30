@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use cs_archive::{machine, CaptureKind, Change, Config, Event, Fingerprint, Layout, Manifest, ManifestWriter, Op};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod eval;
 mod query;
@@ -66,7 +66,13 @@ enum Command {
         #[arg(long)]
         source: Option<String>,
         /// Conversations per search.
-        #[arg(long, default_value = "100")]
+        ///
+        /// Ranking cost scales with this, not with what is drawn: `search_grouped` pulls
+        /// `limit * 50` candidate messages to rank. At 100 that was 5,000 scored to fill
+        /// about 35 visible rows, and broad prefixes paid for it — `pro` measured 443 ms at
+        /// 100 against 64 ms at 40 (chat-search-6eb.29). 50 keeps roughly a screen and a
+        /// half of scroll. Partial mitigation, not the fix.
+        #[arg(long, default_value = "50")]
         limit: i64,
     },
     /// Search indexed conversations.
@@ -279,6 +285,20 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
         .transpose()
         .context("opening manifest for append")?;
 
+    // Detection runs here, on every archive, and not only inside `Config::default` where
+    // only `cs init` could ever reach it (chat-search-a7k.12). A dozen `stat` calls before a
+    // scan that walks tens of thousands of files.
+    let drift = cs_archive::drift::detect(&cfg.sources);
+    // A dry run is somebody asking a question, so it always answers and records nothing —
+    // it is the unthrottled way to see the current state. Scheduled runs go through the
+    // throttle so an unadopted candidate cannot print 288 times a day.
+    let show_drift = if dry_run {
+        !drift.is_empty()
+    } else {
+        cs_archive::drift::claim(&machine_dir, &drift, cs_archive::manifest::now_ms())
+            .context("recording the source-drift report")?
+    };
+
     let started = std::time::Instant::now();
     let mut reports = Vec::new();
     let (mut tot_cloned, mut tot_copied) = (0u64, 0u64);
@@ -379,6 +399,11 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
     if json {
         println!("{:#}", serde_json::json!({
             "dry_run": dry_run, "archive": machine_dir, "sources": reports,
+            // Deliberately not throttled: the throttle exists to keep a human's log readable,
+            // and a consumer polling JSON wants the current state on every poll, not a field
+            // that silently empties for 24 h after the first sighting.
+            "unconfigured": drift.unconfigured,
+            "missing": drift.missing,
             "cloned": tot_cloned, "copied": tot_copied,
             "bytes": tot.apparent,
             "apparent_bytes": tot.apparent,
@@ -408,8 +433,43 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
                      tot_cloned, mb(tot.cloned), tot_copied, mb(tot.copied));
         }
         println!("  archive: {}", machine_dir.display());
+        if show_drift {
+            print_drift(&drift, config_path);
+        }
     }
     Ok(())
+}
+
+/// The two ways a config stops describing the machine it runs on (chat-search-a7k.12).
+///
+/// Printed last, and separately from the table, because that is where it has to survive:
+/// once quiet mode lands (chat-search-a7k.5) the table is gone on an idle run and these are
+/// the only lines left. Nothing above them is required for them to make sense.
+fn print_drift(drift: &cs_archive::Drift, config_path: &Path) {
+    println!();
+    for s in &drift.unconfigured {
+        println!("  unconfigured  {:<14} {}", s.id, s.path.display());
+    }
+    for s in &drift.missing {
+        println!("  missing       {:<14} {}", s.id, s.path.display());
+    }
+
+    if !drift.unconfigured.is_empty() {
+        // Not adopted automatically, and the reason is worth restating every time it prints:
+        // an id becomes part of every conversation id the moment the source is first
+        // captured (ADR 16), and there is no rename afterwards. The block below is the whole
+        // decision, so the explicit act costs one paste rather than an afternoon of guessing
+        // include globs.
+        println!("\n  Present but not captured. `cs` will not add these for you — a source id is\n  permanent once it is in the archive (ADR 16). Append to {}:\n", config_path.display());
+        for line in drift.adoption_toml().lines() {
+            // The blank line between blocks stays blank; indenting it would leave trailing
+            // whitespace that a paste carries into the config.
+            println!("{}", if line.is_empty() { String::new() } else { format!("      {line}") });
+        }
+    }
+    if !drift.missing.is_empty() {
+        println!("\n  Configured but gone: uninstalled, moved, or an unmounted volume. What is already\n  archived is safe, but nothing new is arriving, and this run recorded every file under\n  it as vanished.");
+    }
 }
 
 fn scan(config_path: &PathBuf, only: Option<&str>, json: bool) -> Result<()> {

@@ -1,0 +1,69 @@
+[
+  {
+    "conversations": [
+      {
+        "cwd": "/home/dev/example-project",
+        "forked_from_native_id": null,
+        "git_branch": "topic/widget-cache",
+        "head_native_id": null,
+        "messages": [
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "evt-0002",
+            "parent_native_id": null,
+            "role": "user",
+            "seq": 0,
+            "text": "why does the widget cache miss after a rename?",
+            "thread_key": "projects/-home-dev-example-project/sess-7f80.jsonl",
+            "ts": 1780586403000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "evt-0003",
+            "parent_native_id": "evt-0002",
+            "role": "assistant",
+            "seq": 1,
+            "text": "The cache key embeds the old name, so a rename orphans the entry.",
+            "thread_key": "projects/-home-dev-example-project/sess-7f80.jsonl",
+            "ts": 1780586411000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "tool_call",
+            "native_id": "evt-0003#1",
+            "parent_native_id": "evt-0003",
+            "role": "assistant",
+            "seq": 2,
+            "text": "Read\n{\"file_path\":\"src/cache/widget.rs\",\"offset\":30}",
+            "thread_key": "projects/-home-dev-example-project/sess-7f80.jsonl",
+            "ts": 1780586411000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "tool_result",
+            "native_id": "evt-0004",
+            "parent_native_id": "evt-0003",
+            "role": "tool",
+            "seq": 3,
+            "text": "fn key(name: &str) -> CacheKey { CacheKey::from(name) }",
+            "thread_key": "projects/-home-dev-example-project/sess-7f80.jsonl",
+            "ts": 1780586412000
+          }
+        ],
+        "model": "claude-opus-4",
+        "native_id": "sess-7f80",
+        "resume_cmd": "claude --resume sess-7f80",
+        "source": "claude-code",
+        "surface": "cli",
+        "titles": {
+          "custom": "Widget cache rename bug",
+          "first_user": "why does the widget cache miss after a rename?",
+          "generated": "Cache misses after renaming a widget"
+        }
+      }
+    ],
+    "logical_path": "projects/-home-dev-example-project/sess-7f80.jsonl"
+  }
+]

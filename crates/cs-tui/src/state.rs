@@ -12,6 +12,7 @@ use cs_core::querylog::{self, Event};
 use cs_core::search::Group;
 use rusqlite::Connection;
 
+use crate::preview::Preview;
 use crate::rows::{self, Row};
 use crate::theme::Theme;
 
@@ -49,6 +50,10 @@ pub struct App {
 
     pub show_preview: bool,
     pub preview_scroll: u16,
+    /// The selected conversation's messages, loaded on selection change rather than per
+    /// frame. `None` before the first load and whenever the read failed — the pane says so
+    /// rather than rendering as though the conversation were empty.
+    pub preview: Option<Preview>,
     /// Shown in the footer in place of the key hints. Set by a failed search, cleared by the
     /// next one that succeeds.
     pub status: Option<String>,
@@ -81,6 +86,7 @@ impl App {
             expanded: HashSet::new(),
             show_preview: true,
             preview_scroll: 0,
+            preview: None,
             status: None,
             last_ms: 0.0,
             theme,
@@ -130,6 +136,7 @@ impl App {
                 // lives in `rebuild_rows` and not here.
                 self.selected = 0;
                 self.preview_scroll = 0;
+                self.sync_preview();
             }
             Err(e) => self.status = Some(format!("search failed: {e}")),
         }
@@ -140,6 +147,7 @@ impl App {
         self.rows = rows::build(&self.groups, &self.expanded, self.is_blank());
         self.selected = rows::reselect(&self.rows, &self.groups, previous, self.selected);
         self.preview_scroll = 0;
+        self.sync_preview();
     }
 
     /// True when the query carries no searchable term, so the results are the recent-
@@ -171,6 +179,20 @@ impl App {
         lone && typed > 0 && typed < MIN_QUERY_CHARS
     }
 
+    /// Reload the preview if the cursor has moved to a different conversation.
+    ///
+    /// Keyed on `conv_id`, not on the row index: moving between a header and its own hit
+    /// rows is the same conversation, and rereading it there would throw away the fold state
+    /// the user just set.
+    pub fn sync_preview(&mut self) {
+        let wanted = self.selected_conv().map(str::to_owned);
+        let have = self.preview.as_ref().map(|p| p.conv_id.clone());
+        if wanted == have {
+            return;
+        }
+        self.preview = wanted.and_then(|id| Preview::load(&self.conn, &id).ok());
+    }
+
     pub fn selected_group(&self) -> Option<&Group> {
         self.groups.get(self.rows.get(self.selected)?.group())
     }
@@ -187,6 +209,7 @@ impl App {
         let max = self.rows.len() as isize - 1;
         self.selected = (self.selected as isize + delta).clamp(0, max) as usize;
         self.preview_scroll = 0;
+        self.sync_preview();
     }
 
     /// Expand or collapse the selected conversation, keeping the cursor on it.

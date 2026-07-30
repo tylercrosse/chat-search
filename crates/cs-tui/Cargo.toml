@@ -8,6 +8,8 @@ rust-version.workspace = true
 cs-core = { path = "../cs-core" }
 # The search API takes a Connection, so the type has to be in scope here too.
 rusqlite = { workspace = true }
+# Tool-call arguments are a JSON object; the collapsed form picks one field out of it.
+serde_json = { workspace = true }
 ratatui = { workspace = true }
 unicode-width = { workspace = true }
 anyhow = { workspace = true }

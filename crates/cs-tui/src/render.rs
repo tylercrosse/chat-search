@@ -227,52 +227,79 @@ fn hit_row(
     cell(frame, body, span, dy, &format!("{tag}{}", h.snippet), merge(row_style, app.theme.dim, selected));
 }
 
-/// Placeholder until `me9.1.1` lands the fold model. Shows what the conversation is and where
-/// its matches fell; the block model, tool collapsing and outline mode belong to that bead.
+/// The conversation, folded (§8). Structure comes from `message` rows via
+/// [`crate::preview`]; this only lays it out.
 fn preview(frame: &mut Frame, area: Rect, app: &App) {
+    let title = match app.preview.as_ref().map(|p| p.density) {
+        Some(crate::preview::Density::Outline) => " Outline ",
+        _ => " Preview ",
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(app.theme.border)
-        .title(" Preview ");
+        .title(title);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
 
     let Some(g) = app.selected_group() else {
         frame.render_widget(Paragraph::new("  nothing selected").style(app.theme.dim), inner);
         return;
     };
+    let w = inner.width as usize;
 
     let mut lines = vec![
         Line::from(vec![
             Span::styled(theme::source_badge(&g.source), theme::source_style(&g.source)),
             Span::raw("  "),
-            Span::styled(g.title.clone().unwrap_or_else(|| "(untitled)".into()), app.theme.header),
+            Span::styled(
+                text::truncate_end(g.title.as_deref().unwrap_or("(untitled)"), w.saturating_sub(14)),
+                app.theme.header,
+            ),
         ]),
         Line::from(Span::styled(
-            format!(
-                "{}   {}   {} turns",
-                text::display_dir(g.cwd.as_deref().unwrap_or(""), home().as_deref()),
-                // Absolute, and exactly once: the list carries relative ages, which have no
-                // timezone to get wrong, and this is where a date can be checked (6eb.8).
-                g.ended_date.as_deref().unwrap_or("—"),
-                g.user_turns
+            text::truncate_end(
+                &format!(
+                    "{}   {}   {} turns{}",
+                    text::display_dir(g.cwd.as_deref().unwrap_or(""), home().as_deref()),
+                    // Absolute, and exactly once: the list carries relative ages, which have
+                    // no timezone to get wrong, and this is where a date can be checked.
+                    g.ended_date.as_deref().unwrap_or("—"),
+                    g.user_turns,
+                    match app.preview.as_ref() {
+                        // Where the focused message sits, so scrolling a long conversation
+                        // has somewhere to be relative to.
+                        Some(p) if p.drawn_count() > 0 => {
+                            let (at, of) = p.position();
+                            format!("   msg {at}/{of}")
+                        }
+                        _ => String::new(),
+                    }
+                ),
+                w,
             ),
             app.theme.dim,
         )),
         Line::raw(""),
     ];
-    for h in &g.hits {
-        lines.push(Line::from(Span::styled(format!("» {}", h.snippet), Style::new())));
-        lines.push(Line::raw(""));
+
+    match app.preview.as_ref() {
+        Some(p) => lines.extend(p.lines(&app.theme, w)),
+        // Distinguished from an empty conversation: the read failed, and saying "no
+        // messages" would blame the data for what the query did (me9.5, one layer down).
+        None => lines.push(Line::from(Span::styled(
+            "  could not read this conversation's messages",
+            app.theme.error,
+        ))),
     }
-    if g.match_count > g.hits.len() {
-        lines.push(Line::from(Span::styled(
-            format!("+{} more match(es)", g.match_count - g.hits.len()),
-            app.theme.dim,
-        )));
-    }
-    frame.render_widget(Paragraph::new(lines), inner);
+
+    frame.render_widget(
+        Paragraph::new(lines).scroll((app.preview_scroll, 0)),
+        inner,
+    );
 }
 
 fn footer(frame: &mut Frame, area: Rect, app: &App) {
@@ -286,10 +313,16 @@ fn footer(frame: &mut Frame, area: Rect, app: &App) {
     }
     let key = app.theme.selected;
     let mut spans = Vec::new();
+    // Every key here costs a modifier because the search box owns the unmodified keyspace
+    // (§8). Advertising them is not optional: an unadvertised modifier key is an unusable one.
     for (k, label) in [
         ("Enter", " open  "),
-        ("Tab", " expand  "),
-        ("^P", " preview  "),
+        ("Tab", " hits  "),
+        ("^O", " outline  "),
+        ("^E", " fold all  "),
+        ("⌥↑↓", " message  "),
+        ("⌥⏎", " fold  "),
+        ("^P", " pane  "),
         ("Esc", " quit"),
     ] {
         spans.push(Span::styled(format!(" {k} "), key));

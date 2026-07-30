@@ -17,7 +17,7 @@ pub enum Layout {
 
 /// One watched location (ADR 16). `id` is permanent: it becomes part of every
 /// conversation id, so it must never change once the archive holds data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Source {
     pub id: String,
     pub path: PathBuf,
@@ -124,9 +124,14 @@ impl Config {
     }
 }
 
-/// Known source locations, in the order they should be archived. Only those that
-/// actually exist on this machine are emitted, so a fresh config is immediately usable.
-pub fn detect_sources() -> Vec<Source> {
+/// Every location this project knows how to watch, in the order they should be archived,
+/// whether or not one exists on this machine.
+///
+/// Split out from [`detect_sources`] because the *unfiltered* list is what [`crate::drift`]
+/// diffs the config against on every `cs archive`. Filtering by existence at `cs init` and
+/// never looking again is precisely the bug in chat-search-a7k.12: a tool adopted after init
+/// was never archived and nothing said so.
+pub fn candidate_sources() -> Vec<Source> {
     let candidates = [
         // Codex zstd-compresses rollouts older than ~7 days in a background worker, so
         // the glob must survive `.jsonl` becoming `.jsonl.zst` or everything older than a
@@ -135,6 +140,12 @@ pub fn detect_sources() -> Vec<Source> {
         ("codex", "~/.codex/sessions", Layout::Mirror, vec!["**/rollout-*.jsonl", "**/rollout-*.jsonl.zst"]),
         ("claude-code", "~/.claude/projects", Layout::Mirror, vec!["**/*.jsonl"]),
         ("gemini-cli", "~/.gemini/tmp", Layout::Mirror, vec!["**/*.json"]),
+        // GitHub Copilot CLI. Unlike the sources above it writes a small directory tree per
+        // session — `workspace.yaml`, `checkpoints/*.md`, `research/`, `files/` — rather than
+        // one transcript file, so the include list has to name three extensions to catch a
+        // whole session. 9 files / 44 KB on this machine on 2026-07-30; the reason it is here
+        // is not that volume but that it accumulated entirely unwatched after `cs init`.
+        ("copilot-cli", "~/.copilot/session-state", Layout::Mirror, vec!["**/*.yaml", "**/*.md", "**/*.json"]),
         // Bundle layout is not implemented yet; listed so the id is reserved.
         ("opencode", "~/.local/share/opencode/storage", Layout::Bundle, vec!["**/*.json"]),
     ];
@@ -146,8 +157,12 @@ pub fn detect_sources() -> Vec<Source> {
             layout,
             include: include.into_iter().map(String::from).collect(),
         })
-        .filter(|s| s.path.is_dir())
         .collect()
+}
+
+/// The candidates that exist here, so a fresh config from `cs init` is immediately usable.
+pub fn detect_sources() -> Vec<Source> {
+    candidate_sources().into_iter().filter(|s| s.path.is_dir()).collect()
 }
 
 fn expand_path(p: &Path) -> PathBuf {

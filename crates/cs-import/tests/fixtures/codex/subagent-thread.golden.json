@@ -1,0 +1,147 @@
+[
+  {
+    "conversations": [
+      {
+        "cwd": "/home/dev/example-project",
+        "forked_from_native_id": null,
+        "git_branch": "topic/widget-cache",
+        "head_native_id": null,
+        "messages": [
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "rollout-2026-06-02T09-15-04-thread-parent:000000",
+            "parent_native_id": null,
+            "role": "user",
+            "seq": 0,
+            "text": "which module clears the widget cache?",
+            "thread_key": "rollout-2026-06-02T09-15-04-thread-parent",
+            "ts": 1780391712000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "reasoning",
+            "native_id": "rollout-2026-06-02T09-15-04-thread-parent:000001",
+            "parent_native_id": "rollout-2026-06-02T09-15-04-thread-parent:000000",
+            "role": "assistant",
+            "seq": 1,
+            "text": "hand the search to a subagent",
+            "thread_key": "rollout-2026-06-02T09-15-04-thread-parent",
+            "ts": 1780391719000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "tool_call",
+            "native_id": "rollout-2026-06-02T09-15-04-thread-parent:000002",
+            "parent_native_id": "rollout-2026-06-02T09-15-04-thread-parent:000001",
+            "role": "assistant",
+            "seq": 2,
+            "text": "spawn_subagent\n{\"task\":\"find where the widget cache is cleared\"}",
+            "thread_key": "rollout-2026-06-02T09-15-04-thread-parent",
+            "ts": 1780391851000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "tool_result",
+            "native_id": "rollout-2026-06-02T09-15-04-thread-parent:000003",
+            "parent_native_id": "rollout-2026-06-02T09-15-04-thread-parent:000002",
+            "role": "tool",
+            "seq": 3,
+            "text": "subagent reported: WidgetCache::clear",
+            "thread_key": "rollout-2026-06-02T09-15-04-thread-parent",
+            "ts": 1780391883000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "rollout-2026-06-02T09-15-04-thread-parent:000004",
+            "parent_native_id": "rollout-2026-06-02T09-15-04-thread-parent:000003",
+            "role": "assistant",
+            "seq": 4,
+            "text": "WidgetCache::clear in src/cache/widget.rs is the only place that empties it.",
+            "thread_key": "rollout-2026-06-02T09-15-04-thread-parent",
+            "ts": 1780391889000
+          }
+        ],
+        "model": "gpt-5-codex",
+        "native_id": "conv-a1b2",
+        "resume_cmd": "codex resume conv-a1b2",
+        "source": "codex",
+        "surface": "codex_cli",
+        "titles": {
+          "custom": null,
+          "first_user": "which module clears the widget cache?",
+          "generated": null
+        }
+      }
+    ],
+    "logical_path": "2026/06/02/rollout-2026-06-02T09-15-04-thread-parent.jsonl"
+  },
+  {
+    "conversations": [
+      {
+        "cwd": "/home/dev/example-project",
+        "forked_from_native_id": null,
+        "git_branch": "topic/widget-cache",
+        "head_native_id": null,
+        "messages": [
+          {
+            "is_sidechain": true,
+            "kind": "prose",
+            "native_id": "rollout-2026-06-02T09-17-31-thread-explore:000000",
+            "parent_native_id": null,
+            "role": "user",
+            "seq": 0,
+            "text": "find where the widget cache is cleared",
+            "thread_key": "rollout-2026-06-02T09-17-31-thread-explore",
+            "ts": 1780391853000
+          },
+          {
+            "is_sidechain": true,
+            "kind": "tool_call",
+            "native_id": "rollout-2026-06-02T09-17-31-thread-explore:000001",
+            "parent_native_id": "rollout-2026-06-02T09-17-31-thread-explore:000000",
+            "role": "assistant",
+            "seq": 1,
+            "text": "grep\nclear src/cache",
+            "thread_key": "rollout-2026-06-02T09-17-31-thread-explore",
+            "ts": 1780391865000
+          },
+          {
+            "is_sidechain": true,
+            "kind": "tool_result",
+            "native_id": "rollout-2026-06-02T09-17-31-thread-explore:000002",
+            "parent_native_id": "rollout-2026-06-02T09-17-31-thread-explore:000001",
+            "role": "tool",
+            "seq": 2,
+            "text": "src/cache/widget.rs:41: fn clear(&mut self) {",
+            "thread_key": "rollout-2026-06-02T09-17-31-thread-explore",
+            "ts": 1780391866000
+          },
+          {
+            "is_sidechain": true,
+            "kind": "prose",
+            "native_id": "rollout-2026-06-02T09-17-31-thread-explore:000003",
+            "parent_native_id": "rollout-2026-06-02T09-17-31-thread-explore:000002",
+            "role": "assistant",
+            "seq": 3,
+            "text": "It is WidgetCache::clear, reached from the write path.",
+            "thread_key": "rollout-2026-06-02T09-17-31-thread-explore",
+            "ts": 1780391881000
+          }
+        ],
+        "model": "gpt-5-codex-mini",
+        "native_id": "conv-a1b2",
+        "resume_cmd": "codex resume conv-a1b2",
+        "source": "codex",
+        "surface": "codex_cli",
+        "titles": {
+          "custom": null,
+          "first_user": "find where the widget cache is cleared",
+          "generated": null
+        }
+      }
+    ],
+    "logical_path": "2026/06/02/rollout-2026-06-02T09-17-31-thread-explore.jsonl"
+  }
+]

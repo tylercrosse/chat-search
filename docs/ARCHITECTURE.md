@@ -1,15 +1,20 @@
 # Architecture (draft)
 
 > **Status: draft, in flux.** A working sketch of how the pieces fit, kept around so the
-> shape is easy to discuss and easy to onboard to. It is _derived_ from the decision log,
-> the way `index.db` is derived from the archive — rebuildable, and not the source of truth.
+> shape is easy to discuss and easy to onboard to.
 >
 > **If you are an agent or a future reader:** where this disagrees with
-> [DECISIONS.md](./DECISIONS.md) or [GLOSSARY.md](./GLOSSARY.md), **those win.** Much of what
-> is drawn here is ADR status `proposed`, not `accepted`. Almost nothing here is built yet —
-> see [Current state](#current-state) before assuming any of it exists.
+> [DECISIONS.md](./DECISIONS.md) or [GLOSSARY.md](./GLOSSARY.md), **those win** — several of
+> the ADRs drawn here are still `proposed`. Where it disagrees with `crates/`, the code wins,
+> and [What exists](#what-exists) is written so you can settle that in one command instead of
+> trusting this file.
 >
-> Last synced with the decision log: 2026-07-28.
+> **Nothing regenerates this document.** It used to claim it was "derived from the decision
+> log, the way `index.db` is derived from the archive". That was aspirational — there is no
+> generator and no sync step — and the drift it licensed is what left a hand-maintained state
+> table wrong in both directions within two days (`chat-search-4ar.5`). What is kept here is
+> the part the code cannot state for itself: where the boundaries are, why they sit there, and
+> what is deliberately missing.
 
 ---
 
@@ -18,13 +23,12 @@
 ```mermaid
 flowchart TB
     subgraph SRC["1 · Sources — live, mutating"]
-        LOCAL["Codex · Claude Code · OpenCode · Gemini<br/>write transcript files locally"]
-        REMOTE["ChatGPT · Claude.ai<br/>no local files — 2,011 conversations"]
+        LOCAL["Local agent CLIs — Codex · Claude Code<br/>Gemini CLI · OpenCode · …<br/>write transcript files locally"]
+        REMOTE["ChatGPT · Claude.ai<br/>no local files — a data export,<br/>downloaded and unpacked by hand"]
     end
 
     subgraph CAP["2 · Capture — never parses content"]
-        ARCH["Archiver<br/>scan or watch<br/>one per source location"]
-        INGEST["Export ingest<br/>dropped ZIP / API fetch"]
+        ARCH["Archiver<br/>scan, one per watched location<br/>mirror today; bundle for OpenCode later"]
     end
 
     RAW[("Raw archive<br/>immutable, append-only")]
@@ -37,38 +41,57 @@ flowchart TB
     end
 
     subgraph IDXG["4 · Index and search"]
-        INDEXER["Indexer + query<br/>FTS5 · BM25 · vectors later"]
+        INDEXER["Indexer + query<br/>FTS5 · BM25 · time decay · vectors later"]
     end
 
-    DB[("index.db<br/>disposable — rebuild is ~7s")]
-    LIB[("library.db<br/>authored, precious, backed up")]
+    DB[("index.db<br/>disposable — rebuild is ~10.6s")]
+    LIB[("library.db<br/>authored, precious — not built (ADR 3)")]
+    QLOG[("queries.jsonl<br/>authored, precious, already real")]
 
     subgraph CL["5 · Clients"]
-        CLIENTS["CLI · menu bar · desktop · VS Code"]
+        CLIENTS["cs search · cs tui · scripts/cs-fzf"]
     end
 
     LOCAL --> ARCH
-    REMOTE --> INGEST
+    REMOTE -->|"unpacked into a watched location"| ARCH
     ARCH --> RAW
     ARCH --> MAN
-    INGEST --> RAW
-    INGEST --> MAN
+    MAN -. "change detection" .-> ARCH
     RAW --> READER
-    MAN --> READER
+    MAN -. "vanished → deleted_upstream_at<br/>not wired (ADR 9)" .-> IMP
     READER --> IMP
     IMP --> NORM
     NORM --> INDEXER
     LIB -. "fold on rebuild" .-> INDEXER
     INDEXER --> DB
     DB --> CLIENTS
+    CLIENTS --> QLOG
+    QLOG -. "cs needs → an eval set,<br/>read by hand (6eb.21)" .-> INDEXER
     CLIENTS -. "rename · star · note" .-> LIB
     CLIENTS -. "resume_cmd" .-> LOCAL
     CLIENTS -. "open URL" .-> REMOTE
 ```
 
-The two dotted loops are the part that is easy to miss: **authored data flows back** into the
-index on every rebuild, and **`resume_cmd` flows back** to the originating tool. Everything
-else is a straight line.
+The straight line runs source → archive → importer → index → client. Everything worth noticing
+is a loop back:
+
+- **Authored data flows back** into the index on every rebuild, which is what keeps `index.db`
+  deletable (ADR 1, ADR 3). `library.db` is not built; `queries.jsonl` is the first file of
+  that kind and already exists.
+- **`resume_cmd` flows back** to the originating tool. The client prints it rather than running
+  it (`cs/src/tui.rs`), so the agent it launches is a child of your own shell.
+- **The query log flows back into the ranking, by hand.** `cs search`, `cs pick` and `cs tui`
+  append what was searched for and what was opened; `cs needs` folds it into one entry per
+  query. Nothing reads it automatically — converting it into an eval set is `6eb.21`, and until
+  then the eval set in `evals/ranking.toml` is written by hand.
+- **The manifest feeds change detection and nothing else.** The dotted edge into the importer
+  is the fold ADR 9 describes, and it does not exist yet — see "Built in part" under
+  [What exists](#what-exists).
+
+`queries.jsonl` is drawn as its own node because it is a third category the picture used to have
+no room for. `index.db` is disposable and `library.db` is precious-but-absent; this one is
+precious, present, and **the only file here that cannot be reconstructed from anything** — the
+archive can rebuild the index, and nothing can rebuild a record of what you went looking for.
 
 ---
 
@@ -78,17 +101,23 @@ else is a straight line.
 | --- | --- | --- | --- | --- |
 | **Archiver** | paths, sizes, mtimes, hashes, layout policy | JSON structure, what a conversation is | **permanent data loss** | source _location_ |
 | **Archive reader** | physical layout (mirror vs bundle) | formats, conversations | rebuild breaks | archive |
-| **Importer** | one source's format, lineage, kinds | where bytes came from, machines, capture history | no search — rerun in 7s | source _format_ |
-| **Indexer + query** | schema, tokenizer, ranking | source formats | no search — rerun in 7s | project |
+| **Importer** | one source's format, lineage, kinds | where bytes came from, machines, capture history | no search — rerun in ~10.6s | source _format_ |
+| **Indexer + query** | schema, tokenizer, ranking | source formats | no search — rerun in ~10.6s | project |
 | **Clients** | the query contract | everything upstream | no UI | surface |
+| **Query log** | what was asked for, what was opened, where it ranked | ranking internals, conversation text | the ranking loses its only real ground truth; **the searches still return** | machine |
 
-Two boundaries carry most of the weight:
+Two boundaries carry most of the weight, plus one deliberate exception:
 
 - **Archiver / importer** — the split that makes _retroactive reparse_ possible. Fix an
   importer, rebuild, and every conversation back to the first captured byte gets the
   improvement. Fused, fixes would only ever apply going forward. (ADR 1)
 - **Indexer / search are NOT split.** They share the tokenizer, schema and ranking; splitting
   them produces silent recall bugs rather than crashes.
+- **The query log is allowed to fail.** Every call site drops the error from
+  `querylog::append` on purpose: losing a log line costs a data point, failing the search
+  costs the thing that was actually asked for. It is the one place here where swallowing an
+  error silently is the right call, which is why the rule lives in one function rather than
+  being re-decided at each of the four callers.
 
 ---
 
@@ -133,8 +162,9 @@ stateDiagram-v2
   one. Monotonic, so nothing is lost.
 - **Rewritten** means compaction or an in-place edit — preserve the old copy under
   `_superseded/` rather than losing it.
-- **Vanished** folds up into `conversation.deleted_upstream_at`. The content is kept; only the
-  fact that it is gone upstream is recorded. (ADR 9)
+- **Vanished** is designed to fold up into `conversation.deleted_upstream_at` — content kept,
+  only the fact of upstream deletion recorded (ADR 9). **The fold is not implemented**: the
+  event is written here and nothing downstream reads it. See "Built in part" below.
 
 A file being written _while_ the archiver copies it yields a truncated last line. That is safe
 by construction, not by luck: append-only plus supersede-on-next-scan means the partial copy
@@ -150,34 +180,110 @@ being able to search for it.
 | stage | runs |
 | --- | --- |
 | source writes | continuously, during the conversation |
-| archiver | scheduled scan; watch for the live session (undecided) |
-| importer + indexer | on rebuild (~7s), or tail-append for the live session |
-| clients | on demand |
+| archiver | scheduled scan — launchd every 300 s on this machine (BACKLOG, "Operations"); watch for the live session undecided |
+| importer + indexer | on rebuild — always full, never incremental (ADR 10). ~10.6s post-clip on the real corpus (ADR 5); the 7s figure quoted elsewhere is the PoC's smaller frozen corpus |
+| clients | on demand — in-process for Rust surfaces, ~9 ms end to end for anything spawning `cs search --json` (ADR 14) |
 
 How much lag is acceptable is a UX decision that drives the watch-vs-scan choice. It is not
-settled.
+settled. Worst case today is one scan interval plus a manual rebuild, so a conversation is not
+searchable while it is still being had.
 
 ---
 
-## Current state
+## What exists
 
-Almost nothing here is built. Honest inventory:
+There was a hand-written status table here. It was accurate on 2026-07-28 and wrong in **both**
+directions by 2026-07-30: it called the archive reader and every client "not built" while both
+were in `crates/`; it filed the Codex and Claude Code importers as PoC code reading live source
+directories when all four importers take bytes from the archive reader and touch no filesystem
+outside their own corpus tests (ADR 1); it said the index had no DAG and no `head_id` when both
+are columns in `schema.rs`; and it pointed at `poc/` — a measurement instrument `Cargo.toml`
+explicitly excludes from the workspace — as where the working program lives. The one claim it
+got right, "no tombstones", it got right for the wrong reason; see "Built in part" below.
 
-| | state |
+It is gone rather than corrected, because being wrong twice is a property of the form, not of
+whoever maintained it. **A status table has no failure mode.** Nothing breaks when it goes
+stale, no test reads it, and the reader most likely to trust it — an agent deciding what to
+build next — is the one least equipped to notice. What replaces it is split by whether the code
+can already answer the question.
+
+### The tree answers "what exists", and it cannot go stale
+
+| question | what answers it |
 | --- | --- |
-| Archiver | **built and running** — mirror layout, clone capture, change detection, scheduled every 5 min. Bundle layout (OpenCode) not implemented, so OpenCode is not archived |
-| Manifest | **built** — append-only JSONL, folded on load |
-| Archive reader | **not built** |
-| Importers — Codex, Claude Code | PoC only, and they read **live source dirs, not the archive** |
-| Importers — OpenCode, Gemini, ChatGPT export | **not built** |
-| Indexer + BM25 search | PoC only — flat messages, no DAG, no `head_id`, no tombstones |
-| Embeddings / vectors | **not built** |
-| `library.db` and authored events | **not built** |
-| Clients | **not built** (PoC has a JSON-emitting CLI) |
+| which components are built | `ls crates/*/src/*.rs` — `cs-archive`, `cs-core`, `cs-import`, `cs-tui`, `cs`, and `Cargo.toml`'s `members` |
+| what the tool can do | `cs --help`, then `--help` on any subcommand. Every capability is a subcommand; there is no second entry point |
+| which sources are watched, and which are missing from this machine | `cs status` |
+| which of them reach the index, and what each contributes | `cs index` — a source that contributes nothing gets a row saying **why**, because a silently missing row is how 2,011 ChatGPT conversations once vanished from a run that reported success (`6eb.7`) |
+| whether the ranking is any good | `cs eval run` for the score — `—` rather than a number until the set is judged, which is the honest answer today (`evals/README.md`). `cs needs` for what has actually been searched for |
+| whether a specific conversation is findable | `cs explain <conv-id> <query>` |
 
-What exists is `poc/` — the same program written in TypeScript and Rust to settle the
-language question ([RESULTS.md](../poc/RESULTS.md)). It is a measurement instrument, not a
-foundation. Language is now settled as Rust (ADR 13).
+Counts those commands print describe **the last rebuild, not the code**: on 2026-07-30 the
+index on this machine held 2,935 conversations across three sources and no `gemini-cli` rows at
+all, because the Gemini importer landed after the last `cs index` ran. Rebuild before believing
+a count.
+
+### What is deliberately absent
+
+This is the half the tree cannot answer, because an absence has no file to point at. Each row
+carries what would falsify it, so a doubtful reader settles it in about a second.
+
+| not built | why | falsified by |
+| --- | --- | --- |
+| `library.db`, authored events | nothing authored is written yet and the index holds none of it. The ADR 3 invariant is cheap to hold now and unpleasant to retrofit. `queries.jsonl` is the first authored file and sits deliberately outside the index | `grep -rn library.db crates/` — doc comments only, no code |
+| Embeddings / vectors | ADR 6 reserves `sqlite-vec` for the same file when embeddings arrive; ADR 1 warns they must be cached outside the rebuild path, or the disposable index stops being disposable | `grep -rn sqlite-vec crates/ Cargo.toml` — nothing |
+| OpenCode capture, and any OpenCode importer | bundle layout (ADR 18) is unimplemented, so the configured `opencode` source is skipped by `cs scan` and `cs archive` alike, and `import_source` has no arm for it | `grep -rn "Layout::Bundle" crates/` — skips and a reserved id, no capture path |
+| Incremental indexing | ADR 10 — full rebuild is ~10.6s, and patching an FTS index through deletes is where the bugs live | `cs index` opens with `open_fresh`; nothing else in `cs` writes to `index.db` |
+| A daemon | rejected on measurement 2026-07-29 (ADR 14): ~3 ms of spawn-and-open, against a socket protocol, a lifecycle, and a stale-cache failure mode over a database designed to be deleted | — |
+| Raycast, VS Code, menu-bar surfaces | ADR 12's JSON contract exists precisely so these stay a weekend rather than a refactor | `cs --help` lists the surfaces that exist |
+| Redaction | ADR 15, still `open`, and it gates anything leaving this machine | — |
+
+### Built in part — the state neither a table nor the code admits to
+
+Three things read as finished from either end and are not. They are here because this is the
+only place that can say so: the schema looks complete, the code compiles, and the gap is a
+missing edge rather than a missing file.
+
+- **Tombstones have a reader and no writer (ADR 9).** `conversation.deleted_upstream_at` is in
+  the schema, `search.rs` selects it in four places, and `cs search` renders a
+  `deleted-upstream` flag from it in both its flat and grouped output. Nothing ever sets it.
+  The archiver writes `vanished` events into the manifest, and **no stage downstream of capture
+  reads the manifest at all**, so the fold ADR 9 describes has nowhere to happen.
+  `grep -rn deleted_upstream crates/` returns selects, renders and test fixtures — and not one
+  write. On this
+  machine the column is non-null for 0 of 2,935 conversations, which is indistinguishable from
+  "nothing has vanished yet" — and that is the failure mode. When a source file does disappear,
+  the archive keeps the content and the search says nothing, so `resume_cmd` fails at the one
+  moment the flag existed to warn about.
+- **ChatGPT is a configured source, not a detected one.** Every id in the archiver's candidate
+  list is a directory some running agent writes to, and detection is `path.is_dir()` over that
+  list. An export is not written by anything — it is mailed, downloaded and unpacked wherever
+  you happen to put it — so `chatgpt-export` cannot be detected and is not in the list
+  (`grep -n chatgpt crates/cs-archive/src/config.rs` returns nothing). The importer, the source
+  id and its permanence (ADR 16) are all real; the `[[sources]]` block is hand-written, which
+  means `cs init` on a second machine writes a config silently missing 69% of this corpus.
+- **Compressed Codex rollouts are captured and cannot be read.** The `codex` source globs
+  `**/rollout-*.jsonl.zst` as well as `.jsonl`, because Codex zstd-compresses rollouts older
+  than about a week and everything older would otherwise stop being captured. Capture stores
+  either verbatim and calls decompression the importer's problem — and no importer solves it:
+  `grep -rn zstd crates/*/Cargo.toml Cargo.toml` finds no dependency, so `codex::import` would
+  see compressed bytes, parse no lines, and return `None` — the same signal an empty rollout
+  gives. Nothing is lost yet: the archive holds 692 rollouts and no `.zst` at all. When the
+  first compressed one lands it will be captured correctly and read as an empty conversation,
+  which is a silent miss, not an error.
+
+### What would keep this honest
+
+Not much, and it is worth being blunt about that: **none of the above is enforced.** A sentence
+in a Markdown file cannot fail a build. What the section buys instead is a cost change — every
+claim is one command away from being checked, so the effort of verifying is smaller than the
+effort of wondering, which is the only lever a document has.
+
+The two claims that deserve promotion out of prose and into `crates/` are the ADR 3 invariant
+(no authored column reachable in `index.db`) and the tombstone writer, since both are testable
+and both are currently held by nothing but attention. If a future reader finds this section
+stale, the fix is to delete the row rather than to re-sync the file — anything that needs a
+sync ritual to stay true has already failed once here.
 
 ---
 
@@ -189,10 +295,14 @@ foundation. Language is now settled as Rust (ADR 13).
 | ADR 17 | Machine re-keying after a clone or restore | archive namespacing |
 | ADR 18 | Sync raw at all, or keep per-machine archives and merge only `library.db`? | whether the archive is a sync unit |
 | ADR 19 | Prefix hash vs full-file hash | scan cost, rewrite detection |
-| ADR 20 | Archive storage — 17 GB free, ~1 GB/month growth. Leaning APFS clone (measured ~free), compression deferred | capture strategy; clone vs compress is exclusive per copy |
-| ADR 14 | Subprocess vs daemon | whether clients talk to a process or a binary |
+| ADR 20 | Compress per-file or per-bundle, and when. APFS cloning is decided and running; compression is the open half | capture strategy; clone vs compress is exclusive per copy |
 | ADR 15 | Redact at capture or at display | whether the archiver is destructive |
 | — | Watch vs scan, and acceptable lag | archiver design |
+
+**ADR 14 came off this list on 2026-07-29** — no daemon, decided against measurement rather
+than taste. That is why the TUI is a subcommand linking `cs-core` in-process instead of a
+client talking to a resident process, and why "no index yet" and "index being rebuilt" are
+states every client has to render rather than transport errors it can ignore.
 
 ---
 
@@ -200,6 +310,7 @@ foundation. Language is now settled as Rust (ADR 13).
 
 1. [GLOSSARY.md](./GLOSSARY.md) — vocabulary. Four different things look like "branching"; they are not interchangeable.
 2. [DECISIONS.md](./DECISIONS.md) — what was decided and why, with status.
-3. [../poc/RESULTS.md](../poc/RESULTS.md) — measurements, and the three bugs differential testing caught.
+3. [../poc/RESULTS.md](../poc/RESULTS.md) — measurements, and the three bugs differential testing caught. A settled language question (ADR 13), not a foundation; the product lives in `crates/`.
 4. This document — the shape it all adds up to, provisionally.
-5. [BACKLOG.md](./BACKLOG.md) — deferred work, cross-referenced to the ADR that justifies each item.
+5. [TUI-DESIGN.md](./TUI-DESIGN.md) — the one client with a written spec, including what was rejected from the tool it was read against.
+6. [BACKLOG.md](./BACKLOG.md) — framing, MVP scope and live operational state; the work itself is in beads (`bd ready`).

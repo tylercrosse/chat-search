@@ -1,0 +1,9 @@
+{"timestamp":"2026-06-02T09:15:04.000Z","type":"session_meta","payload":{"id":"conv-a1b2","session_id":"conv-a1b2","originator":"codex_cli","thread_source":"user","cwd":"/home/dev/example-project","git":{"branch":"topic/widget-cache","commit_hash":"1a2b3c4"},"model_provider":"openai","instructions":null}}
+{"timestamp":"2026-06-02T09:15:04.100Z","type":"turn_context","payload":{"model":"gpt-5-codex","effort":"medium","summary":"auto"}}
+{"timestamp":"2026-06-02T09:15:05.000Z","type":"event_msg","payload":{"type":"user_message","kind":"environment_context","message":"<environment_context><cwd>/home/dev/example-project</cwd><shell>bash</shell></environment_context>"}}
+{"timestamp":"2026-06-02T09:15:12.000Z","type":"event_msg","payload":{"type":"user_message","message":"which module clears the widget cache?"}}
+{"timestamp":"2026-06-02T09:15:19.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"hand the search to a subagent"}],"content":null}}
+{"timestamp":"2026-06-02T09:17:31.000Z","type":"response_item","payload":{"type":"function_call","name":"spawn_subagent","arguments":"{\"task\":\"find where the widget cache is cleared\"}","call_id":"call-0001"}}
+{"timestamp":"2026-06-02T09:18:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"input_tokens":812,"output_tokens":96}}}
+{"timestamp":"2026-06-02T09:18:03.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-0001","output":"subagent reported: WidgetCache::clear"}}
+{"timestamp":"2026-06-02T09:18:09.000Z","type":"event_msg","payload":{"type":"agent_message","message":"WidgetCache::clear in src/cache/widget.rs is the only place that empties it."}}

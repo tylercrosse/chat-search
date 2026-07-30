@@ -252,12 +252,17 @@ fn flatten(v: Option<&Value>) -> String {
     }
 }
 
-/// A user message reduced to a title, or `None` when the turn is a command rather than a
-/// prompt, in which case the next user message is tried. Codex has no rename and no
-/// auto-title, so a file that holds nothing but commands ends up with no title at all —
-/// which is still the right answer, and the same one Claude Code already gives for a turn
-/// that is nothing but a slash-command expansion.
+/// A user message reduced to a title, or `None` when the turn is machinery rather than a
+/// prompt — a command line, or an IDE context block with no request in it — in which case
+/// the next user message is tried. Codex has no rename and no auto-title, so a file that
+/// holds nothing but those ends up with no title at all — which is still the right answer,
+/// and the same one Claude Code already gives for a turn that is nothing but a
+/// slash-command expansion.
 fn title_from(s: &str) -> Option<String> {
+    // Unwrapped first so everything below sees what the user typed rather than the editor's
+    // prelude: a `/status` sent from the IDE is still a command, and a skill mention inside
+    // the request section still needs its path stripped.
+    let s = ide_context_request(s).unwrap_or(s);
     if is_command_line(s) {
         return None;
     }
@@ -297,6 +302,65 @@ fn is_command_line(s: &str) -> bool {
     let name = rest.split_whitespace().next().unwrap_or("");
     name.starts_with(|c: char| c.is_ascii_lowercase())
         && name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Headings the Codex VS Code extension opens its injected context block with.
+///
+/// What makes the match specific — and it has to be specific, because a markdown heading is
+/// something a user can legitimately type — is that these are compared for equality against
+/// the *whole first line* of the turn, colon included. Not `starts_with('#')`, not a
+/// substring search: 4 turns on the reference corpus quote one of these blocks from inside
+/// an agent-review prompt that begins with ordinary prose, and those must survive untouched.
+/// All 1136 injected blocks there open with one of these two lines exactly.
+const IDE_CONTEXT_HEADINGS: [&str; 2] =
+    ["# Context from my IDE setup:", "# Files mentioned by the user:"];
+
+/// The one section of that block holding what the user actually typed. Everything above it —
+/// active file, active selection, open tabs, attachment paths, chrome tabs — is editor state
+/// the extension volunteered.
+const IDE_REQUEST_HEADING: &str = "## My request for Codex:";
+
+/// The user's own words out of the Codex VS Code extension's context prelude.
+///
+/// The extension prepends a markdown block to the turn, so the prose that should have been
+/// the title is nested *inside* it rather than following it — which is why this recovers a
+/// slice instead of dropping the block the way Claude Code's `DROPPED_TAGS` does. Left
+/// alone it titled 224 conversations (7.6% of the corpus) with an editor state dump
+/// (chat-search-202).
+///
+/// `None` means this turn does not open with the block and is passed through untouched.
+/// `Some("")` means the block is there but carries no request: every one of the 1136
+/// observed blocks has a `## My request for Codex:` section and 4 of those are empty, so a
+/// block without one is unseen, and there would be no way to tell where the open-tabs list
+/// stops and prose begins if it happened. Empty falls into `title_from`'s existing
+/// empty-title path, so the turn declines the title and the next user message gets it —
+/// exactly what a bare command line already does.
+fn ide_context_request(s: &str) -> Option<&str> {
+    let s = s.trim_start();
+    let first_line = s.split_once('\n').map_or(s, |(line, _)| line).trim_end();
+    if !IDE_CONTEXT_HEADINGS.contains(&first_line) {
+        return None;
+    }
+    Some(after_heading_line(s, IDE_REQUEST_HEADING).unwrap_or(""))
+}
+
+/// Everything after the first line that *is* `heading`, or `None` when no line is.
+///
+/// Whole-line equality rather than `find`, so a request body that quotes the heading — 42
+/// bodies on the corpus contain heading lines of their own — cannot re-split the message.
+fn after_heading_line<'a>(s: &'a str, heading: &str) -> Option<&'a str> {
+    let mut rest = s;
+    loop {
+        match rest.split_once('\n') {
+            Some((line, tail)) => {
+                if line.trim_end() == heading {
+                    return Some(tail);
+                }
+                rest = tail;
+            }
+            None => return (rest.trim_end() == heading).then_some(""),
+        }
+    }
 }
 
 /// Rewrite Codex's skill mentions back to what the user typed.
@@ -912,6 +976,124 @@ not json at all
         assert!(!is_command_line("why is /.git so big?"));
         assert!(!is_command_line("/"));
         assert!(!is_command_line(""));
+    }
+
+    /// Every block here is hand-built from the *shape* the VS Code extension emits; nothing
+    /// is copied from a rollout (ADR 15, chat-search-4ar.3).
+    #[test]
+    fn the_ide_context_block_titles_from_the_request_inside_it() {
+        let ide = r##"
+{"type":"session_meta","payload":{"id":"s","originator":"codex_vscode"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"# Context from my IDE setup:\n## Active file: src/loader.rs\n## Open tabs:\nsrc/loader.rs\nsrc/main.rs\n## My request for Codex:\nwhy is the loader slow"}}
+"##;
+        let c = conv("rollout-ide.jsonl", ide);
+        // The block still gets indexed — only the title is taken from inside it.
+        assert!(c.messages[0].text.starts_with("# Context from my IDE setup:"));
+        assert_eq!(c.titles.resolve(), Some("why is the loader slow"));
+
+        // The other opener, and a request that runs to several lines: collapsed like any
+        // other multi-line prompt.
+        let files = r##"
+{"type":"session_meta","payload":{"id":"s"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"# Files mentioned by the user:\n## notes.md: /w/proj/notes.md\n## My request for Codex:\nfold these notes\ninto the outline"}}
+"##;
+        assert_eq!(
+            conv("rollout-ide-files.jsonl", files).titles.resolve(),
+            Some("fold these notes into the outline")
+        );
+
+        // Both blocks in one turn, as the extension emits them when files are attached from
+        // the editor; the request heading is still the last one and still wins.
+        let both = "# Context from my IDE setup:\n## Open tabs:\na.rs\n\
+                    # Files mentioned by the user:\n## a.rs: /w/a.rs\n\
+                    ## My request for Codex:\nrename the field";
+        assert_eq!(title_from(both).as_deref(), Some("rename the field"));
+    }
+
+    #[test]
+    fn an_ide_block_with_no_request_in_it_declines_the_title() {
+        // Attachments only — the user pasted an image and said nothing. There is no way to
+        // tell where a tab list stops and prose starts, so the whole turn is declined and
+        // the next user message titles the conversation, as with a bare command line.
+        let context_only = r##"
+{"type":"session_meta","payload":{"id":"s"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"# Files mentioned by the user:\n## shot.png: /tmp/shot.png\n## My request for Codex:\n"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"what is wrong with this layout"}}
+"##;
+        let c = conv("rollout-ide-empty.jsonl", context_only);
+        assert_eq!(c.messages.len(), 2);
+        assert_eq!(c.titles.resolve(), Some("what is wrong with this layout"));
+
+        // No request section at all, and nothing after it either: untitled beats titled with
+        // an editor state dump.
+        let no_request = r##"
+{"type":"session_meta","payload":{"id":"s"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"# Context from my IDE setup:\n## Active file: src/main.rs\n## Open tabs:\nsrc/main.rs"}}
+"##;
+        assert_eq!(conv("rollout-ide-noreq.jsonl", no_request).titles.resolve(), None);
+    }
+
+    #[test]
+    fn only_the_extensions_own_block_is_unwrapped_not_markdown_in_general() {
+        // A user's own heading is prose, whatever it says. Only the two exact opening lines
+        // are the extension's.
+        assert_eq!(
+            title_from("# Context on the retry bug\nit fires twice").as_deref(),
+            Some("# Context on the retry bug it fires twice")
+        );
+        assert_eq!(
+            title_from("# Context from my IDE setup is what I want to talk about").as_deref(),
+            Some("# Context from my IDE setup is what I want to talk about")
+        );
+        // The request subheading on its own is not the block either; only the two openers
+        // above start one.
+        assert_eq!(
+            title_from("## My request for Codex: go").as_deref(),
+            Some("## My request for Codex: go")
+        );
+
+        // The block must *open* the turn. Quoting one from inside a prompt — which is how
+        // Codex's own review turns replay history — leaves the prompt alone.
+        let quoted = "Assess this history.\n# Context from my IDE setup:\n## Open tabs:\na.rs";
+        assert_eq!(
+            title_from(quoted).as_deref(),
+            Some("Assess this history. # Context from my IDE setup: ## Open tabs: a.rs")
+        );
+
+        // Whole-line equality: the heading quoted mid-line inside the request body cannot
+        // re-split the message, so the whole request survives as the title.
+        let quoting_body = concat!(
+            "# Context from my IDE setup:\n## Open tabs:\na.rs\n",
+            "## My request for Codex:\nwhy did `## My request for Codex:` show up here"
+        );
+        assert_eq!(
+            title_from(quoting_body).as_deref(),
+            Some("why did `## My request for Codex:` show up here")
+        );
+
+        // Leading blank lines and CRLF are the extension's, not the user's.
+        let crlf = "\n# Context from my IDE setup:\r\n## My request for Codex:\r\nship it";
+        assert_eq!(title_from(crlf).as_deref(), Some("ship it"));
+    }
+
+    #[test]
+    fn the_request_inside_an_ide_block_gets_the_same_treatment_as_a_bare_turn() {
+        // A command typed in the editor is still a command: the block is unwrapped first, so
+        // the existing guards see `/status` rather than a markdown heading.
+        let command = "# Context from my IDE setup:\n## My request for Codex:\n/status";
+        assert_eq!(title_from(command), None);
+
+        // …and a skill mention inside the block still loses its path.
+        let skill = concat!(
+            "# Context from my IDE setup:\n## Open tabs:\na.rs\n## My request for Codex:\n",
+            "Can you [$commit](/Users/x/.codex/skills/commit/SKILL.md) this?"
+        );
+        assert_eq!(title_from(skill).as_deref(), Some("Can you commit this?"));
+
+        // Truncation is measured on the recovered prose, not on the block that hid it.
+        let long =
+            format!("# Context from my IDE setup:\n## My request for Codex:\n{}", "w ".repeat(100));
+        assert_eq!(title_from(&long).unwrap().chars().count(), TITLE_MAX_CHARS);
     }
 
     #[test]

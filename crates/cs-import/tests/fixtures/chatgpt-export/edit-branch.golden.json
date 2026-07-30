@@ -1,0 +1,91 @@
+[
+  {
+    "conversations": [
+      {
+        "cwd": null,
+        "forked_from_native_id": null,
+        "git_branch": null,
+        "head_native_id": "node-a2b",
+        "messages": [
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "node-u1",
+            "parent_native_id": null,
+            "role": "user",
+            "seq": 0,
+            "text": "how should a cache be invalidated when the key is renamed?",
+            "thread_key": "main",
+            "ts": 1780000000123
+          },
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "node-a1",
+            "parent_native_id": "node-u1",
+            "role": "assistant",
+            "seq": 1,
+            "text": "Key the entry by a stable id and store the name beside it.",
+            "thread_key": "main",
+            "ts": 1780000060500
+          },
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "node-u2",
+            "parent_native_id": "node-a1",
+            "role": "user",
+            "seq": 2,
+            "text": "show me the version that keys by name",
+            "thread_key": "main",
+            "ts": 1780000120000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "node-a2",
+            "parent_native_id": "node-u2",
+            "role": "assistant",
+            "seq": 3,
+            "text": "The name-keyed version has to walk every entry on rename.",
+            "thread_key": "main",
+            "ts": 1780000180000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "node-u2b",
+            "parent_native_id": "node-a1",
+            "role": "user",
+            "seq": 4,
+            "text": "show me the version that keys by id",
+            "thread_key": "main",
+            "ts": 1780000300000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "node-a2b",
+            "parent_native_id": "node-u2b",
+            "role": "assistant",
+            "seq": 5,
+            "text": "The id-keyed version renames in place; only the label moves.",
+            "thread_key": "main",
+            "ts": 1780000600000
+          }
+        ],
+        "model": "gpt-5",
+        "native_id": "conv-chatgpt-0001",
+        "resume_cmd": "https://chatgpt.com/c/conv-chatgpt-0001",
+        "source": "chatgpt-export",
+        "surface": null,
+        "titles": {
+          "custom": "Widget cache invalidation",
+          "first_user": "how should a cache be invalidated when the key is renamed?",
+          "generated": null
+        }
+      }
+    ],
+    "logical_path": "conversations-000.json"
+  }
+]

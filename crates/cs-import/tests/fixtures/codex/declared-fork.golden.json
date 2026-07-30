@@ -1,0 +1,69 @@
+[
+  {
+    "conversations": [
+      {
+        "cwd": "/home/dev/example-project",
+        "forked_from_native_id": "conv-a1b2",
+        "git_branch": "topic/widget-cache",
+        "head_native_id": null,
+        "messages": [
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "rollout-2026-06-03T11-02-19-thread-fork:000000",
+            "parent_native_id": null,
+            "role": "user",
+            "seq": 0,
+            "text": "which module clears the widget cache?",
+            "thread_key": "rollout-2026-06-03T11-02-19-thread-fork",
+            "ts": 1780391712000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "rollout-2026-06-03T11-02-19-thread-fork:000001",
+            "parent_native_id": "rollout-2026-06-03T11-02-19-thread-fork:000000",
+            "role": "assistant",
+            "seq": 1,
+            "text": "WidgetCache::clear in src/cache/widget.rs is the only place that empties it.",
+            "thread_key": "rollout-2026-06-03T11-02-19-thread-fork",
+            "ts": 1780391889000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "rollout-2026-06-03T11-02-19-thread-fork:000002",
+            "parent_native_id": "rollout-2026-06-03T11-02-19-thread-fork:000001",
+            "role": "user",
+            "seq": 2,
+            "text": "take the other approach: invalidate lazily on read",
+            "thread_key": "rollout-2026-06-03T11-02-19-thread-fork",
+            "ts": 1780484561000
+          },
+          {
+            "is_sidechain": false,
+            "kind": "prose",
+            "native_id": "rollout-2026-06-03T11-02-19-thread-fork:000003",
+            "parent_native_id": "rollout-2026-06-03T11-02-19-thread-fork:000002",
+            "role": "assistant",
+            "seq": 3,
+            "text": "Lazy invalidation moves the cost to the reader; here is the sketch.",
+            "thread_key": "rollout-2026-06-03T11-02-19-thread-fork",
+            "ts": 1780484578000
+          }
+        ],
+        "model": "gpt-5-codex",
+        "native_id": "conv-e5f6",
+        "resume_cmd": "codex resume conv-e5f6",
+        "source": "codex",
+        "surface": "codex_desktop",
+        "titles": {
+          "custom": null,
+          "first_user": "which module clears the widget cache?",
+          "generated": null
+        }
+      }
+    ],
+    "logical_path": "2026/06/03/rollout-2026-06-03T11-02-19-thread-fork.jsonl"
+  }
+]

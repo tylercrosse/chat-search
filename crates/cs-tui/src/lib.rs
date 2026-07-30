@@ -18,6 +18,7 @@ use ratatui::crossterm::terminal::{
 use ratatui::Terminal;
 
 pub mod layout;
+pub mod preview;
 pub mod render;
 pub mod rows;
 pub mod state;
@@ -98,6 +99,19 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
             continue;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        // Alt is the preview's modifier and Ctrl the application's, so the two cursors —
+        // the result list and the message inside it — never fight over a key.
+        if key.modifiers.contains(KeyModifiers::ALT) {
+            if let Some(p) = app.preview.as_mut() {
+                match key.code {
+                    KeyCode::Up => p.move_focus(-1),
+                    KeyCode::Down => p.move_focus(1),
+                    KeyCode::Enter => p.toggle_focused(),
+                    _ => {}
+                }
+            }
+            continue;
+        }
         match (key.code, ctrl) {
             (KeyCode::Esc, _) | (KeyCode::Char('c'), true) => return Ok(Exit::Quit),
             (KeyCode::Enter, _) => {
@@ -114,6 +128,16 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
             (KeyCode::PageDown, _) => app.move_selection(10),
             (KeyCode::Tab, _) => app.toggle_expand(),
             (KeyCode::Char('p'), true) => app.show_preview = !app.show_preview,
+            (KeyCode::Char('o'), true) => {
+                if let Some(p) = app.preview.as_mut() {
+                    p.cycle_density();
+                }
+            }
+            (KeyCode::Char('e'), true) => {
+                if let Some(p) = app.preview.as_mut() {
+                    p.toggle_all();
+                }
+            }
             (KeyCode::Backspace, _) => app.backspace(),
             (KeyCode::Delete, _) => app.delete(),
             (KeyCode::Left, _) => app.cursor = app.cursor.saturating_sub(1),

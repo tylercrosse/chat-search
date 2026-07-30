@@ -1,0 +1,7 @@
+{"timestamp":"2026-06-03T11:02:19.000Z","type":"session_meta","payload":{"id":"conv-e5f6","forked_from_id":"conv-a1b2","originator":"codex_desktop","thread_source":"user","cwd":"/home/dev/example-project","git":{"branch":"topic/widget-cache","commit_hash":"1a2b3c4"}}}
+{"timestamp":"2026-06-02T09:15:04.000Z","type":"session_meta","payload":{"id":"conv-a1b2","session_id":"conv-a1b2","originator":"codex_cli","thread_source":"user","cwd":"/home/dev/example-project"}}
+{"timestamp":"2026-06-02T09:15:12.000Z","type":"event_msg","payload":{"type":"user_message","message":"which module clears the widget cache?"}}
+{"timestamp":"2026-06-02T09:18:09.000Z","type":"event_msg","payload":{"type":"agent_message","message":"WidgetCache::clear in src/cache/widget.rs is the only place that empties it."}}
+{"timestamp":"2026-06-03T11:02:40.000Z","type":"turn_context","payload":{"model":"gpt-5-codex","effort":"high"}}
+{"timestamp":"2026-06-03T11:02:41.000Z","type":"event_msg","payload":{"type":"user_message","message":"take the other approach: invalidate lazily on read"}}
+{"timestamp":"2026-06-03T11:02:58.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Lazy invalidation moves the cost to the reader; here is the sketch."}}

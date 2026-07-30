@@ -8,6 +8,7 @@
         "head_native_id": null,
         "messages": [
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
             "native_id": "rollout-2026-06-03T11-02-19-thread-fork:000000",
@@ -19,6 +20,7 @@
             "ts": 1780391712000
           },
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
             "native_id": "rollout-2026-06-03T11-02-19-thread-fork:000001",
@@ -30,6 +32,7 @@
             "ts": 1780391889000
           },
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
             "native_id": "rollout-2026-06-03T11-02-19-thread-fork:000002",
@@ -41,6 +44,7 @@
             "ts": 1780484561000
           },
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
             "native_id": "rollout-2026-06-03T11-02-19-thread-fork:000003",

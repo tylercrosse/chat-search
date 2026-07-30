@@ -189,7 +189,9 @@ fn header_row(
 
     let title = g.title.as_deref().unwrap_or("(untitled)");
     let expanded = app.expanded.contains(&g.conv_id);
-    let marker = if g.hits.is_empty() { " " } else if expanded { "▾" } else { "▸" };
+    // `match_count` comes from the ranking, so it is known without building any snippet —
+    // which is what lets the marker be right while `hits` is still empty.
+    let marker = if g.match_count == 0 { " " } else if expanded { "▾" } else { "▸" };
     cell(frame, body, cols.title, dy, &format!("{marker} {title}"), row_style);
 
     cell(frame, body, cols.dir, dy, &text::display_dir(g.cwd.as_deref().unwrap_or(""), home().as_deref()), merge(row_style, app.theme.dim, selected));

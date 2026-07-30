@@ -43,23 +43,24 @@ pub struct Block {
     /// A subagent strand. Worth marking rather than hiding: it is part of what happened, but
     /// it is not the conversation you were having.
     pub is_sidechain: bool,
+    /// This result reports a failure. Set by the importer from the source's own signal.
+    pub is_error: bool,
     pub thread_key: String,
 }
 
 impl Block {
     /// Whether this message is drawn at all.
     ///
-    /// `tool_result` is omitted rather than collapsed, revised from the original spec after
-    /// first use: the result is a blob whose existence the call already implies, so a line
-    /// reading `↳ 1.2 KB` spends a row repeating what `⚙ Read(schema.rs)` just said.
+    /// A *successful* `tool_result` is omitted rather than collapsed: the result is a blob
+    /// whose existence the call already implies, so a line reading `↳ 1.2 KB` spends a row
+    /// repeating what `⚙ Read(schema.rs)` just said.
     ///
-    /// The exception the spec wants — a *failed* result staying legible, because "the tool
-    /// broke here" is recognition information — is not implementable yet. Nothing in the
-    /// schema marks a result as an error; `kind` has four values and none of them is
-    /// `tool_error`. Filed rather than guessed at from the text, because "contains the word
-    /// error" would hide real results and show working ones.
+    /// A failed one is kept, because "the tool broke here" is recognition information in a
+    /// way a successful result is not — it is often the thing that makes a conversation the
+    /// one you were looking for. `Message::is_error` comes from each source's own signal
+    /// (Claude Code's `is_error`, Codex's `metadata.exit_code`), never from the text.
     pub fn drawn(&self) -> bool {
-        self.kind != "tool_result"
+        self.kind != "tool_result" || self.is_error
     }
 }
 
@@ -88,7 +89,7 @@ impl Preview {
         // nonsense. Main thread before sidechains, each strand contiguous. `idx_message_thread`
         // is (conv_id, thread_key, seq), which exists for exactly this.
         let mut stmt = conn.prepare_cached(
-            "SELECT id, role, kind, seq, on_head_path, text, is_sidechain, thread_key
+            "SELECT id, role, kind, seq, on_head_path, text, is_sidechain, thread_key, is_error
              FROM message WHERE conv_id = ?1 AND on_head_path = 1
              ORDER BY is_sidechain, thread_key, seq",
         )?;
@@ -103,6 +104,7 @@ impl Preview {
                     text: r.get(5)?,
                     is_sidechain: r.get::<_, i64>(6)? != 0,
                     thread_key: r.get(7)?,
+                    is_error: r.get::<_, i64>(8)? != 0,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -280,6 +282,14 @@ fn speaker_style(block: &Block, theme: &Theme) -> Style {
 
 /// One line standing in for a whole message.
 fn collapsed_span(block: &Block, theme: &Theme, width: usize) -> Span<'static> {
+    // Checked before `kind`, because a failed result is the one result that survives and it
+    // is the failure, not the tool, that is worth the row.
+    if block.is_error {
+        return Span::styled(
+            text::truncate_end(&format!("✗ {}", first_line(&block.text)), width),
+            theme.error,
+        );
+    }
     let (body, style) = match block.kind.as_str() {
         // Reasoning opens with its own bolded summary — `**Planning README creation**` — so
         // the model has already written the one-line version. Use it rather than counting
@@ -349,6 +359,7 @@ mod tests {
             text: text.into(),
             is_sidechain: false,
             thread_key: "main".into(),
+            is_error: false,
         }
     }
 
@@ -478,7 +489,7 @@ mod tests {
         // first replies after them. The SQL does the ordering, so this pins the property the
         // SQL has to deliver — construct the blocks in the order the query returns them and
         // assert each strand is contiguous with the main thread first.
-        let mut b = |thread: &str, side: bool, seq: i64, id: &str| Block {
+        let b = |thread: &str, side: bool, seq: i64, id: &str| Block {
             msg_id: id.into(),
             role: "user".into(),
             kind: "prose".into(),
@@ -487,6 +498,7 @@ mod tests {
             text: "x".into(),
             is_sidechain: side,
             thread_key: thread.into(),
+            is_error: false,
         };
         let blocks = vec![
             b("main", false, 0, "m0"),
@@ -499,6 +511,21 @@ mod tests {
         let order: Vec<&str> = p.drawn().map(|x| x.msg_id.as_str()).collect();
         assert_eq!(order, ["m0", "m1", "a0", "a1"]);
         assert!(!p.drawn().next().unwrap().is_sidechain, "the main strand reads first");
+    }
+
+    #[test]
+    fn a_failed_tool_result_survives_the_omission() {
+        // The whole reason `is_error` exists. A successful result is implied by its call and
+        // costs a row to repeat; a failed one is often what makes a conversation findable.
+        let mut ok = block("tool_result", "tool", "a", "3 files");
+        let mut bad = block("tool_result", "tool", "b", "error: no such file or directory");
+        ok.is_error = false;
+        bad.is_error = true;
+        let p = preview(vec![ok, bad]);
+        let kept: Vec<&str> = p.drawn().map(|x| x.msg_id.as_str()).collect();
+        assert_eq!(kept, ["b"], "the failure stays, the success does not");
+        let span = collapsed_span(p.drawn().next().unwrap(), &Theme::plain(), 60);
+        assert!(span.content.starts_with('✗'));
     }
 
     #[test]

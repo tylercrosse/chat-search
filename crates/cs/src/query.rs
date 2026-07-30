@@ -353,8 +353,13 @@ pub fn explain(config_path: &Path, db_path: Option<PathBuf>, conv_id: &str, quer
 }
 
 fn rusqlite_open(path: &Path) -> Result<rusqlite::Connection> {
-    rusqlite::Connection::open(path)
-        .with_context(|| format!("opening {} (run `cs index` first?)", path.display()))
+    let conn = rusqlite::Connection::open(path)
+        .with_context(|| format!("opening {} (run `cs index` first?)", path.display()))?;
+    // A schema change otherwise surfaces as `no such column` from inside a query, which
+    // describes SQLite rather than the situation. The index is a pure function of the
+    // archive (ADR 1), so the remedy never varies.
+    cs_core::ensure_current(&conn).map_err(anyhow::Error::msg)?;
+    Ok(conn)
 }
 
 /// Conversation-grouped output: the conversation is the result, its best matching messages

@@ -173,6 +173,8 @@ fn import_conversation(raw: &Value) -> Option<Conversation> {
                             parent_native_id: inherited.map(String::from),
                             thread_key: THREAD_KEY.to_string(),
                             is_sidechain: false,
+                            // No failure signal in this format; false rather than guessed from the text.
+                            is_error: false,
                             seq: messages.len() as i64,
                             role,
                             kind,

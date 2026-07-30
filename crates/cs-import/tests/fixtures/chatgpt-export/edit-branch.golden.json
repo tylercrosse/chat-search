@@ -8,6 +8,7 @@
         "head_native_id": "node-a2b",
         "messages": [
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
             "native_id": "node-u1",
@@ -19,6 +20,7 @@
             "ts": 1780000000123
           },
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
             "native_id": "node-a1",
@@ -30,6 +32,7 @@
             "ts": 1780000060500
           },
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
             "native_id": "node-u2",
@@ -41,6 +44,7 @@
             "ts": 1780000120000
           },
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
             "native_id": "node-a2",
@@ -52,6 +56,7 @@
             "ts": 1780000180000
           },
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
             "native_id": "node-u2b",
@@ -63,6 +68,7 @@
             "ts": 1780000300000
           },
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
             "native_id": "node-a2b",

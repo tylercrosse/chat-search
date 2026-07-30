@@ -121,7 +121,13 @@ impl App {
             now_ms: self.now,
             ..cs_core::Query::new(&text)
         };
-        match cs_core::search_grouped(&self.conn, &q, rows::MAX_HITS) {
+        // `nested = 0`: no snippets. Building them is 5-20x the cost of the ranking itself
+        // — measured on the 172k-message index, `pro` goes 34 ms to 448 ms and `learning`
+        // 8 ms to 164 ms — because each one inserts its message into a scratch fts5 table so
+        // the highlighter can agree with the ranker (chat-search-6eb.20, and 6eb.30 for the
+        // schema change that would remove the insert). The row model draws hits only for an
+        // expanded conversation, so per keystroke this pays for 150 snippets and draws none.
+        match cs_core::search_grouped(&self.conn, &q, 0) {
             Ok(groups) => {
                 self.last_ms = t0.elapsed().as_secs_f64() * 1000.0;
                 self.groups = groups;
@@ -213,12 +219,41 @@ impl App {
     }
 
     /// Expand or collapse the selected conversation, keeping the cursor on it.
+    ///
+    /// Expanding is where snippets get paid for. Deliberate and occasional, so the cost sits
+    /// on a keypress the user chose rather than on every keystroke — the opposite of asking
+    /// for them up front and drawing one set in fifty.
     pub fn toggle_expand(&mut self) {
         let Some(conv) = self.selected_conv().map(str::to_owned) else {
             return;
         };
-        rows::toggle(&mut self.expanded, &conv);
+        let expanding = rows::toggle(&mut self.expanded, &conv);
+        if expanding && self.groups.iter().all(|g| g.hits.is_empty()) {
+            self.hydrate_hits();
+        }
         self.rebuild_rows(Some(&conv));
+    }
+
+    /// Re-run the current query asking for nested hits this time.
+    ///
+    /// A failure leaves the existing groups alone: an expansion that cannot find its
+    /// snippets should show the conversation without them, not empty the list.
+    fn hydrate_hits(&mut self) {
+        let text = if self.holding() { String::new() } else { self.query.clone() };
+        if cs_core::is_blank(&text) {
+            return;
+        }
+        let q = cs_core::Query {
+            text: &text,
+            limit: self.limit,
+            source: self.source.as_deref(),
+            prefix: true,
+            now_ms: self.now,
+            ..cs_core::Query::new(&text)
+        };
+        if let Ok(groups) = cs_core::search_grouped(&self.conn, &q, rows::MAX_HITS) {
+            self.groups = groups;
+        }
     }
 
     pub fn insert_char(&mut self, ch: char) {
@@ -343,6 +378,7 @@ mod tests {
                     parent_native_id: None,
                     thread_key: "main".into(),
                     is_sidechain: false,
+                    is_error: false,
                     seq: 0,
                     role: Role::User,
                     kind: Kind::Prose,

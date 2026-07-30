@@ -64,6 +64,42 @@ pub struct IndexStats {
     pub text_bytes: u64,
 }
 
+/// The importer version that built this index, if it recorded one.
+///
+/// `None` for an index written before `build_info` existed, which is indistinguishable from
+/// a corrupt one and is treated the same way: stale.
+pub fn built_by(conn: &Connection) -> Option<u32> {
+    conn.query_row(
+        "SELECT value FROM build_info WHERE key = 'importer_version'",
+        [],
+        |r| r.get::<_, String>(0),
+    )
+    .ok()?
+    .parse()
+    .ok()
+}
+
+/// Refuse to read an index this binary did not build.
+///
+/// `build_info` has been written since the schema existed and read by nothing, so a schema
+/// change surfaced as `no such column` from somewhere deep in a query — an error about
+/// SQLite when the actual situation is "this index predates the binary". The index is a pure
+/// function of the archive (ADR 1), so the remedy is always the same and worth saying.
+pub fn ensure_current(conn: &Connection) -> Result<(), String> {
+    match built_by(conn) {
+        Some(v) if v == IMPORTER_VERSION => Ok(()),
+        Some(v) => Err(format!(
+            "index was built by importer version {v}, this is version {IMPORTER_VERSION} — \
+             run `cs index` to rebuild"
+        )),
+        None => Err(
+            "index records no importer version, so it predates this schema — \
+             run `cs index` to rebuild"
+                .to_string(),
+        ),
+    }
+}
+
 pub fn open(path: &str) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -192,8 +228,8 @@ fn write_one(
     let mut ins_msg = tx.prepare_cached(
         "INSERT OR IGNORE INTO message
            (id, conv_id, parent_id, thread_key, is_sidechain, seq, role, kind, ts,
-            on_head_path, text)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+            on_head_path, is_error, text)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
     )?;
     let mut ins_prose = tx.prepare_cached("INSERT INTO fts_prose(rowid, text) VALUES (?1,?2)")?;
     let mut ins_tools = tx.prepare_cached("INSERT INTO fts_tools(rowid, text) VALUES (?1,?2)")?;
@@ -217,6 +253,7 @@ fn write_one(
             m.kind.as_str(),
             m.ts,
             on_path.contains(m.native_id.as_str()) as i64,
+            m.is_error as i64,
             stored_text,
         ])?;
         if changed == 0 {
@@ -323,6 +360,7 @@ mod tests {
             parent_native_id: parent.map(String::from),
             thread_key: thread.into(),
             is_sidechain: side,
+            is_error: false,
             seq,
             role: Role::User,
             kind: Kind::Prose,

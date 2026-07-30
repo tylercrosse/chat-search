@@ -80,6 +80,8 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
             thread_key: logical_path.to_string(),
             // This format has no subagent concept.
             is_sidechain: false,
+            // Chat files hold only prose, so there is no result here to have failed.
+            is_error: false,
             seq,
             role,
             // Every record here is prose. Tool calls do not appear in a chat file at all;

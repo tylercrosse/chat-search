@@ -9,6 +9,7 @@
 //! rule for naming the local day an instant fell on.
 
 pub mod eval;
+pub mod highlight;
 pub mod index;
 pub mod model;
 pub mod querylog;
@@ -18,7 +19,7 @@ pub mod time;
 
 pub use eval::{Grade, Judged, QueryScore, Report};
 pub use index::{
-    open, open_fresh, reset, write_conversations, write_conversations_with, IndexOptions,
+    built_by, ensure_current, open, open_fresh, reset, write_conversations, write_conversations_with, IndexOptions,
     IndexStats, TOOL_TEXT_MAX,
 };
 pub use model::{Conversation, Kind, Message, Role, Titles};

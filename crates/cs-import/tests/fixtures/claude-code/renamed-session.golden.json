@@ -8,6 +8,7 @@
         "head_native_id": null,
         "messages": [
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
             "native_id": "evt-0002",
@@ -19,6 +20,7 @@
             "ts": 1780586403000
           },
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
             "native_id": "evt-0003",
@@ -30,6 +32,7 @@
             "ts": 1780586411000
           },
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "tool_call",
             "native_id": "evt-0003#1",
@@ -41,6 +44,7 @@
             "ts": 1780586411000
           },
           {
+            "is_error": false,
             "is_sidechain": false,
             "kind": "tool_result",
             "native_id": "evt-0004",

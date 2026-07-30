@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS message(
   kind         TEXT NOT NULL,        -- prose | reasoning | tool_call | tool_result
   ts           INTEGER,
   on_head_path INTEGER NOT NULL DEFAULT 1,  -- reachable from head_id by parent walk
+  is_error     INTEGER NOT NULL DEFAULT 0,  -- a tool_result reporting a failure
   text         TEXT NOT NULL
 );
 
@@ -65,4 +66,4 @@ CREATE TABLE IF NOT EXISTS build_info(
 
 /// Bumped when importer output changes in a way that requires a rebuild. Recorded in
 /// `build_info` so a stale index is detectable rather than silently wrong.
-pub const IMPORTER_VERSION: u32 = 1;
+pub const IMPORTER_VERSION: u32 = 2;

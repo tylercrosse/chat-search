@@ -125,6 +125,7 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
             thread_key: thread_key.clone(),
             // Stamped after the loop: it is a property of the file, not of the message.
             is_sidechain: false,
+            is_error: kind == Kind::ToolResult && exit_code(payload).is_some_and(|c| c != 0),
             seq,
             role,
             kind,
@@ -223,6 +224,21 @@ fn text_field(v: &Value, key: &str) -> Option<String> {
 /// The first of `keys` that is present and not null.
 fn first_present<'a>(v: &'a Value, keys: &[&str]) -> Option<&'a Value> {
     keys.iter().find_map(|k| field(v, k))
+}
+
+/// Exit status of a `function_call_output`, when it reports one.
+///
+/// Codex wraps the result as a JSON *string* under `output`, holding
+/// `{"output": "…", "metadata": {"exit_code": N, "duration_seconds": …}}`. Measured over 60
+/// archived rollouts: 2,054 of 2,333 outputs carry a code and 132 of those are non-zero, so
+/// the signal is both present and discriminating.
+///
+/// `None` covers the outputs with no metadata at all — `update_plan` answers "Plan updated"
+/// as bare text. Those are not failures, and not knowing is not the same as failing.
+fn exit_code(payload: &Value) -> Option<i64> {
+    let raw = payload.get("output")?.as_str()?;
+    let parsed: Value = serde_json::from_str(raw).ok()?;
+    parsed.get("metadata")?.get("exit_code")?.as_i64()
 }
 
 fn flatten_field(v: &Value, key: &str) -> String {

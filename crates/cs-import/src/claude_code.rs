@@ -161,6 +161,11 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
 
             for block in blocks {
                 let block_type = block.get("type").and_then(Value::as_str).unwrap_or("");
+                // Authoritative, and present only on results the harness judged failed:
+                // sampled over a real transcript, 7 of 18 `tool_result` blocks carried the
+                // key at all and one was true. Absent means "not reported", which is not the
+                // same as "succeeded" — but false is the only safe reading of silence.
+                let is_error = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
                 let (role, kind, text_body) = match block_type {
                     "text" => (role_of(event_type), Kind::Prose, flatten(field(block, "text"))),
                     // Reasoning is stored with its text blanked on this corpus — every
@@ -207,6 +212,7 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
                     parent_native_id,
                     thread_key: logical_path.to_string(),
                     is_sidechain,
+                    is_error: is_error && kind == Kind::ToolResult,
                     seq,
                     role,
                     kind,

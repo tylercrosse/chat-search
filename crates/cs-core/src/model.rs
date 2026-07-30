@@ -97,6 +97,19 @@ pub struct Message {
     pub kind: Kind,
     /// Epoch milliseconds.
     pub ts: Option<i64>,
+    /// This message reports a failure — a tool that did not do what it was asked.
+    ///
+    /// Only ever true on [`Kind::ToolResult`]. It exists because a *failed* result is
+    /// recognition information in a way a successful one is not: a preview omits the
+    /// successful ones, since the call already implies the result, but "the tool broke here"
+    /// is often exactly what makes a conversation the one you were looking for.
+    ///
+    /// Derived from each source's own signal, never from the text. Claude Code sets
+    /// `is_error` on the `tool_result` block; Codex carries `metadata.exit_code` in its
+    /// `function_call_output` (measured over 60 rollouts: 2,054 outputs carry one, 132 of
+    /// them non-zero). Sources with no signal leave it false rather than guessing — sniffing
+    /// for the word "error" would hide working results and surface broken ones.
+    pub is_error: bool,
     pub text: String,
 }
 
@@ -170,6 +183,7 @@ mod tests {
             parent_native_id: None,
             thread_key: "t".into(),
             is_sidechain: sidechain,
+            is_error: false,
             seq,
             role: Role::User,
             kind: Kind::Prose,

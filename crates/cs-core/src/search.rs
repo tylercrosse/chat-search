@@ -1,3 +1,4 @@
+use crate::highlight;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 
@@ -111,28 +112,50 @@ pub fn to_match_expr_opts(query: &str, prefix: bool) -> String {
         .join(" ")
 }
 
-pub fn snippet(text: &str, query: &str, width: usize) -> String {
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let lower = flat.to_lowercase();
-    let at = query
-        .to_lowercase()
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .filter(|t| !t.is_empty())
-        .filter_map(|t| lower.find(t))
-        .min();
+/// Prefix on a snippet that is the head of the message rather than the text that matched.
+///
+/// The old behaviour was to return the head silently and without even the leading `…`, so a
+/// stemmed hit rendered as a confident summary of a message whose matching word was nowhere
+/// in view (chat-search-6eb.20). That is worse than useless here: the eval sheet shows one
+/// snippet per candidate as the primary evidence for a grade, and the harvested pick log
+/// records a vote cast on what the row showed — a wrong span silently becomes ground truth.
+/// So the string says which of the two things it is, in the one channel a `String` has.
+///
+/// Rare by construction now: it takes a match this crate's own tokenizer cannot find in the
+/// text it indexed, which today means fuzzy fallback (chat-search-6eb.10) or a stale index.
+pub const UNLOCATED: &str = "⟨no match⟩ ";
 
-    let chars: Vec<char> = flat.chars().collect();
-    let start = match at {
-        None => 0,
-        Some(byte_at) => flat[..byte_at].chars().count().saturating_sub(width / 3),
-    };
-    let end = (start + width).min(chars.len());
-    format!(
-        "{}{}{}",
-        if start > 0 { "…" } else { "" },
-        chars[start..end].iter().collect::<String>(),
-        if end < chars.len() { "…" } else { "" }
-    )
+pub fn snippet(text: &str, query: &str, width: usize) -> String {
+    snippet_opts(text, query, false, width)
+}
+
+/// [`snippet`], told whether the ranker treated the final token as a prefix.
+///
+/// The typeahead ranks `lea` as `"lea"*`, which matches a message on the *stem* `learn` — no
+/// message contains the term `lea` at all, so an exact-term highlighter finds nothing on the
+/// path that matters most (chat-search-me9.1: every keystroke is a prefix query).
+pub fn snippet_opts(text: &str, query: &str, prefix: bool, width: usize) -> String {
+    let mut terms = highlight::query_terms(query);
+    if prefix {
+        // Read back off the expression the ranker actually used rather than re-deriving the
+        // rule: MIN_PREFIX_LEN and "is the final token still open" live in one place and have
+        // already been got wrong once. The tail check also covers the case where filter
+        // stripping removed the query's last word, so the open token is not a snippet term.
+        let expr = to_match_expr_opts(&query.to_lowercase(), true);
+        if let Some(last) = terms.last_mut() {
+            if expr.ends_with(&format!("\"{last}\"*")) {
+                last.push('*');
+            }
+        }
+    }
+    let (out, spans) = highlight::snippet(text, &terms, width);
+    if !spans.is_empty() {
+        return out;
+    }
+    // Re-cut the head against the reduced budget so the label does not push the line over
+    // `width`. No terms means no MATCH, so this is arithmetic, not a second query.
+    let (head, _) = highlight::snippet(text, &[], width.saturating_sub(UNLOCATED.chars().count()));
+    format!("{UNLOCATED}{head}")
 }
 
 pub struct Query<'a> {
@@ -208,7 +231,7 @@ pub fn search(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Hit>> {
                 role: r.get(2)?,
                 kind: r.get(3)?,
                 ts: r.get(4)?,
-                snippet: snippet(&text, q.text, 160),
+                snippet: snippet_opts(&text, q.text, q.prefix, 160),
                 on_head_path: r.get::<_, i64>(6)? != 0,
                 is_sidechain: r.get::<_, i64>(7)? != 0,
                 thread_key: r.get(8)?,
@@ -334,17 +357,129 @@ mod tests {
     }
 
     #[test]
-    fn snippet_centres_on_the_first_matching_term() {
+    fn snippet_centres_on_the_densest_cluster_not_the_first_match() {
         let text = "a".repeat(300) + " needle " + &"b".repeat(300);
         let s = snippet(&text, "needle", 60);
         assert!(s.contains("needle"), "got: {s}");
         assert!(s.starts_with('…') && s.ends_with('…'));
+
+        // An early aside against the passage the topic lives in. `min(position)` — what this
+        // did until chat-search-6eb.20 — shows the aside.
+        let filler = "unrelated prose ".repeat(30);
+        let text = format!("mentioned needle once {filler} needle needle needle {filler}");
+        let s = snippet(&text, "needle", 60);
+        assert_eq!(s.matches("needle").count(), 3, "anchored on the aside: {s}");
     }
 
     #[test]
     fn snippet_is_char_safe_on_multibyte_text() {
         let s = snippet("héllo wörld ünïcode", "wörld", 10);
         assert!(s.contains("wörld"));
+    }
+
+    /// One conversation per text, indexed through the real importer path.
+    fn indexed(texts: &[&str]) -> Connection {
+        let mut conn = crate::open(":memory:").unwrap();
+        let convs: Vec<crate::Conversation> = texts
+            .iter()
+            .enumerate()
+            .map(|(i, text)| crate::Conversation {
+                source: "codex".into(),
+                native_id: format!("c{i}"),
+                titles: Default::default(),
+                cwd: None,
+                git_branch: None,
+                model: None,
+                surface: None,
+                forked_from_native_id: None,
+                resume_cmd: None,
+                head_native_id: None,
+                messages: vec![crate::model::Message {
+                    native_id: "m0".into(),
+                    parent_native_id: None,
+                    thread_key: "main".into(),
+                    is_sidechain: false,
+                    is_error: false,
+                    seq: 0,
+                    role: crate::model::Role::User,
+                    kind: crate::model::Kind::Prose,
+                    ts: Some(1_700_000_000_000),
+                    text: (*text).into(),
+                }],
+            })
+            .collect();
+        crate::write_conversations(&mut conn, convs.iter()).unwrap();
+        conn
+    }
+
+    #[test]
+    fn every_row_the_ranker_returns_has_something_to_highlight() {
+        // The invariant the whole module exists for. Each pair is one the substring scan
+        // failed: the row ranks because `porter unicode61 remove_diacritics 2` folds the two
+        // surface forms together, and `lower.find()` sees two different strings.
+        let cases: [(&str, &str); 6] = [
+            ("commits", "Commit current changes before the rebase"),
+            ("learning", "I learned about the borrow checker today"),
+            ("running", "it runs every hour on a timer"),
+            ("cafe", "we sketched the schema at a café in Lisbon"),
+            ("general", "the generated code needed a second pass"),
+            // and the literal case, which was the only one covered before
+            ("borrow", "the borrow checker again"),
+        ];
+        let conn = indexed(&cases.map(|(_, text)| text));
+
+        for (query, text) in cases {
+            let hits = search(&conn, &Query { limit: 10, ..Query::new(query) }).unwrap();
+            let hit = hits
+                .iter()
+                .find(|h| h.msg_id.ends_with(":m0") && h.snippet.contains(&text[..12]))
+                .unwrap_or_else(|| panic!("{query:?} did not rank {text:?}"));
+
+            let marks = highlight::spans(text, &highlight::query_terms(query));
+            assert!(!marks.is_empty(), "{query:?} ranked {text:?} and marked nothing");
+            assert!(
+                !hit.snippet.starts_with(UNLOCATED),
+                "{query:?} ranked {text:?} but the snippet disclaims the match: {}",
+                hit.snippet
+            );
+        }
+    }
+
+    #[test]
+    fn a_snippet_that_cannot_locate_the_match_says_so() {
+        // The old fallback returned the head of the message with no leading `…`, which reads
+        // as a deliberate summary. Whatever a client does with this, it cannot mistake it for
+        // the text that matched.
+        let s = snippet("Commit current changes before the rebase", "elephant", 160);
+        assert!(s.starts_with(UNLOCATED), "got: {s}");
+        assert!(s.contains("Commit current"), "the head is still worth showing");
+
+        // and the label is inside the budget rather than on top of it
+        let long = "alpha ".repeat(200);
+        assert!(snippet(&long, "elephant", 40).chars().count() <= 40);
+    }
+
+    #[test]
+    fn a_typeahead_prefix_marks_the_word_the_keystroke_ranked() {
+        // `lea` ranks this row as `"lea"*`, which matches the stem `learn`. No message
+        // contains the term `lea`, so the exact-term path marks nothing and every in-progress
+        // word in the TUI would carry the "no match" label.
+        let text = "I learned about the borrow checker";
+        assert_eq!(to_match_expr_opts("lea", true), "\"lea\"*", "premise of this test");
+        assert!(!snippet_opts(text, "lea", true, 160).starts_with(UNLOCATED));
+        assert!(snippet_opts(text, "lea", false, 160).starts_with(UNLOCATED), "exact `lea`");
+        // Below MIN_PREFIX_LEN the ranker does not open the token either, so neither does this.
+        assert!(snippet_opts(text, "le", true, 160).starts_with(UNLOCATED));
+    }
+
+    #[test]
+    fn filter_tokens_are_not_snippet_anchors() {
+        // `agent:codex` names a facet. Before chat-search-6eb.20 it contributed `agent` and
+        // `codex` as anchors, so a query mentioning the agent centred on the word "codex"
+        // wherever it happened to appear.
+        let text = "codex ".repeat(40) + "the borrow checker";
+        let s = snippet(&text, "agent:codex borrow", 60);
+        assert!(s.contains("borrow checker"), "anchored on the filter keyword: {s}");
     }
 }
 
@@ -547,7 +682,12 @@ struct Ranked {
     score: f64,
     match_count: usize,
     seqs: Vec<i64>,
-    /// Message ids to nest under the conversation, capped at `nested`.
+    /// Message ids to nest under the conversation, capped at `nested`, best-scoring first.
+    ///
+    /// The order is load-bearing twice over: clients truncate rather than sample
+    /// (`cs-tui::rows`), and the group's headline snippet is therefore the one built from the
+    /// message that actually won the ranking — which is the message whose densest cluster
+    /// [`highlight::snippet`] should be anchoring on (chat-search-6eb.20).
     shown: Vec<String>,
 }
 
@@ -628,7 +768,7 @@ fn hydrate(conn: &Connection, q: &Query, ranked: Vec<Ranked>) -> rusqlite::Resul
                     role: r.get(2)?,
                     kind: r.get(3)?,
                     ts: r.get(4)?,
-                    snippet: snippet(&text, q.text, 160),
+                    snippet: snippet_opts(&text, q.text, q.prefix, 160),
                     on_head_path: r.get::<_, i64>(6)? != 0,
                     is_sidechain: r.get::<_, i64>(7)? != 0,
                     thread_key: r.get(8)?,

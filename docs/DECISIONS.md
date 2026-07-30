@@ -176,7 +176,7 @@ Truncation is marked in the stored text with the dropped byte count. A silently 
 
 **Why.** This is the un-boxing move — it lets the daemon question stay open and makes a core rewrite contained. Measured: the query is 1–3 ms in every runtime and the entire spread between runtimes is process startup, so the seam choice matters more than the language.
 
-**Revisit when.** Deciding daemon vs subprocess (see 13).
+**Revisit when.** A transport other than argv is actually needed. Decision 14 settled daemon vs subprocess in favour of subprocess (2026-07-29), so argv is the only transport in play; `--stdio` is the next one up, and a socket only after that.
 
 ---
 
@@ -207,15 +207,56 @@ Index build was 7.1–7.8s across all three — I/O-bound, no meaningful differe
 
 ---
 
-## 14. Client seam: subprocess vs daemon
+## 14. Client seam: no daemon — link the core in Rust, spawn the CLI elsewhere
 
-`open` · 2026-07-28
+`accepted` · 2026-07-29 — **no daemon**
 
-**Context.** Subprocess costs process startup per query (3.8–33 ms depending on runtime); a daemon reaches the 1–3 ms floor but adds lifecycle management and a class of "is it running?" bugs.
+**Context.** The measurements this was decided against, recorded 2026-07-29 for the 293 MB index (post-clip, decision 5):
 
-**Not yet decided.** Decision 12 keeps this reversible, so it can wait for a real UI to exist.
+| step | cost |
+| --- | ---: |
+| in-process query (`cs-core`, index already open) | 1.4–6.4 ms |
+| spawn `cs` + open the 293 MB index | ~3 ms |
+| **`cs search --json`, end to end** | **~9 ms** |
 
-**Decide by.** When the first non-CLI surface is built.
+That is the whole argument. The daemon's prize is the ~3 ms of spawn-and-open, on a path that already fits a type-ahead budget without it. Decision 12 deliberately left this reversible so it could be decided against numbers rather than taste, and the numbers are now in.
+
+**Options.**
+
+_A. Resident daemon, clients talk to it over a unix socket_
+
+- Pro: every client in every language gets the 1.4–6.4 ms floor, with no per-query spawn. The saving is per _keystroke_, not per session, so it compounds with typing speed.
+- Pro: it is the only place cross-query state can live — a warm page cache, prepared statements, an embedding model held in memory once `sqlite-vec` lands (decision 6), a tail-follower for the live session (decision 10).
+- Pro: a single resident process is the natural owner of the write path if incremental indexing ever lands, which sidesteps writer contention between the archiver and N readers.
+- Con: a socket protocol is not just decision 12's JSON body — it is framing, discovery, and a version handshake between a client and a daemon that may be older or newer than it.
+- Con: lifecycle. Start on demand or under launchd, reap stale sockets, and restart when the binary is upgraded underneath a running instance. This machine already runs one launchd job for the archiver; this would be a second.
+- Con: **cache staleness, which is the real cost.** A rebuild deletes and recreates `index.db` (decision 1); a daemon holding an open handle then reads a deleted inode and serves stale results silently. Every long-lived cache in front of a disposable database is that bug waiting to happen.
+
+_B. Rust clients link `cs-core`; everything else spawns `cs search --json`_ **← recommended**
+
+- Pro: Rust surfaces (the CLI, a TUI) cross no process boundary at all and get the 1.4–6.4 ms floor without a daemon existing. The daemon's headline benefit is already available to the clients most likely to need it.
+- Pro: ~9 ms end to end for everyone else, which leaves the bulk of a type-ahead budget for the client's own rendering.
+- Pro: staleness is structurally impossible — each query opens the index fresh, so a rebuild underneath is picked up on the next keystroke with no invalidation logic.
+- Pro: crash isolation, trivial parallelism, and nothing to debug when a client hangs. There is no "is it running?" state.
+- Con: no cross-query state. Re-establishing it costs 3 ms today; it would cost far more if a model has to be loaded per query.
+- Con: non-Rust clients marshal JSON through argv and stdout instead of calling a function, so the contract has to be genuinely stable (decision 12).
+
+_C. Ship `cs-core` as a C-ABI shared library for non-Rust clients_
+
+- Pro: the in-process floor without a daemon or a process boundary, for Swift or Node surfaces too.
+- Pro: no lifecycle at all — the host process owns it.
+- Con: a C ABI to design and keep stable, plus a per-platform build matrix, in exchange for 3 ms.
+- Con: a panic in the core takes the host down. Decision 13 already flags FFI as the part of Rust this project has not exercised.
+
+**Decision.** B — _accepted 2026-07-29; A rejected on measurement._ No daemon. Rust clients depend on `cs-core` as a library and pay only the query. Every other surface spawns `cs search --json` and pays ~9 ms. C stays in reserve for a Swift-native surface, where the process boundary is more awkward than the ABI.
+
+**Why.** A daemon is a permanent structural cost — a protocol, a lifecycle, and a stale-cache failure mode — bought with a one-off 3 ms saving that the budget does not need. It is also the wrong shape for this system specifically: decision 1 makes the index disposable and rebuilt from scratch, and a resident process caching a database designed to be deleted is a contradiction that shows up as wrong results rather than as an error.
+
+**The cheap middle step, if it comes to it.** Before a daemon there is `cs serve --stdio`: one long-lived process per client, requests on stdin, responses on stdout, the same JSON contract. It removes the spawn cost while leaving socket discovery, daemon lifecycle and cross-client cache coherence out of it, because the client owns the process's lifetime and its death. Try that before anything resident.
+
+**Consequence — the JSON contract is now load-bearing for real.** Argv in, JSON on stdout, and a nonzero exit is part of the interface. Clients must treat "no index yet" and "index being rebuilt" as first-class states, not as transport errors, because they will hit both.
+
+**Revisit when.** Spawn-plus-open p95 passes ~20 ms — far enough above today's ~3 ms that the per-keystroke path stops leaving room for the client to render, most plausibly reached as the index grows well past 293 MB or as `cs` accumulates startup work. Or when a client needs state that only a resident process can hold: a warm embedding model, a live tail of the running session, or an incremental writer that must not be re-established per keystroke. Reaching either means starting with `--stdio`, not with a socket.
 
 ---
 

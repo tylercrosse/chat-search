@@ -708,7 +708,7 @@ mod tests {
     /// A block with its matches already located, as [`Preview::load`] would leave it.
     fn marked(kind: &str, role: &str, id: &str, text: &str, query: &str) -> Block {
         let mut b = block(kind, role, id, text);
-        b.marks = highlight::spans(text, &highlight::query_terms(query));
+        b.marks = highlight::spans(text, &cs_core::Query::exact(query).marking_terms());
         b
     }
 

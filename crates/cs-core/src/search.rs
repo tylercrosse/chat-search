@@ -1,4 +1,5 @@
 use crate::highlight;
+use crate::query::Query;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 
@@ -62,12 +63,6 @@ pub struct Hit {
     pub deleted_upstream: bool,
 }
 
-/// Raw user input is not a valid FTS5 MATCH expression — a bare `-`, `*` or quote is a
-/// syntax error. Tokenise and re-quote each term; implicit AND between them.
-pub fn to_match_expr(query: &str) -> String {
-    to_match_expr_opts(query, false)
-}
-
 /// Shortest token that may be expanded into a prefix match **when it is the only term**.
 ///
 /// A one- or two-character prefix matches a large fraction of the corpus, and BM25 has to
@@ -89,38 +84,6 @@ pub fn to_match_expr(query: &str) -> String {
 /// intersect with.
 pub const MIN_PREFIX_LEN: usize = 3;
 
-/// With `prefix`, the *final* token becomes a prefix match — the typeahead shape, where
-/// every completed word is exact and only the one still being typed is open-ended.
-/// A trailing separator means the last word is finished, so no prefix is applied.
-///
-/// [`MIN_PREFIX_LEN`] gates this only for a lone term, so that adding characters always
-/// narrows. See that constant for why.
-pub fn to_match_expr_opts(query: &str, prefix: bool) -> String {
-    let terms: Vec<String> = query
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .filter(|t| !t.is_empty())
-        .map(|t| t.replace('"', "\"\""))
-        .collect();
-    let ends_open = query
-        .chars()
-        .last()
-        .is_some_and(|c| c.is_alphanumeric() || c == '_');
-    let last = terms.len().saturating_sub(1);
-    terms
-        .iter()
-        .enumerate()
-        .map(|(i, t)| {
-            let long_enough = t.chars().count() >= MIN_PREFIX_LEN || terms.len() > 1;
-            if prefix && ends_open && i == last && long_enough {
-                format!("\"{t}\"*")
-            } else {
-                format!("\"{t}\"")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 /// Prefix on a snippet that is the head of the message rather than the text that matched.
 ///
 /// The old behaviour was to return the head silently and without even the leading `…`, so a
@@ -134,20 +97,7 @@ pub fn to_match_expr_opts(query: &str, prefix: bool) -> String {
 /// text it indexed, which today means fuzzy fallback (chat-search-6eb.10) or a stale index.
 pub const UNLOCATED: &str = "⟨no match⟩ ";
 
-pub fn snippet(text: &str, query: &str, width: usize) -> String {
-    snippet_opts(text, query, false, width)
-}
-
-/// [`snippet`], told whether the ranker treated the final token as a prefix.
-///
-/// The typeahead ranks `lea` as `"lea"*`, which matches a message on the *stem* `learn` — no
-/// message contains the term `lea` at all, so an exact-term highlighter finds nothing on the
-/// path that matters most (chat-search-me9.1: every keystroke is a prefix query).
-pub fn snippet_opts(text: &str, query: &str, prefix: bool, width: usize) -> String {
-    snippet_marked(text, query, prefix, width).0
-}
-
-/// [`snippet_opts`], keeping the offsets it computes anyway.
+/// A window of `text` around what `q` matched, with the offsets it computes anyway.
 ///
 /// The spans index the *returned string*, ellipsis included, so nothing downstream can
 /// re-derive them: the window has been cut out of the message and its whitespace flattened,
@@ -156,8 +106,8 @@ pub fn snippet_opts(text: &str, query: &str, prefix: bool, width: usize) -> Stri
 ///
 /// Empty and [`UNLOCATED`] are one statement made twice, for two audiences — the string says
 /// it to a client reading JSON, the list to a client drawing cells — and they never disagree.
-pub fn snippet_marked(text: &str, query: &str, prefix: bool, width: usize) -> (String, Vec<highlight::Span>) {
-    let terms = marking_terms(query, prefix);
+pub fn snippet_marked(text: &str, q: &Query, width: usize) -> (String, Vec<highlight::Span>) {
+    let terms = q.marking_terms();
     let (out, spans) = highlight::snippet(text, &terms, width);
     if !spans.is_empty() {
         return (out, spans);
@@ -171,42 +121,13 @@ pub fn snippet_marked(text: &str, query: &str, prefix: bool, width: usize) -> (S
     (format!("{UNLOCATED}{head}"), Vec::new())
 }
 
-/// The terms a highlighter should mark with, for a query the ranker saw with `prefix`.
-///
-/// Public because the TUI preview marks whole messages rather than snippets and so cannot go
-/// through [`snippet_marked`], and this rule may not be spelled twice: it decides whether the
-/// query's final token is still open, and a preview that answered that differently from the
-/// ranker would label every in-progress word unmatched on exactly the path where every
-/// keystroke is a prefix query.
-pub fn marking_terms(query: &str, prefix: bool) -> Vec<String> {
-    let mut terms = highlight::query_terms(query);
-    if !prefix {
-        return terms;
-    }
-    // Read back off the expression the ranker actually used rather than re-deriving the rule:
-    // MIN_PREFIX_LEN and "is the final token still open" live in one place and have already
-    // been got wrong once. The tail check also covers the case where filter stripping removed
-    // the query's last word, so the open token is not a marking term.
-    let expr = to_match_expr_opts(&query.to_lowercase(), true);
-    if let Some(last) = terms.last_mut() {
-        if expr.ends_with(&format!("\"{last}\"*")) {
-            last.push('*');
-        }
-    }
-    terms
-}
-
 /// How to run a search, as distinct from what was asked. The query text itself moves to
 /// [`crate::query::Query`]; what remains here is tuning the caller chooses.
-pub struct SearchOptions<'a> {
-    pub text: &'a str,
+pub struct SearchOptions {
     pub limit: i64,
     pub field: Field,
-    pub source: Option<&'a str>,
     /// Include messages on branches that were edited away.
     pub include_off_path: bool,
-    /// Treat the final token as a prefix, for typeahead.
-    pub prefix: bool,
     /// The clock the recency decay is measured against. Required rather than defaulted —
     /// see [`SearchOptions::new`].
     pub now_ms: i64,
@@ -220,21 +141,18 @@ pub struct SearchOptions<'a> {
     pub nested: usize,
 }
 
-impl<'a> SearchOptions<'a> {
+impl SearchOptions {
     /// `now_ms` is an argument rather than a defaulted field because zero does not mean
     /// "the epoch" here, it means "no decay at all": the score divisor is
     /// `1.0 + decay * max(0, now_ms - ts) / YEAR`, and with `now_ms` at zero the `max` is
     /// zero for every real timestamp, so the divisor is exactly 1.0. That silence cost
     /// [`explain`] its whole answer — it reported ranks from a recency-blind ranker while
     /// telling you a shipping one had a ranking problem.
-    pub fn new(text: &'a str, now_ms: i64) -> Self {
+    pub fn new(now_ms: i64) -> Self {
         Self {
-            text,
             limit: 10,
             field: Field::Prose,
-            source: None,
             include_off_path: false,
-            prefix: false,
             now_ms,
             repeat_weight: REPEAT_WEIGHT,
             decay: DECAY,
@@ -243,17 +161,8 @@ impl<'a> SearchOptions<'a> {
     }
 }
 
-/// True when a query carries no searchable term — empty, whitespace, or only punctuation.
-///
-/// Checked against the *tokenised* form rather than the raw string, because `"-"` and `"??"`
-/// are non-empty input that still produce no terms, and an empty FTS5 MATCH expression is a
-/// syntax error rather than an empty result.
-pub fn is_blank(query: &str) -> bool {
-    to_match_expr_opts(query, false).is_empty()
-}
-
-pub fn search(conn: &Connection, q: &SearchOptions) -> rusqlite::Result<Vec<Hit>> {
-    if is_blank(q.text) {
+pub fn search(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::Result<Vec<Hit>> {
+    if !query.is_searchable() {
         return Ok(Vec::new());
     }
     let table = q.field.table();
@@ -275,10 +184,17 @@ pub fn search(conn: &Connection, q: &SearchOptions) -> rusqlite::Result<Vec<Hit>
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(
-        params![q.now_ms, to_match_expr_opts(q.text, q.prefix), q.include_off_path as i64, q.source, q.limit, q.decay],
+        params![
+            q.now_ms,
+            query.match_expr(),
+            q.include_off_path as i64,
+            query.source_filter(),
+            q.limit,
+            q.decay
+        ],
         |r| {
             let text: String = r.get(5)?;
-            let (snippet, snippet_spans) = snippet_marked(&text, q.text, q.prefix, 160);
+            let (snippet, snippet_spans) = snippet_marked(&text, query, 160);
             Ok(Hit {
                 msg_id: r.get(0)?,
                 conv_id: r.get(1)?,
@@ -329,7 +245,7 @@ pub struct Explain {
 pub fn explain(
     conn: &Connection,
     conv_id: &str,
-    query: &str,
+    text: &str,
     now_ms: i64,
 ) -> rusqlite::Result<Explain> {
     let exists: bool =
@@ -361,7 +277,7 @@ pub fn explain(
     // Per-term presence via LIKE rather than MATCH: this deliberately bypasses the
     // tokenizer, so a term the stemmer mangled still shows up as present in the text.
     let mut term_hits = Vec::new();
-    for term in query.split_whitespace() {
+    for term in text.split_whitespace() {
         let n: i64 = conn.query_row(
             "SELECT COUNT(*) FROM message WHERE conv_id=?1 AND kind='prose'
                AND lower(text) LIKE '%' || lower(?2) || '%'",
@@ -371,13 +287,12 @@ pub fn explain(
         term_hits.push((term.to_string(), n));
     }
 
+    // Exact rather than typeahead: `cs explain` is asked about a query someone finished
+    // typing, and the prefix reading would answer about a different expression.
     let ranked = search(
         conn,
-        &SearchOptions {
-            limit: 500,
-            include_off_path: true,
-            ..SearchOptions::new(query, now_ms)
-        },
+        &Query::exact(text),
+        &SearchOptions { limit: 500, include_off_path: true, ..SearchOptions::new(now_ms) },
     )?;
     let best_rank = ranked.iter().position(|h| h.conv_id == conv_id);
     let best_score = best_rank.map(|i| ranked[i].score);
@@ -420,12 +335,26 @@ mod tests {
     /// want decay off — named rather than a bare `0`, which is what made it a trap.
     const NO_DECAY: i64 = 0;
 
+    /// The snippet a finished query produces, which is what most of these assert on.
+    fn snippet(text: &str, query: &str, width: usize) -> String {
+        snippet_marked(text, &Query::exact(query), width).0
+    }
+
+    /// The snippet a query still being typed produces.
+    fn snippet_typed(text: &str, query: &str, width: usize) -> String {
+        snippet_marked(text, &Query::typeahead(query), width).0
+    }
+
+    fn opts() -> SearchOptions {
+        SearchOptions { limit: 10, ..SearchOptions::new(NO_DECAY) }
+    }
+
     #[test]
     fn match_expr_survives_punctuation_that_would_be_a_syntax_error() {
-        assert_eq!(to_match_expr("foo bar"), r#""foo" "bar""#);
-        assert_eq!(to_match_expr("rust -- borrow*"), r#""rust" "borrow""#);
-        assert_eq!(to_match_expr(r#"say "hi""#), r#""say" "hi""#);
-        assert_eq!(to_match_expr("   "), "");
+        assert_eq!(Query::exact("foo bar").match_expr(), r#""foo" "bar""#);
+        assert_eq!(Query::exact("rust -- borrow*").match_expr(), r#""rust" "borrow""#);
+        assert_eq!(Query::exact(r#"say "hi""#).match_expr(), r#""say" "hi""#);
+        assert_eq!(Query::exact("   ").match_expr(), "");
     }
 
     #[test]
@@ -501,13 +430,14 @@ mod tests {
         let conn = indexed(&cases.map(|(_, text)| text));
 
         for (query, text) in cases {
-            let hits = search(&conn, &SearchOptions { limit: 10, ..SearchOptions::new(query, NO_DECAY) }).unwrap();
+            let parsed = Query::exact(query);
+            let hits = search(&conn, &parsed, &opts()).unwrap();
             let hit = hits
                 .iter()
                 .find(|h| h.msg_id.ends_with(":m0") && h.snippet.contains(&text[..12]))
                 .unwrap_or_else(|| panic!("{query:?} did not rank {text:?}"));
 
-            let marks = highlight::spans(text, &highlight::query_terms(query));
+            let marks = highlight::spans(text, &parsed.marking_terms());
             assert!(!marks.is_empty(), "{query:?} ranked {text:?} and marked nothing");
             assert!(
                 !hit.snippet.starts_with(UNLOCATED),
@@ -537,11 +467,11 @@ mod tests {
         // contains the term `lea`, so the exact-term path marks nothing and every in-progress
         // word in the TUI would carry the "no match" label.
         let text = "I learned about the borrow checker";
-        assert_eq!(to_match_expr_opts("lea", true), "\"lea\"*", "premise of this test");
-        assert!(!snippet_opts(text, "lea", true, 160).starts_with(UNLOCATED));
-        assert!(snippet_opts(text, "lea", false, 160).starts_with(UNLOCATED), "exact `lea`");
+        assert_eq!(Query::typeahead("lea").match_expr(), "\"lea\"*", "premise of this test");
+        assert!(!snippet_typed(text, "lea", 160).starts_with(UNLOCATED));
+        assert!(snippet(text, "lea", 160).starts_with(UNLOCATED), "exact `lea`");
         // Below MIN_PREFIX_LEN the ranker does not open the token either, so neither does this.
-        assert!(snippet_opts(text, "le", true, 160).starts_with(UNLOCATED));
+        assert!(snippet_typed(text, "le", 160).starts_with(UNLOCATED));
     }
 
     #[test]
@@ -549,14 +479,14 @@ mod tests {
         // `commits` ranks this on the stem, and the word in the text is `Commit` — so a
         // renderer holding only the string has nothing to search it for. These are the
         // offsets it has to be given instead.
-        let (out, marks) = snippet_marked("Commit current changes", "commits", false, 160);
+        let (out, marks) = snippet_marked("Commit current changes", &Query::exact("commits"), 160);
         assert_eq!(marks.len(), 1, "{out:?} {marks:?}");
         assert_eq!(&out[marks[0].start..marks[0].end], "Commit");
 
         // And through a window, where the offsets stop being the message's own: the string
         // starts with an ellipsis and the match sits hundreds of bytes into the text.
         let text = "alpha ".repeat(100) + "café " + &"omega ".repeat(100);
-        let (out, marks) = snippet_marked(&text, "cafe", false, 40);
+        let (out, marks) = snippet_marked(&text, &Query::exact("cafe"), 40);
         assert_eq!(marks.len(), 1, "{out:?}");
         assert_eq!(&out[marks[0].start..marks[0].end], "café");
     }
@@ -566,11 +496,11 @@ mod tests {
         // Both channels have to say the same thing. Spans surviving here would be the offsets
         // of the *unlabelled* window, so every one would be short by the label's width and
         // would mark whatever now sits at those bytes — including the label itself.
-        let (out, marks) = snippet_marked("Commit current changes", "elephant", false, 160);
+        let (out, marks) = snippet_marked("Commit current changes", &Query::exact("elephant"), 160);
         assert!(out.starts_with(UNLOCATED), "got: {out}");
         assert!(marks.is_empty(), "{marks:?}");
 
-        let (out, marks) = snippet_marked("Commit current changes", "", false, 160);
+        let (out, marks) = snippet_marked("Commit current changes", &Query::exact(""), 160);
         assert!(out.starts_with(UNLOCATED) && marks.is_empty());
     }
 
@@ -578,7 +508,7 @@ mod tests {
     fn a_hit_carries_the_offsets_its_own_snippet_was_marked_with() {
         // The two fields are built from one call, so they cannot describe different windows.
         let conn = indexed(&["Commit current changes before the rebase"]);
-        let hits = search(&conn, &SearchOptions::new("commits", NO_DECAY)).unwrap();
+        let hits = search(&conn, &Query::exact("commits"), &opts()).unwrap();
         let h = hits.first().expect("`commits` ranks the row");
         assert_eq!(h.snippet_spans.len(), 1, "{:?}", h.snippet);
         let s = h.snippet_spans[0];
@@ -591,7 +521,7 @@ mod tests {
         // added but never renamed or dropped. Spelled out rather than derived from the struct,
         // because a rename would otherwise rename this list along with the contract.
         let conn = indexed(&["Commit current changes before the rebase"]);
-        let hits = search(&conn, &SearchOptions::new("commits", NO_DECAY)).unwrap();
+        let hits = search(&conn, &Query::exact("commits"), &opts()).unwrap();
         let json = serde_json::to_value(&hits[0]).unwrap();
         for field in [
             "conv_id", "msg_id", "source", "title", "role", "kind", "ts", "score", "snippet",
@@ -678,7 +608,11 @@ pub const REPEAT_WEIGHT: f64 = 0.25;
 /// characters return noise rather than a narrowing list. Recency is the only ranking
 /// available without a query and it is also the one people expect — the conversation you
 /// want is usually among the last few you had.
-pub fn recent(conn: &Connection, q: &SearchOptions) -> rusqlite::Result<Vec<Group>> {
+///
+/// Takes the two values it reads rather than a whole [`SearchOptions`]. The old signature
+/// accepted every option and silently ignored seven of them, so a caller setting `decay` here
+/// had no way to learn it did nothing.
+pub fn recent(conn: &Connection, source: Option<&str>, limit: i64) -> rusqlite::Result<Vec<Group>> {
     let mut stmt = conn.prepare(
         "SELECT id, source, title, ended_at, user_turns, resume_cmd, deleted_upstream_at,
                 msg_count, prose_count, cwd
@@ -688,7 +622,7 @@ pub fn recent(conn: &Connection, q: &SearchOptions) -> rusqlite::Result<Vec<Grou
          ORDER BY ended_at IS NULL, ended_at DESC
          LIMIT ?2",
     )?;
-    let rows = stmt.query_map(params![q.source, q.limit], |r| {
+    let rows = stmt.query_map(params![source, limit], |r| {
         let ended_at: Option<i64> = r.get(3)?;
         Ok(Group {
             conv_id: r.get(0)?,
@@ -718,9 +652,16 @@ pub fn recent(conn: &Connection, q: &SearchOptions) -> rusqlite::Result<Vec<Grou
 /// Scores are pulled ungrouped and folded here rather than in SQL: FTS5 auxiliary functions
 /// like bm25() cannot be used through a CTE or subquery, so the grouping has to happen after
 /// the rows come back.
-pub fn search_grouped(conn: &Connection, q: &SearchOptions) -> rusqlite::Result<Vec<Group>> {
-    if is_blank(q.text) {
-        return recent(conn, q);
+pub fn search_grouped(
+    conn: &Connection,
+    query: &Query,
+    q: &SearchOptions,
+) -> rusqlite::Result<Vec<Group>> {
+    // Both `Empty` and `TooShort` fall back to recency. The client decides how to *say* which
+    // of the two it is showing; the routing is the same, and doing it here is what lets the
+    // TUI stop blanking its own query text to force this branch.
+    if !query.is_searchable() {
+        return recent(conn, query.source_filter(), q.limit);
     }
     // Pull well beyond `limit` conversations' worth of messages, since one conversation can
     // account for many hits and would otherwise crowd out the tail.
@@ -750,9 +691,9 @@ pub fn search_grouped(conn: &Connection, q: &SearchOptions) -> rusqlite::Result<
     let rows = stmt.query_map(
         params![
             q.now_ms,
-            to_match_expr_opts(q.text, q.prefix),
+            query.match_expr(),
             q.include_off_path as i64,
-            q.source,
+            query.source_filter(),
             ceiling,
             q.decay
         ],
@@ -802,7 +743,7 @@ pub fn search_grouped(conn: &Connection, q: &SearchOptions) -> rusqlite::Result<
     });
     ranked.truncate(q.limit as usize);
 
-    hydrate(conn, q, ranked)
+    hydrate(conn, query, ranked)
 }
 
 /// One conversation that survived ranking, before its display columns are fetched.
@@ -855,7 +796,7 @@ pub fn match_density(seqs: &[i64], msg_count: i64) -> String {
 /// it — are touched only for rows that survived. One prepared statement reused across the
 /// survivors beats an `IN (...)` list, which would need rebuilding per query and lose the
 /// statement cache.
-fn hydrate(conn: &Connection, q: &SearchOptions, ranked: Vec<Ranked>) -> rusqlite::Result<Vec<Group>> {
+fn hydrate(conn: &Connection, query: &Query, ranked: Vec<Ranked>) -> rusqlite::Result<Vec<Group>> {
     let mut meta = conn.prepare_cached(
         "SELECT source, title, resume_cmd, deleted_upstream_at, ended_at, user_turns,
                 msg_count, prose_count, cwd
@@ -891,7 +832,7 @@ fn hydrate(conn: &Connection, q: &SearchOptions, ranked: Vec<Ranked>) -> rusqlit
         for id in shown {
             if let Ok(h) = msg.query_row(params![id], |r| {
                 let text: String = r.get(5)?;
-                let (snippet, snippet_spans) = snippet_marked(&text, q.text, q.prefix, 160);
+                let (snippet, snippet_spans) = snippet_marked(&text, query, 160);
                 Ok(Hit {
                     msg_id: r.get(0)?,
                     conv_id: r.get(1)?,
@@ -946,39 +887,6 @@ mod group_tests {
     const NO_DECAY: i64 = 0;
 
     #[test]
-    fn adding_characters_never_widens_the_result_set() {
-        // Reported from the TUI 2026-07-30: `deep le` returned 6 conversations and
-        // `deep lea` returned over 100. The floor was being applied to the final token of a
-        // multi-term query, so `le` was matched as a literal word while `lea` became a
-        // prefix — the semantics flipped mid-word and the set grew.
-        assert_eq!(to_match_expr_opts("deep l", true), "\"deep\" \"l\"*");
-        assert_eq!(to_match_expr_opts("deep le", true), "\"deep\" \"le\"*");
-        assert_eq!(to_match_expr_opts("deep lea", true), "\"deep\" \"lea\"*");
-    }
-
-    #[test]
-    fn a_lone_short_term_keeps_the_floor() {
-        // Nothing to intersect with, so the posting list is unbounded and the floor is the
-        // only thing standing between a keystroke and scoring a large fraction of the corpus.
-        assert_eq!(to_match_expr_opts("l", true), "\"l\"");
-        assert_eq!(to_match_expr_opts("le", true), "\"le\"");
-        assert_eq!(to_match_expr_opts("lea", true), "\"lea\"*");
-    }
-
-    #[test]
-    fn prefix_applies_only_to_an_unfinished_final_token() {
-        assert_eq!(to_match_expr_opts("borrow check", true), r#""borrow" "check"*"#);
-        // trailing space means that word is finished
-        assert_eq!(to_match_expr_opts("borrow check ", true), r#""borrow" "check""#);
-        // below the floor, matched exactly: a 1-2 char prefix matches most of the corpus
-        // and BM25 must score every row before sorting
-        assert_eq!(to_match_expr_opts("ho", true), r#""ho""#);
-        assert_eq!(to_match_expr_opts("hov", true), r#""hov"*"#);
-        // off by default, so ordinary search is unaffected
-        assert_eq!(to_match_expr_opts("borrow check", false), r#""borrow" "check""#);
-    }
-
-    #[test]
     fn damping_sits_between_best_hit_and_total() {
         // bm25 is negative; better is more negative
         let damped = |ss: &[f64]| {
@@ -1000,15 +908,6 @@ mod group_tests {
     }
 
     #[test]
-    fn a_query_with_no_terms_is_blank_however_it_is_spelled() {
-        for q in ["", "   ", "-", "??", "  *  "] {
-            assert!(is_blank(q), "{q:?} yields no FTS terms, so it cannot be MATCHed");
-        }
-        assert!(!is_blank("hov"));
-        assert!(!is_blank("a"));
-    }
-
-    #[test]
     fn a_blank_query_falls_back_to_recent_conversations() {
         let conn = crate::open(":memory:").unwrap();
         // ended_at descending, with the NULL sorted last rather than first
@@ -1021,10 +920,10 @@ mod group_tests {
             .unwrap();
         }
 
-        let q = SearchOptions { limit: 10, nested: 3, ..SearchOptions::new("", NO_DECAY) };
+        let q = SearchOptions { limit: 10, nested: 3, ..SearchOptions::new(NO_DECAY) };
         // An empty MATCH expression is a syntax error, so the point is that this does not
         // merely return nothing — it returns something useful, which is what a TUI opens on.
-        let groups = search_grouped(&conn, &q).unwrap();
+        let groups = search_grouped(&conn, &Query::typeahead(""), &q).unwrap();
         let ids: Vec<_> = groups.iter().map(|g| g.conv_id.as_str()).collect();
         assert_eq!(ids, ["c:a", "c:c", "c:b", "c:z"]);
         assert!(groups.iter().all(|g| g.hits.is_empty()), "no query means no hits to nest");
@@ -1035,7 +934,7 @@ mod group_tests {
         assert!(groups[3].ended_date.is_none(), "no ended_at, no day to name");
 
         // and the flat path stays empty rather than raising
-        assert!(search(&conn, &q).unwrap().is_empty());
+        assert!(search(&conn, &Query::typeahead(""), &q).unwrap().is_empty());
     }
 
     #[test]
@@ -1049,11 +948,11 @@ mod group_tests {
             )
             .unwrap();
         }
-        let got = recent(&conn, &SearchOptions { limit: 10, source: Some("codex"), ..SearchOptions::new("", NO_DECAY) }).unwrap();
+        let got = recent(&conn, Some("codex"), 10).unwrap();
         assert_eq!(got.len(), 2);
         assert!(got.iter().all(|g| g.source == "codex"));
 
-        let capped = recent(&conn, &SearchOptions { limit: 1, ..SearchOptions::new("", NO_DECAY) }).unwrap();
+        let capped = recent(&conn, None, 1).unwrap();
         assert_eq!(capped.len(), 1);
     }
 
@@ -1085,7 +984,8 @@ mod group_tests {
         )
         .unwrap();
 
-        let groups = search_grouped(&conn, &SearchOptions { limit: 5, nested: 3, ..SearchOptions::new("borrow", NO_DECAY) }).unwrap();
+        let opts = SearchOptions { limit: 5, nested: 3, ..SearchOptions::new(NO_DECAY) };
+        let groups = search_grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].ended_at, Some(ended));
         assert_eq!(groups[0].ended_date, crate::time::local_ymd(ended));
@@ -1157,9 +1057,9 @@ mod group_tests {
         let top = |w: f64| {
             let q = SearchOptions {
                 limit: 10, nested: 1, repeat_weight: w, decay: 0.0,
-                ..SearchOptions::new("widget", NO_DECAY)
+                ..SearchOptions::new(NO_DECAY)
             };
-            search_grouped(&conn, &q).unwrap()[0].conv_id.clone()
+            search_grouped(&conn, &Query::exact("widget"), &q).unwrap()[0].conv_id.clone()
         };
         assert_eq!(top(0.0), "c:one-strong", "pure max: the single best hit is the whole score");
         assert_eq!(top(1.0), "c:many-weak", "pure sum: volume wins, which is what damping prevents");
@@ -1179,9 +1079,9 @@ mod group_tests {
         let top = |d: f64| {
             let q = SearchOptions {
                 limit: 10, nested: 1, decay: d, now_ms: 3 * year,
-                ..SearchOptions::new("widget", NO_DECAY)
+                ..SearchOptions::new(NO_DECAY)
             };
-            search_grouped(&conn, &q).unwrap()[0].conv_id.clone()
+            search_grouped(&conn, &Query::exact("widget"), &q).unwrap()[0].conv_id.clone()
         };
         assert_eq!(top(0.0), "c:a-old", "recency-blind: equal scores, tie broken by id");
         assert_eq!(top(DECAY), "c:b-new", "three years of age is enough to lose the top slot");

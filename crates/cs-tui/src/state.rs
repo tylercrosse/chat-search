@@ -110,25 +110,21 @@ impl App {
         // while a query is still too short to mean anything.
         let text = if self.holding() { String::new() } else { self.query.clone() };
         let t0 = std::time::Instant::now();
-        let q = cs_core::SearchOptions {
-            limit: self.limit,
-            source: self.source.as_deref(),
-            // The TUI is typeahead by definition, so the word being typed is always open-ended.
-            prefix: true,
-            ..cs_core::SearchOptions::new(&text, self.now)
-        };
+        // The TUI is typeahead by definition, so the word being typed is always open-ended.
+        let query = cs_core::Query::typeahead(&text).with_source(self.source.as_deref());
+        let q = cs_core::SearchOptions { limit: self.limit, ..cs_core::SearchOptions::new(self.now) };
         // `nested = 0`: no snippets. Building them is 5-20x the cost of the ranking itself
         // — measured on the 172k-message index, `pro` goes 34 ms to 448 ms and `learning`
         // 8 ms to 164 ms — because each one inserts its message into a scratch fts5 table so
         // the highlighter can agree with the ranker (chat-search-6eb.20, and 6eb.30 for the
         // schema change that would remove the insert). The row model draws hits only for an
         // expanded conversation, so per keystroke this pays for 150 snippets and draws none.
-        match cs_core::search_grouped(&self.conn, &q) {
+        match cs_core::search_grouped(&self.conn, &query, &q) {
             Ok(groups) => {
                 self.last_ms = t0.elapsed().as_secs_f64() * 1000.0;
                 self.groups = groups;
                 self.status = None;
-                self.rows = rows::build(&self.groups, &self.expanded, cs_core::is_blank(&text));
+                self.rows = rows::build(&self.groups, &self.expanded, query.mode() == cs_core::Mode::Empty);
                 // A query edit is a new question, so the cursor belongs on the best answer to
                 // it. Following the previously-selected conversation here — which an earlier
                 // version did — drags the cursor down the ranking as the query narrows: type
@@ -154,7 +150,7 @@ impl App {
     /// conversations fallback (`6eb.5`) rather than matches. Checked against the tokenised
     /// form: `"-"` and `"??"` are non-empty input that still produce no terms.
     pub fn is_blank(&self) -> bool {
-        cs_core::is_blank(&self.query)
+        cs_core::Query::typeahead(&self.query).mode() == cs_core::Mode::Empty
     }
 
     /// Something has been typed, but not yet enough to search on.
@@ -207,7 +203,7 @@ impl App {
         }
         // `true` because the TUI is typeahead by definition and `search` below ranks with the
         // final token open; the preview has to mark what that ranking actually matched.
-        cs_core::search::marking_terms(&self.query, true)
+        cs_core::Query::typeahead(&self.query).marking_terms()
     }
 
     pub fn sync_preview(&mut self) {
@@ -296,17 +292,16 @@ impl App {
     /// snippets should show the conversation without them, not empty the list.
     fn hydrate_hits(&mut self) {
         let text = if self.holding() { String::new() } else { self.query.clone() };
-        if cs_core::is_blank(&text) {
+        let query = cs_core::Query::typeahead(&text).with_source(self.source.as_deref());
+        if query.mode() == cs_core::Mode::Empty {
             return;
         }
         let q = cs_core::SearchOptions {
             limit: self.limit,
-            source: self.source.as_deref(),
-            prefix: true,
             nested: rows::MAX_HITS,
-            ..cs_core::SearchOptions::new(&text, self.now)
+            ..cs_core::SearchOptions::new(self.now)
         };
-        if let Ok(groups) = cs_core::search_grouped(&self.conn, &q) {
+        if let Ok(groups) = cs_core::search_grouped(&self.conn, &query, &q) {
             self.groups = groups;
         }
     }

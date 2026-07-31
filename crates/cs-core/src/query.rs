@@ -14,11 +14,16 @@
 //! learn deep learn     ranker: "learn" "deep" "learn"*     marker: ["learn", "deep"]
 //! ```
 //!
-//! The first is a filter keyword the ranker does not know is a filter, so `agent:codex`
-//! becomes two required words and every row it returns is labelled ⟨no match⟩. The second is
-//! the bridge failing: `query_terms` deduplicates, so its last term is `deep` while the
-//! expression ends with `"learn"*`, the tail check misses, and a row that ranked on the
-//! stem expansion is marked with the exact term or not at all.
+//! The first is a filter keyword the ranker did not know was a filter, so it became two
+//! required words. Run against the 2,976-conversation index, `agent:codex borrow` returned 11
+//! rows of which **10 were claude-code** — the exact opposite of what was asked for, because
+//! what it really searched for was prose containing the words "agent" and "codex". A query of
+//! filters alone degrades further: `agent:codex` left the marker with no terms at all, so all
+//! 20 rows came back labelled ⟨no match⟩.
+//!
+//! The second is the bridge failing: `query_terms` deduplicates, so its last term is `deep`
+//! while the expression ends with `"learn"*`, the tail check misses, and a row that ranked on
+//! the stem expansion is marked with the exact term or not at all.
 //!
 //! Both come from one cause — two readings of one string — so the fix is one reading. The
 //! MATCH expression and the marking terms are now two renderings of the same [`Query`], and
@@ -197,6 +202,27 @@ impl Query {
         };
 
         Self { raw: text.to_string(), terms, filters, expand_last, mode }
+    }
+
+    /// Fold a structured source selection — a `--source` flag, a facet click — into the
+    /// query's own filters.
+    ///
+    /// This is the one desugaring point. Keeping a selection beside the query as a second
+    /// piece of state is what `TUI-DESIGN.md` §5 records fast-resume paying six reconciliation
+    /// methods for; a filter has exactly one home, and this is how a flag reaches it. A source
+    /// already named in the text wins, since the user typed it more recently than they passed
+    /// a flag.
+    pub fn with_source(mut self, source: Option<&str>) -> Self {
+        if let Some(source) = source {
+            if self.source_filter().is_none() {
+                self.filters.push(Filter {
+                    facet: Facet::Agent,
+                    value: source.to_lowercase(),
+                    negated: false,
+                });
+            }
+        }
+        self
     }
 
     /// The text as typed, for redisplay. Not what gets searched — see [`Query::match_expr`].
@@ -430,6 +456,97 @@ mod tests {
     fn case_is_folded_before_anything_else_looks_at_the_query() {
         assert_eq!(Query::typeahead("Agent:Codex Borrow").source_filter(), Some("codex"));
         assert_eq!(Query::typeahead("Agent:Codex Borrow").terms(), ["borrow"]);
+    }
+
+    #[test]
+    fn the_expressions_this_parser_produces_are_pinned() {
+        // Every row was produced by `search::to_match_expr_opts`, the code this module
+        // replaced, and checked against it byte for byte before that function was deleted
+        // (the throwaway `tests/differential.rs` in the preceding commit). Keeping the corpus
+        // as literals is what survives the deletion: a future change to the tokenising rules
+        // has to state which of these it means to alter.
+        let cases: [(&str, &str, &str); 31] = [
+            // query, typeahead expression, exact expression
+            ("borrow", "\"borrow\"*", "\"borrow\""),
+            ("borrow ", "\"borrow\"", "\"borrow\""),
+            ("le", "\"le\"", "\"le\""),
+            ("lea", "\"lea\"*", "\"lea\""),
+            ("deep le", "\"deep\" \"le\"*", "\"deep\" \"le\""),
+            ("deep learn", "\"deep\" \"learn\"*", "\"deep\" \"learn\""),
+            ("learn deep learn", "\"learn\" \"deep\" \"learn\"*", "\"learn\" \"deep\" \"learn\""),
+            ("rust async", "\"rust\" \"async\"*", "\"rust\" \"async\""),
+            ("a-b_c", "\"a\" \"b_c\"*", "\"a\" \"b_c\""),
+            ("say \"hi\"", "\"say\" \"hi\"", "\"say\" \"hi\""),
+            ("*", "", ""),
+            ("-", "", ""),
+            ("??", "", ""),
+            ("", "", ""),
+            ("   ", "", ""),
+            ("Borrow Checker", "\"borrow\" \"checker\"*", "\"borrow\" \"checker\""),
+            ("the", "\"the\"*", "\"the\""),
+            ("emb", "\"emb\"*", "\"emb\""),
+            ("rus", "\"rus\"*", "\"rus\""),
+            ("café", "\"café\"*", "\"café\""),
+            ("x", "\"x\"", "\"x\""),
+            ("xy", "\"xy\"", "\"xy\""),
+            ("xyz", "\"xyz\"*", "\"xyz\""),
+            ("a b c d e", "\"a\" \"b\" \"c\" \"d\" \"e\"*", "\"a\" \"b\" \"c\" \"d\" \"e\""),
+            ("under_score", "\"under_score\"*", "\"under_score\""),
+            ("123", "\"123\"*", "\"123\""),
+            ("-borrow", "\"borrow\"*", "\"borrow\""),
+            ("a.b.c", "\"a\" \"b\" \"c\"*", "\"a\" \"b\" \"c\""),
+            ("foo/bar", "\"foo\" \"bar\"*", "\"foo\" \"bar\""),
+            ("agent:codex borrow", "\"borrow\"*", "\"borrow\""),
+            ("dir:web-app rust", "\"rust\"*", "\"rust\""),
+        ];
+        for (q, typeahead, exact) in cases {
+            assert_eq!(Query::typeahead(q).match_expr(), typeahead, "typeahead {q:?}");
+            assert_eq!(Query::exact(q).match_expr(), exact, "exact {q:?}");
+        }
+    }
+
+    // ---- lifted from search.rs, where these lived while the rules did ----
+
+    #[test]
+    fn adding_characters_never_widens_the_result_set() {
+        // Reported from the TUI 2026-07-30: `deep le` returned 6 conversations and
+        // `deep lea` returned over 100. The floor was being applied to the final token of a
+        // multi-term query, so `le` was matched as a literal word while `lea` became a
+        // prefix — the semantics flipped mid-word and the set grew.
+        assert_eq!(Query::typeahead("deep l").match_expr(), "\"deep\" \"l\"*");
+        assert_eq!(Query::typeahead("deep le").match_expr(), "\"deep\" \"le\"*");
+        assert_eq!(Query::typeahead("deep lea").match_expr(), "\"deep\" \"lea\"*");
+    }
+
+    #[test]
+    fn a_lone_short_term_keeps_the_floor() {
+        // Nothing to intersect with, so the posting list is unbounded and the floor is the
+        // only thing standing between a keystroke and scoring a large fraction of the corpus.
+        assert_eq!(Query::typeahead("l").match_expr(), "\"l\"");
+        assert_eq!(Query::typeahead("le").match_expr(), "\"le\"");
+        assert_eq!(Query::typeahead("lea").match_expr(), "\"lea\"*");
+    }
+
+    #[test]
+    fn prefix_applies_only_to_an_unfinished_final_token() {
+        assert_eq!(Query::typeahead("borrow check").match_expr(), r#""borrow" "check"*"#);
+        // trailing space means that word is finished
+        assert_eq!(Query::typeahead("borrow check ").match_expr(), r#""borrow" "check""#);
+        // below the floor, matched exactly: a 1-2 char prefix matches most of the corpus
+        // and BM25 must score every row before sorting
+        assert_eq!(Query::typeahead("ho").match_expr(), r#""ho""#);
+        assert_eq!(Query::typeahead("hov").match_expr(), r#""hov"*"#);
+        // off by default, so ordinary search is unaffected
+        assert_eq!(Query::exact("borrow check").match_expr(), r#""borrow" "check""#);
+    }
+
+    #[test]
+    fn a_query_with_no_terms_produces_no_expression_however_it_is_spelled() {
+        for q in ["", "   ", "-", "??", "  *  "] {
+            assert_eq!(Query::exact(q).match_expr(), "", "{q:?} yields no FTS terms, so it cannot be MATCHed");
+        }
+        assert_ne!(Query::exact("hov").match_expr(), "");
+        assert_ne!(Query::exact("a").match_expr(), "");
     }
 
     #[test]

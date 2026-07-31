@@ -64,11 +64,6 @@ use std::cell::RefCell;
 /// fails if the two drift.
 const TOKENIZER: &str = "porter unicode61 remove_diacritics 2";
 
-/// Filter keywords of the query DSL (`chat-search-6eb.11`), which name a facet rather than
-/// text to find. `agent:codex learning` must highlight `learning` and neither `agent` nor
-/// `codex` — the row was not ranked on those words.
-const FILTERS: [&str; 3] = ["agent:", "dir:", "date:"];
-
 /// An fts5 expression matching text that contains **any** of `terms`.
 ///
 /// OR, where the ranker ANDs, for the reason [`spans`] gives: on the message that ranked, every
@@ -89,33 +84,6 @@ fn any_expr(terms: &[String]) -> String {
 pub struct Span {
     pub start: usize,
     pub end: usize,
-}
-
-/// The query's terms, reduced the way the index reduces them.
-///
-/// Filter keywords are dropped: once the DSL lands (`chat-search-6eb.11`) a query like
-/// `agent:codex learning` must not highlight the words "agent" and "codex".
-///
-/// Reduction stops at case folding and splitting, because the reductions that follow —
-/// diacritic folding and stemming — belong to the tokenizer and are applied by [`spans`],
-/// which runs the real one. Doing them here in Rust is the trap this module exists to avoid.
-pub fn query_terms(query: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    for word in query.to_lowercase().split_whitespace() {
-        // A leading `-` is negation in the DSL; either way the keyword is not searched text.
-        let bare = word.strip_prefix('-').unwrap_or(word);
-        if FILTERS.iter().any(|f| bare.starts_with(f)) {
-            continue;
-        }
-        // Split the same way `search::to_match_expr_opts` does, so a term reaching the index
-        // and a term reaching the highlighter came out of one rule.
-        for term in bare.split(|c: char| !c.is_alphanumeric() && c != '_') {
-            if !term.is_empty() && !out.iter().any(|t| t == term) {
-                out.push(term.to_string());
-            }
-        }
-    }
-    out
 }
 
 /// Every span of `text` whose token matches one of `terms`.
@@ -452,7 +420,7 @@ mod tests {
     use super::*;
 
     fn terms(q: &str) -> Vec<String> {
-        query_terms(q)
+        crate::Query::exact(q).marking_terms()
     }
 
     #[test]

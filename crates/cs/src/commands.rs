@@ -160,18 +160,29 @@ pub fn search(
     let db_path = db_path.unwrap_or_else(|| cfg.default_db());
     let t0 = std::time::Instant::now();
     let conn = rusqlite_open(&db_path)?;
+    // `--source` desugars into the query's own filters rather than living beside them: one
+    // home for a filter, whether it arrived as a flag or as `agent:` in the text.
+    let parsed = if prefix { cs_core::Query::typeahead(text) } else { cs_core::Query::exact(text) }
+        .with_source(source);
     let q = cs_core::SearchOptions {
         limit,
         field: if tools { cs_core::Field::Tools } else { cs_core::Field::Prose },
-        source,
         include_off_path,
-        prefix,
         nested,
-        ..cs_core::SearchOptions::new(text, cs_core::now_ms())
+        ..cs_core::SearchOptions::new(cs_core::now_ms())
     };
 
+    // A filter that is understood but not yet wired has to say so. Returning unfiltered
+    // results for a query that names a filter is a worse answer than returning none, because
+    // it looks like it worked (chat-search-6eb.11 wires the rest; chat-search-me9.15 is the
+    // discoverability half of the same gap).
+    let unapplied = parsed.unapplied();
+    if !unapplied.is_empty() && !json {
+        eprintln!("note: {} not yet a filter — showing unfiltered results", unapplied.join(", "));
+    }
+
     if !flat {
-        let groups = cs_core::search_grouped(&conn, &q)?;
+        let groups = cs_core::search_grouped(&conn, &parsed, &q)?;
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         // Typeahead is excluded: `--prefix` fires once per keystroke, so logging it would
         // bury the handful of real queries under every prefix of each of them. A client
@@ -179,17 +190,17 @@ pub fn search(
         if !prefix {
             log_search(&cfg, text, source, &groups, ms);
         }
-        return render_groups(&groups, text, ms, json);
+        return render_groups(&groups, text, &unapplied, ms, json);
     }
 
-    let hits = cs_core::search(&conn, &q)?;
+    let hits = cs_core::search(&conn, &parsed, &q)?;
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     if json {
         // Field names here are a contract a GUI consumes verbatim — additive changes only.
         println!("{:#}", serde_json::json!({
             "query": text, "ms": (ms * 100.0).round() / 100.0, "count": hits.len(),
-            "results": hits,
+            "results": hits, "unapplied_filters": unapplied,
         }));
     } else if hits.is_empty() {
         println!("no results for {text:?}");
@@ -215,7 +226,7 @@ pub fn search(
 
 /// Record a search. Never fails the search it is describing — see `querylog::append`.
 fn log_search(cfg: &Config, text: &str, source: Option<&str>, groups: &[cs_core::Group], ms: f64) {
-    if !cfg.log_queries || cs_core::is_blank(text) {
+    if !cfg.log_queries || cs_core::Query::exact(text).mode() == cs_core::Mode::Empty {
         return;
     }
     let shown = cs_core::querylog::truncate_shown(
@@ -253,17 +264,14 @@ pub fn pick(
     let db_path = db_path.unwrap_or_else(|| cfg.default_db());
     let conn = rusqlite_open(&db_path)?;
 
-    let (mut shown, n) = if cs_core::is_blank(text) {
+    let parsed = cs_core::Query::exact(text).with_source(source);
+    let (mut shown, n) = if parsed.mode() == cs_core::Mode::Empty {
         // Picked off the no-query recent list. Worth recording — it says the conversation
         // was wanted without anything being typed — but there is no ranking to place it in.
         (Vec::new(), 0)
     } else {
-        let q = cs_core::SearchOptions {
-            limit,
-            source,
-            ..cs_core::SearchOptions::new(text, cs_core::now_ms())
-        };
-        let groups = cs_core::search_grouped(&conn, &q)?;
+        let q = cs_core::SearchOptions { limit, ..cs_core::SearchOptions::new(cs_core::now_ms()) };
+        let groups = cs_core::search_grouped(&conn, &parsed, &q)?;
         let ids: Vec<String> = groups.iter().map(|g| g.conv_id.clone()).collect();
         let n = ids.len();
         (ids, n)
@@ -366,11 +374,18 @@ fn rusqlite_open(path: &Path) -> Result<rusqlite::Connection> {
 /// nest beneath it. Mirrors the shape docs search engines settled on, and it also dissolves
 /// the duplicate-hit problem — a conversation's main thread and its subagents collapse into
 /// one entry instead of competing for slots.
-fn render_groups(groups: &[cs_core::Group], query: &str, ms: f64, json: bool) -> Result<()> {
+fn render_groups(
+    groups: &[cs_core::Group],
+    query: &str,
+    unapplied: &[String],
+    ms: f64,
+    json: bool,
+) -> Result<()> {
     if json {
         println!("{:#}", serde_json::json!({
             "query": query, "ms": (ms * 100.0).round() / 100.0,
             "count": groups.len(), "grouped": true, "results": groups,
+            "unapplied_filters": unapplied,
         }));
         return Ok(());
     }

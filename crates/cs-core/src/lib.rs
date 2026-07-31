@@ -27,7 +27,7 @@ pub use model::{Conversation, Kind, Message, Role, Titles};
 pub use query::{Facet, Filter, Mode, Query};
 pub use schema::IMPORTER_VERSION;
 pub use search::{
-    explain, is_blank, match_density, recent, search, search_grouped, Explain, Field, Group, Hit,
+    explain, match_density, recent, search, search_grouped, snippet_marked, Explain, Field, Group, Hit,
     SearchOptions, DECAY, REPEAT_WEIGHT,
 };
 pub use time::{local_ymd, now_ms, ymd_in};

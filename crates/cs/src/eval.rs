@@ -159,9 +159,9 @@ fn run_query(
         repeat_weight,
         decay,
         nested: 1,
-        ..cs_core::SearchOptions::new(text, cs_core::now_ms())
+        ..cs_core::SearchOptions::new(cs_core::now_ms())
     };
-    Ok(cs_core::search_grouped(conn, &q)?)
+    Ok(cs_core::search_grouped(conn, &cs_core::Query::exact(text), &q)?)
 }
 
 /// Every conversation any variant surfaced in its top `depth`, deduplicated by id.

@@ -74,6 +74,13 @@ enum Command {
         /// half of scroll. Partial mitigation, not the fix.
         #[arg(long, default_value = "50")]
         limit: i64,
+        /// Print the resume command instead of running it.
+        ///
+        /// Enter launches the agent in place, which is what makes the TUI usable on its own.
+        /// This is the escape hatch for a wrapper that wants the string — and is implied
+        /// whenever stdin or stdout is not a terminal, so `eval "$(cs tui)"` still works.
+        #[arg(long)]
+        print: bool,
     },
     /// Search indexed conversations.
     Search {
@@ -214,8 +221,8 @@ fn main() -> Result<()> {
         Command::Index { db, tool_text_limit, json } => {
             commands::index(&config_path, db, tool_text_limit, json)
         }
-        Command::Tui { db, source, limit } => {
-            tui::run(&config_path, db, source.as_deref(), limit)
+        Command::Tui { db, source, limit, print } => {
+            tui::run(&config_path, db, source.as_deref(), limit, print)
         }
         Command::Search { query: q, limit, db, source, tools, include_off_path, prefix, nested, flat, json } => {
             commands::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)

@@ -18,7 +18,7 @@ thing. Where a claim has been checked against this corpus, the result is marked
 | Codex `history_mode: paginated` persists messages differently | **not present** (584 pre-mode, 90 `legacy`) | none |
 | Claude Code writes cumulative chunks under one `message.id` | 2,029 multi-entry ids but **0 prefix-extensions** | none; revisit if duplicates appear |
 | ChatGPT export sharded into `conversations-NNN.json` | **verified here** — 21 shards | already handled |
-| Claude desktop keeps no conversations locally | **false here** — 30 MB of plaintext `audit.jsonl` | new source, see below |
+| Claude desktop keeps no conversations locally | **false here** — 30 MB of plaintext `audit.jsonl` | importer built; 14 conversations, 1,200 messages |
 | ChatGPT desktop store is decryptable with a derived key | **false** — Keychain access group, not a password | closed; export is the only route |
 | The Codex merge moved chats to a new local store | **not present** — `~/Documents/Codex/` is artifacts only | none |
 
@@ -154,7 +154,12 @@ the clear; only the cloud-synced claude.ai conversations are absent. Earlier not
 - Shape is **Claude Agent SDK stream-json, not Claude Code's JSONL**, and the divergence is
   snake_case: `session_id`, `parent_tool_use_id` here vs `sessionId`, `parentUuid` there.
   `type` ∈ `user` | `assistant` | `system` | `result` | `tool_use_summary` | `rate_limit_event`.
-  Close enough to invite a glob widening, different enough that one would silently import zero.
+- **Close enough to invite widening the `claude-code` glob, and the danger is not what it
+  looks like.** `claude_code::import` already reads `sessionId` *or* `session_id`, so these
+  files parse there rather than being skipped — they just land under the wrong source id, with
+  a `claude --resume` command that cannot reopen a desktop session, and with no title, since
+  the titles are in a `.json` that glob never matches. Checked, not assumed: the first guess
+  here was "it would import zero", and that was wrong in the reassuring direction.
 - `parent_tool_use_id` is **not** a message-to-message parent pointer — it marks a subagent's
   messages as belonging to a tool call. There is no DAG here; the file is linear. Feeding it to
   `parent_native_id` would break `on_head_path`, which requires a parent the importer emitted.
@@ -162,6 +167,19 @@ the clear; only the cloud-synced claude.ai conversations are absent. Earlier not
   is conversation-bearing.
 - The audit log is **HMAC-chained**. Nothing here needs to verify it, but it means the format
   is intended as tamper-evident and is unlikely to be rewritten in place.
+- **A transcript carries two session ids**, and the one that looks primary is not the one with
+  the content: the desktop session id (matching the directory) holds 19 records, while the CLI
+  session running underneath it holds 405. Keying a conversation on either splits it in two,
+  which is why the importer keys on the `local_<uuid>` path segment — the only key both files
+  share, and the one the app itself pairs them by.
+- **Repeated uuids within a file are almost all replays** — turns re-emitted when a session
+  resumes, flagged `isReplay`. 19 of 22 repeats in the worst file here. Dropping replays leaves
+  genuine collisions rare enough for an ordinal fallback to handle.
+- The top-level `tool_use_result` is **not a copy** of the `tool_result` block: they agree only
+  117 times in 465. It is the richer structured form. Reading both double-counts tool output.
+- Measured end to end on 2026-07-30: 106 archived files → **14 conversations, 1,200 messages,
+  203 prose**, 0 off-head-path. Prose is 17% because these sessions are tool-heavy — 469 tool
+  calls against 203 prose messages.
 
 ## Claude.ai — export and internal API
 

@@ -288,7 +288,7 @@ fn role_of(event_type: &str) -> Role {
 }
 
 /// Iterate JSONL lines, skipping blank ones and any that are not valid UTF-8.
-fn lines(buf: &[u8]) -> impl Iterator<Item = &str> {
+pub(crate) fn lines(buf: &[u8]) -> impl Iterator<Item = &str> {
     buf.split(|&b| b == b'\n')
         .map(|l| l.strip_suffix(b"\r").unwrap_or(l))
         .filter(|l| !l.is_empty())
@@ -300,13 +300,13 @@ fn lines(buf: &[u8]) -> impl Iterator<Item = &str> {
 /// `Value::get` returns `Some(Value::Null)` for an explicit null, so the obvious
 /// `get("a").or_else(|| get("b"))` is *not* JavaScript's `??` — it stops at the null and
 /// never tries the fallback.
-fn field<'a>(v: &'a Value, key: &str) -> &'a Value {
+pub(crate) fn field<'a>(v: &'a Value, key: &str) -> &'a Value {
     v.get(key).unwrap_or(&Value::Null)
 }
 
 /// A field as a non-empty string. Missing, null, empty and non-string all read as absent,
 /// so `"gitBranch": ""` outside a repo does not become a branch name.
-fn text(v: &Value, key: &str) -> Option<String> {
+pub(crate) fn text(v: &Value, key: &str) -> Option<String> {
     match v.get(key) {
         Some(Value::String(s)) if !s.is_empty() => Some(s.clone()),
         _ => None,
@@ -314,7 +314,7 @@ fn text(v: &Value, key: &str) -> Option<String> {
 }
 
 /// Collapse arbitrary content (string | block | block[]) into searchable text.
-fn flatten(v: &Value) -> String {
+pub(crate) fn flatten(v: &Value) -> String {
     match v {
         Value::Null => String::new(),
         Value::String(s) => s.clone(),
@@ -339,7 +339,7 @@ fn flatten(v: &Value) -> String {
 
 /// Whitespace-collapsed and clamped. Titles sit in a list; newlines and runs of spaces in
 /// one make every row below it move.
-fn clamp_title(s: &str) -> String {
+pub(crate) fn clamp_title(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(TITLE_MAX_CHARS).collect()
 }
 
@@ -390,7 +390,7 @@ const HARNESS_NOTICES: [&str; 2] =
     ["[Request interrupted by user for tool use]", "[Request interrupted by user]"];
 
 /// A user message reduced to a title, or `None` if it was all markup.
-fn title_candidate(raw: &str) -> Option<String> {
+pub(crate) fn title_candidate(raw: &str) -> Option<String> {
     // Whether `<command-args>` is a prompt or a setting is decided by the sibling
     // `<command-name>`, which is why this is read from the whole turn rather than left to
     // the tag-at-a-time scan below.
@@ -458,7 +458,7 @@ fn strip_injected_markup(s: &str, args_are_prose: bool) -> String {
 /// The corpus is uniformly `YYYY-MM-DDTHH:MM:SS.mmmZ`, but offsets and other fraction
 /// widths are legal and cost a few lines to accept. Unparseable input yields `None`: a
 /// message with no timestamp is still a message.
-fn epoch_millis(s: &str) -> Option<i64> {
+pub(crate) fn epoch_millis(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || b[13] != b':' || b[16] != b':' {
         return None;

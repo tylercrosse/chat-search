@@ -243,6 +243,15 @@ pub fn source_badge(source: &str) -> &str {
         "gemini-cli" => "gemini",
         "chatgpt-export" => "chatgpt",
         "claude-ai" => "claude.ai",
+        // 14 columns raw. Shortened to pair with `claude.ai`: the two are the same product on
+        // different surfaces — the website and the desktop app — and reading them side by side
+        // is the whole reason the distinction has to survive into the badge.
+        //
+        // Deliberately absent from `KNOWN_SOURCES`: that list is full at eight, which is the
+        // palette's documented ceiling, so a ninth entry would wrap onto `claude-code`'s hue —
+        // the worst available collision, given both are Claude. Left unlisted it hashes to
+        // slot 6, which belongs to `opencode` and has no indexed rows to collide with.
+        "claude-desktop" => "claude.app",
         other => other,
     }
 }
@@ -486,6 +495,19 @@ mod tests {
         assert_eq!(source_badge("claude-code"), "claude-code");
         assert_eq!(source_badge("claude-ai"), "claude.ai");
         assert_ne!(source_badge("claude-code"), source_badge("claude-ai"));
+    }
+
+    #[test]
+    fn the_three_claude_surfaces_stay_distinguishable_within_the_column() {
+        // `claude-desktop` is shortened despite being unlisted, because the width bound is a
+        // property of the column rather than of `KNOWN_SOURCES` — and it is the one id whose
+        // raw form would both overflow and read as one of the other two.
+        let claude = ["claude-code", "claude-ai", "claude-desktop"].map(source_badge);
+        for badge in claude {
+            let width = UnicodeWidthStr::width(badge);
+            assert!(width <= AGENT_COL_MIN_WIDTH, "badge {badge:?} is {width} columns");
+        }
+        assert_eq!(claude.iter().collect::<HashSet<_>>().len(), 3, "two surfaces read alike");
     }
 
     #[test]

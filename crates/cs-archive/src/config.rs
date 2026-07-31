@@ -140,6 +140,17 @@ pub fn candidate_sources() -> Vec<Source> {
         ("codex", "~/.codex/sessions", Layout::Mirror, vec!["**/rollout-*.jsonl", "**/rollout-*.jsonl.zst"]),
         ("claude-code", "~/.claude/projects", Layout::Mirror, vec!["**/*.jsonl"]),
         ("gemini-cli", "~/.gemini/tmp", Layout::Mirror, vec!["**/*.json"]),
+        // Claude Desktop's Cowork and Chat tabs. One session is two files — `local_<uuid>.json`
+        // for the title and model, `local_<uuid>/audit.jsonl` for the messages — so both
+        // patterns are needed or half of every conversation goes missing. The `local_*.json`
+        // glob also reaches plugin manifests nested inside a session's working directory; the
+        // importer declines those by shape.
+        (
+            "claude-desktop",
+            "~/Library/Application Support/Claude/local-agent-mode-sessions",
+            Layout::Mirror,
+            vec!["**/local_*.json", "**/audit.jsonl"],
+        ),
         // GitHub Copilot CLI. Unlike the sources above it writes a small directory tree per
         // session — `workspace.yaml`, `checkpoints/*.md`, `research/`, `files/` — rather than
         // one transcript file, so the include list has to name three extensions to catch a

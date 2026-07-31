@@ -80,8 +80,9 @@ beads dependency, so `bd ready` will not offer you the downstream item first.
    retroactive reparse silently not work — ADR 1. *(Wired: the port blocks on the archive
    reader.)*
 3. Fixtures synthetic from the first test, or the repo can never be shared.
-4. Query contract before client #2, or the schema is frozen by its consumers. *(Wired: Raycast
-   blocks on reshaping `resume_cmd`.)*
+4. Query contract before client #2, or the schema is frozen by its consumers. *(Met: `me9.3`
+   replaced `resume_cmd` with `destinations`, so `--json` hands a client variants to pick from
+   rather than one pre-rendered string. Raycast is unblocked.)*
 
 ## Operations
 

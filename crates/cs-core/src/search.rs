@@ -39,6 +39,15 @@ pub struct Hit {
     pub conv_id: String,
     pub msg_id: String,
     pub source: String,
+    /// The source's own id for this conversation (ADR 2 makes it stable).
+    pub native_id: String,
+    /// Every way to reopen this conversation, best first.
+    ///
+    /// Resolved here rather than left to the client because a client reading `--json` cannot
+    /// call [`crate::destinations`] — ADR 12 makes this object the contract, so the variants
+    /// have to be *in* it. This replaces the single frozen `resume_cmd` string, which could
+    /// hold one answer and went stale whenever a CLI changed its syntax (chat-search-me9.3).
+    pub destinations: Vec<crate::Destination>,
     pub title: Option<String>,
     pub role: String,
     pub kind: String,
@@ -54,7 +63,6 @@ pub struct Hit {
     /// even the offsets into the *message* would no longer fit. It costs nothing — every
     /// snippet is built from these already.
     pub snippet_spans: Vec<highlight::Span>,
-    pub resume_cmd: Option<String>,
     /// False when the message sits on a branch that was edited away — still searchable,
     /// but not part of the conversation as currently displayed.
     pub on_head_path: bool,
@@ -170,7 +178,7 @@ pub fn search(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::
     let sql = format!(
         "SELECT m.id, m.conv_id, m.role, m.kind, m.ts, m.text, m.on_head_path,
                 m.is_sidechain, m.thread_key,
-                c.source, c.title, c.resume_cmd, c.deleted_upstream_at,
+                c.source, c.title, c.native_id, c.deleted_upstream_at,
                 bm25({table}) / (1.0 + ?6 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
          FROM {table}
          JOIN message m      ON m.rowid = {table}.rowid
@@ -208,7 +216,8 @@ pub fn search(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::
                 thread_key: r.get(8)?,
                 source: r.get(9)?,
                 title: r.get(10)?,
-                resume_cmd: r.get(11)?,
+                native_id: r.get(11)?,
+                destinations: crate::destinations(&r.get::<_, String>(9)?, &r.get::<_, String>(11)?),
                 deleted_upstream: r.get::<_, Option<i64>>(12)?.is_some(),
                 score: r.get(13)?,
             })
@@ -393,7 +402,6 @@ mod tests {
                 model: None,
                 surface: None,
                 forked_from_native_id: None,
-                resume_cmd: None,
                 head_native_id: None,
                 messages: vec![crate::model::Message {
                     native_id: "m0".into(),
@@ -520,15 +528,27 @@ mod tests {
         // ADR 12: a Raycast extension and a GUI read this object verbatim, so a field may be
         // added but never renamed or dropped. Spelled out rather than derived from the struct,
         // because a rename would otherwise rename this list along with the contract.
+        //
+        // `resume_cmd` is the one deliberate removal (chat-search-me9.3), and it is a removal
+        // rather than a deprecation because leaving it would mean continuing to answer "how do I
+        // reopen this" with a string that can hold one answer and goes stale on a CLI syntax
+        // change. `native_id` replaces it as the input a client resolves a destination from.
         let conn = indexed(&["Commit current changes before the rebase"]);
         let hits = search(&conn, &Query::exact("commits"), &opts()).unwrap();
         let json = serde_json::to_value(&hits[0]).unwrap();
+        assert!(json.get("resume_cmd").is_none(), "the frozen string is gone, not merely unused");
         for field in [
-            "conv_id", "msg_id", "source", "title", "role", "kind", "ts", "score", "snippet",
-            "resume_cmd", "on_head_path", "is_sidechain", "thread_key", "deleted_upstream",
+            "conv_id", "msg_id", "source", "native_id", "destinations", "title", "role", "kind",
+            "ts", "score", "snippet", "on_head_path", "is_sidechain", "thread_key",
+            "deleted_upstream",
         ] {
             assert!(json.get(field).is_some(), "{field} left the JSON contract");
         }
+        // What replaced it, in the shape a GUI reads: a list it picks from, not a line it parses.
+        assert_eq!(
+            json["destinations"],
+            serde_json::json!([{ "kind": "terminal", "argv": ["codex", "resume", "c0"] }])
+        );
         assert!(json["snippet"].is_string(), "still the bare string it always was");
         // The addition, in the shape a client would have to parse.
         assert_eq!(json["snippet_spans"], serde_json::json!([{ "start": 0, "end": 6 }]));
@@ -553,6 +573,10 @@ mod tests {
 pub struct Group {
     pub conv_id: String,
     pub source: String,
+    /// The source's own id (ADR 2 makes it stable).
+    pub native_id: String,
+    /// Every way to reopen this conversation, best first. See [`Hit::destinations`].
+    pub destinations: Vec<crate::Destination>,
     pub title: Option<String>,
     pub ended_at: Option<i64>,
     /// `ended_at` as a local `YYYY-MM-DD`, rendered here so no client re-derives it.
@@ -586,7 +610,6 @@ pub struct Group {
     /// cannot answer "is this conversation about my query": 58% of conversations over 15
     /// turns span more than four hours, so most of them are several sittings.
     pub match_seqs: Vec<i64>,
-    pub resume_cmd: Option<String>,
     pub deleted_upstream: bool,
     pub hits: Vec<Hit>,
 }
@@ -614,7 +637,7 @@ pub const REPEAT_WEIGHT: f64 = 0.25;
 /// had no way to learn it did nothing.
 pub fn recent(conn: &Connection, source: Option<&str>, limit: i64) -> rusqlite::Result<Vec<Group>> {
     let mut stmt = conn.prepare(
-        "SELECT id, source, title, ended_at, user_turns, resume_cmd, deleted_upstream_at,
+        "SELECT id, source, title, ended_at, user_turns, native_id, deleted_upstream_at,
                 msg_count, prose_count, cwd
          FROM conversation
          WHERE (?1 IS NULL OR source = ?1)
@@ -638,7 +661,8 @@ pub fn recent(conn: &Connection, source: Option<&str>, limit: i64) -> rusqlite::
             match_count: 0,
             // No query, so nothing matched and there is no shape to draw.
             match_seqs: Vec::new(),
-            resume_cmd: r.get(5)?,
+            native_id: r.get(5)?,
+            destinations: crate::destinations(&r.get::<_, String>(1)?, &r.get::<_, String>(5)?),
             deleted_upstream: r.get::<_, Option<i64>>(6)?.is_some(),
             hits: Vec::new(),
         })
@@ -798,14 +822,14 @@ pub fn match_density(seqs: &[i64], msg_count: i64) -> String {
 /// statement cache.
 fn hydrate(conn: &Connection, query: &Query, ranked: Vec<Ranked>) -> rusqlite::Result<Vec<Group>> {
     let mut meta = conn.prepare_cached(
-        "SELECT source, title, resume_cmd, deleted_upstream_at, ended_at, user_turns,
+        "SELECT source, title, native_id, deleted_upstream_at, ended_at, user_turns,
                 msg_count, prose_count, cwd
          FROM conversation WHERE id = ?1",
     )?;
     let mut msg = conn.prepare_cached(
         "SELECT m.id, m.conv_id, m.role, m.kind, m.ts, m.text, m.on_head_path,
                 m.is_sidechain, m.thread_key,
-                c.source, c.title, c.resume_cmd, c.deleted_upstream_at
+                c.source, c.title, c.native_id, c.deleted_upstream_at
          FROM message m JOIN conversation c ON c.id = m.conv_id
          WHERE m.id = ?1",
     )?;
@@ -817,7 +841,7 @@ fn hydrate(conn: &Connection, query: &Query, ranked: Vec<Ranked>) -> rusqlite::R
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, Option<String>>(1)?,
-                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, String>(2)?,
                     r.get::<_, Option<i64>>(3)?.is_some(),
                     r.get::<_, Option<i64>>(4)?,
                     r.get::<_, i64>(5)?,
@@ -846,7 +870,8 @@ fn hydrate(conn: &Connection, query: &Query, ranked: Vec<Ranked>) -> rusqlite::R
                     thread_key: r.get(8)?,
                     source: r.get(9)?,
                     title: r.get(10)?,
-                    resume_cmd: r.get(11)?,
+                    native_id: r.get(11)?,
+                    destinations: crate::destinations(&r.get::<_, String>(9)?, &r.get::<_, String>(11)?),
                     deleted_upstream: r.get::<_, Option<i64>>(12)?.is_some(),
                     score,
                 })
@@ -860,7 +885,11 @@ fn hydrate(conn: &Connection, query: &Query, ranked: Vec<Ranked>) -> rusqlite::R
             conv_id,
             source: m.as_ref().map(|m| m.0.clone()).unwrap_or_default(),
             title: m.as_ref().and_then(|m| m.1.clone()),
-            resume_cmd: m.as_ref().and_then(|m| m.2.clone()),
+            native_id: m.as_ref().map(|m| m.2.clone()).unwrap_or_default(),
+            destinations: m
+                .as_ref()
+                .map(|m| crate::destinations(&m.0, &m.2))
+                .unwrap_or_default(),
             deleted_upstream: m.as_ref().is_some_and(|m| m.3),
             ended_at,
             ended_date: ended_at.and_then(crate::time::local_ymd),

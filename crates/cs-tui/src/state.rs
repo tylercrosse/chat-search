@@ -445,7 +445,6 @@ mod tests {
                 model: None,
                 surface: None,
                 forked_from_native_id: None,
-                resume_cmd: Some(format!("resume {id}")),
                 head_native_id: None,
                 messages: vec![Message {
                     native_id: format!("{id}-m0"),

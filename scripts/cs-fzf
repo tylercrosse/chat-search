@@ -49,9 +49,13 @@ fmt() {
     .results[]? |
     (.ended_date // "????-??-??") as $date |
     (.hits[0].snippet // "") as $snippet |
-    # ChatGPT conversations resume via a URL, not a command — 69% of this corpus. Left raw
-    # they are neither runnable nor eval-safe, so they become an explicit open command here.
-    ((.resume_cmd // "") | if startswith("http") then "\($opener) \"\(.)\"" else . end) as $cmd |
+    # A URL is not a command — 69% of this corpus resumes that way — so it needs the platform
+    # opener in front of it. The distinction used to be sniffed here with `startswith("http")`;
+    # `cs search --json` now carries it as a kind, so this reads the answer instead of guessing.
+    (.destinations[0] // null) as $d |
+    (if   $d == null      then ""
+     elif $d.kind == "web" then "\($opener) \"\($d.url)\""
+     else ($d.argv | join(" ")) end) as $cmd |
     [ $cmd,
       "\(.title // "(untitled)")",
       "\(.source)  \($date)  \(.user_turns)t",

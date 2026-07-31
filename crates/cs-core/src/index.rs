@@ -197,8 +197,8 @@ fn write_one(
     tx.execute(
         "INSERT INTO conversation
            (id, source, native_id, title, title_origin, cwd, git_branch, model, surface,
-            forked_from, head_id, resume_cmd)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
+            forked_from, head_id)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
          ON CONFLICT(id) DO UPDATE SET
            title        = COALESCE(conversation.title, excluded.title),
            title_origin = COALESCE(conversation.title_origin, excluded.title_origin),
@@ -207,8 +207,7 @@ fn write_one(
            model        = COALESCE(conversation.model, excluded.model),
            surface      = COALESCE(conversation.surface, excluded.surface),
            forked_from  = COALESCE(conversation.forked_from, excluded.forked_from),
-           head_id      = COALESCE(conversation.head_id, excluded.head_id),
-           resume_cmd   = COALESCE(conversation.resume_cmd, excluded.resume_cmd)",
+           head_id      = COALESCE(conversation.head_id, excluded.head_id)",
         params![
             conv_id,
             c.source,
@@ -221,7 +220,6 @@ fn write_one(
             c.surface,
             c.forked_from_native_id.as_ref().map(|f| format!("{}:{}", c.source, f)),
             head_id,
-            c.resume_cmd,
         ],
     )?;
 
@@ -348,7 +346,6 @@ mod tests {
             model: None,
             surface: None,
             forked_from_native_id: None,
-            resume_cmd: Some("codex resume c1".into()),
             head_native_id: None,
             messages,
         }

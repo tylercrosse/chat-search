@@ -251,7 +251,6 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         // Claude Code has no fork mechanism, and no head marker: the transcript is
         // append-only, so the last message of each thread is its leaf (ADR 4).
         forked_from_native_id: None,
-        resume_cmd: Some(format!("claude --resume {session_id}")),
         head_native_id: None,
         native_id: session_id,
         messages,
@@ -914,7 +913,9 @@ mod tests {
         assert_eq!(c.native_id, "s-1", "a subagent carries the parent's session id");
         assert!(c.messages.iter().all(|m| m.is_sidechain));
         assert!(c.messages.iter().all(|m| m.thread_key == sub));
-        assert_eq!(c.resume_cmd.as_deref(), Some("claude --resume s-1"));
+        // A subagent reopens by resuming its parent session, which follows from carrying the
+        // parent's id rather than from anything this importer formats (chat-search-me9.3).
+        assert!(!cs_core::destinations(&c.source, &c.native_id).is_empty());
 
         // Same conversation id as the main transcript, different thread key.
         let main = import_main(&[&user("u1", "", "hello")]);

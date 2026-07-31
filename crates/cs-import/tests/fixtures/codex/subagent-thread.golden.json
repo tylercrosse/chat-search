@@ -70,7 +70,6 @@
         ],
         "model": "gpt-5-codex",
         "native_id": "conv-a1b2",
-        "resume_cmd": "codex resume conv-a1b2",
         "source": "codex",
         "surface": "codex_cli",
         "titles": {
@@ -141,7 +140,6 @@
         ],
         "model": "gpt-5-codex-mini",
         "native_id": "conv-a1b2",
-        "resume_cmd": "codex resume conv-a1b2",
         "source": "codex",
         "surface": "codex_cli",
         "titles": {

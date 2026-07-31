@@ -68,7 +68,7 @@ flowchart TB
     CLIENTS --> QLOG
     QLOG -. "cs needs → an eval set,<br/>read by hand (6eb.21)" .-> INDEXER
     CLIENTS -. "rename · star · note" .-> LIB
-    CLIENTS -. "resume_cmd" .-> LOCAL
+    CLIENTS -. "destination" .-> LOCAL
     CLIENTS -. "open URL" .-> REMOTE
 ```
 
@@ -78,8 +78,10 @@ is a loop back:
 - **Authored data flows back** into the index on every rebuild, which is what keeps `index.db`
   deletable (ADR 1, ADR 3). `library.db` is not built; `queries.jsonl` is the first file of
   that kind and already exists.
-- **`resume_cmd` flows back** to the originating tool. The client prints it rather than running
-  it (`cs/src/tui.rs`), so the agent it launches is a child of your own shell.
+- **A destination flows back** to the originating tool, resolved from `(source, native_id)` at
+  action time rather than read out of a column (`cs-core/src/destination.rs`). `cs tui` execs
+  the agent in place so it inherits the terminal, and prints an `eval`-able line instead
+  whenever stdout is not one.
 - **The query log flows back into the ranking, by hand.** `cs search`, `cs pick` and `cs tui`
   append what was searched for and what was opened; `cs needs` folds it into one entry per
   query. Nothing reads it automatically — converting it into an eval set is `6eb.21`, and until
@@ -253,7 +255,7 @@ missing edge rather than a missing file.
   write. On this
   machine the column is non-null for 0 of 2,935 conversations, which is indistinguishable from
   "nothing has vanished yet" — and that is the failure mode. When a source file does disappear,
-  the archive keeps the content and the search says nothing, so `resume_cmd` fails at the one
+  the archive keeps the content and the search says nothing, so reopening fails at the one
   moment the flag existed to warn about.
 - **ChatGPT is a configured source, not a detected one.** Every id in the archiver's candidate
   list is a directory some running agent writes to, and detection is `path.is_dir()` over that

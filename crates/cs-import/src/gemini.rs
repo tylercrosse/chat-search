@@ -113,7 +113,6 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         // Deliberately absent rather than a `gemini --resume`-shaped guess: an invented
         // command that does not work is worse than none, and the field is being removed
         // outright by chat-search-me9.3.
-        resume_cmd: None,
         // Append-only, so the last message is the head.
         head_native_id: None,
         messages,
@@ -323,8 +322,9 @@ mod tests {
         assert_eq!(c.surface, None);
         assert_eq!(c.forked_from_native_id, None);
         assert_eq!(c.head_native_id, None);
-        // Never a fabricated resume command (chat-search-me9.3).
-        assert_eq!(c.resume_cmd, None);
+        // Never a fabricated resume command (chat-search-me9.3). Gemini CLI writes no resumable
+        // session, so the honest answer is nothing to offer — not a command that would fail.
+        assert!(cs_core::destinations(&c.source, &c.native_id).is_empty());
 
         let shape: Vec<_> = c.messages.iter().map(|m| (m.role, m.kind)).collect();
         assert_eq!(

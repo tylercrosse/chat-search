@@ -214,8 +214,8 @@ pub fn search(
             let flag = if flags.is_empty() { String::new() } else { format!("  [{}]", flags.join(" ")) };
             println!("{:>2}. {} · {}{}", i + 1, h.source, h.title.as_deref().unwrap_or("(untitled)"), flag);
             println!("    {}", h.snippet);
-            if let Some(cmd) = &h.resume_cmd {
-                println!("    {cmd}");
+            if let Some(d) = h.destinations.first() {
+                println!("    {}", d.shell_line(None));
             }
             println!();
         }
@@ -259,6 +259,7 @@ pub fn pick(
     source: Option<&str>,
     limit: i64,
     quiet: bool,
+    kind: Option<&str>,
 ) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let db_path = db_path.unwrap_or_else(|| cfg.default_db());
@@ -291,19 +292,43 @@ pub fn pick(
         });
     }
 
-    // Printing the resume command is what makes this usable as a drop-in for reading
-    // `resume_cmd` out of the JSON: a client pipes through `cs pick` and gets the same
-    // string it already had, with the selection recorded on the way past.
+    // Printing the reopen line is what makes this the natural place to select from: a client
+    // pipes through `cs pick`, gets a line it can `eval`, and the selection is recorded on the
+    // way past. This is the shape chat-search-me9.3 argued for — the point that knows which
+    // conversation was chosen is already the point being asked how to open it.
     if !quiet {
-        let cmd: Option<String> = conn
+        let ids: Option<(String, String)> = conn
             .query_row(
-                "SELECT resume_cmd FROM conversation WHERE id = ?1",
+                "SELECT source, native_id FROM conversation WHERE id = ?1",
                 rusqlite::params![conv_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
-            .unwrap_or(None);
-        if let Some(cmd) = cmd {
-            println!("{cmd}");
+            .ok();
+        let Some((source, native_id)) = ids else {
+            anyhow::bail!("no conversation {conv_id} in the index");
+        };
+        let all = cs_core::destinations(&source, &native_id);
+        let chosen = match kind {
+            // Named explicitly, so an absent one is an error rather than a silent fallback to
+            // a different application than the one asked for.
+            Some(want) => {
+                let found = all.iter().find(|d| d.label().eq_ignore_ascii_case(want));
+                if found.is_none() {
+                    let offered: Vec<&str> = all.iter().map(|d| d.label()).collect();
+                    anyhow::bail!(
+                        "{source} cannot open in {want}; it offers {}",
+                        if offered.is_empty() { "nothing".into() } else { offered.join(", ") }
+                    );
+                }
+                found
+            }
+            None => all.first(),
+        };
+        match chosen {
+            Some(d) => println!("{}", d.shell_line(None)),
+            // Distinct from an error: the pick was still recorded, there is simply no way back
+            // in for this source. Silence on stdout keeps `eval "$(cs pick …)"` a no-op.
+            None => eprintln!("{source} conversations cannot be reopened from here"),
         }
     }
     Ok(())
@@ -424,8 +449,8 @@ fn render_groups(
         if g.match_count > g.hits.len() {
             println!("      +{} more match(es)", g.match_count - g.hits.len());
         }
-        if let Some(cmd) = &g.resume_cmd {
-            println!("    {cmd}");
+        if let Some(d) = g.destinations.first() {
+            println!("    {}", d.shell_line(g.cwd.as_deref()));
         }
         println!();
     }

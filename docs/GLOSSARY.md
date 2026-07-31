@@ -97,7 +97,9 @@ The split from the archiver is what makes **retroactive reparse** possible: fix 
 
 **Rebuild** vs **Tail** Rebuild reprocesses everything (~7s). Tail processes only appended bytes of recently touched files, for the session you are in right now. Detection is `(path, size, mtime, hash of first 64 KB)`: prefix hash matches and size grew means pure append; prefix hash changed means the file was rewritten and needs full re-import.
 
-**Resume command** **[schema: `conversation.resume_cmd`]** How to reopen a conversation in its native tool — `codex resume <id>`, `claude --resume <id>`, `https://chatgpt.com/c/<id>`. Stored per conversation so every UI surface can "open it somewhere" without knowing anything tool-specific.
+**Destination** **[code: `cs_core::destination`]** One way to reopen a conversation in its native tool — a `Terminal { argv }` (`codex resume <id>`, `claude --resume <id>`) or a `Web { url }` (`https://chatgpt.com/c/<id>`). A source has zero or more, best first, and zero is a fact to report rather than a failure: Gemini CLI writes no resumable session.
+
+Resolved from `(source, native_id)` at display time, never stored. Both parts are permanent (ADR 2, ADR 16), so resolving late costs nothing and a CLI changing its resume syntax takes effect with no reindex. This replaced `conversation.resume_cmd`, a single string frozen into the index at import time, which could express exactly one way to reopen something and staleness-bombed every row on a syntax change (chat-search-me9.3).
 
 ---
 

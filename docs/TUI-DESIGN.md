@@ -262,9 +262,17 @@ Build the chip row from **config ∪ index**, in three states:
 
 ## 6. Destinations
 
-`me9.3` establishes that `resume_cmd` cannot be a stored string. fast-resume independently
-reached the same conclusion: the command is computed at action time from a per-source trait,
-`adapter_for(&session.agent).resume_command(&session, yolo)` (`tui/input.rs:130-134`).
+`me9.3` established that `resume_cmd` cannot be a stored string, and **landed**: the column is
+gone and `cs_core::destinations(source, native_id) -> Vec<Destination>` resolves it at action
+time. fast-resume independently reached the same conclusion — the command is computed from a
+per-source trait, `adapter_for(&session.agent).resume_command(&session, yolo)`
+(`tui/input.rs:130-134`).
+
+Two deltas from the sketch below, both settled by the implementation. It takes the id pair
+rather than a `&Conversation`, because the callers holding a search result do not have a parsed
+conversation and ADR 2 makes the pair the stable part anyway. And `Destination` is an enum of
+`Terminal { argv }` / `Web { url }` rather than a string, so nothing downstream re-sniffs
+`startswith("http")` or splits a command line on whitespace.
 
 Its permissions modal generalises directly into the destination picker. Three things to lift
 from `begin_action` (`tui/input.rs:63-85`):

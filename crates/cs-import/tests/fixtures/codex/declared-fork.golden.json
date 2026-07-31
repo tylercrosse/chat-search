@@ -58,7 +58,6 @@
         ],
         "model": "gpt-5-codex",
         "native_id": "conv-e5f6",
-        "resume_cmd": "codex resume conv-e5f6",
         "source": "codex",
         "surface": "codex_desktop",
         "titles": {

@@ -53,7 +53,11 @@ pub enum Exit {
     Quit,
     Open {
         conv_id: String,
-        resume_cmd: Option<String>,
+        /// Every way this conversation can be reopened, best first — resolved here rather than
+        /// re-derived by `cs`, because this is where §6's picker will choose between them.
+        /// Empty means the source offers no reopen path, which the caller must report rather
+        /// than treat as a failure.
+        destinations: Vec<cs_core::Destination>,
         cwd: Option<String>,
     },
 }
@@ -218,7 +222,7 @@ fn handle(
                 let g = app.selected_group()?;
                 return Some(Exit::Open {
                     conv_id: g.conv_id.clone(),
-                    resume_cmd: g.resume_cmd.clone(),
+                    destinations: g.destinations.clone(),
                     cwd: g.cwd.clone(),
                 });
             }

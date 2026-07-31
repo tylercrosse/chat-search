@@ -154,7 +154,6 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         model,
         surface: meta.surface,
         forked_from_native_id: meta.forked_from,
-        resume_cmd: Some(format!("codex resume {session_id}")),
         // Codex only ever appends, so the last main-thread message is the head.
         head_native_id: None,
         messages,
@@ -550,7 +549,10 @@ mod tests {
 
         assert_eq!(c.source, "codex");
         assert_eq!(c.native_id, "019f-main");
-        assert_eq!(c.resume_cmd.as_deref(), Some("codex resume 019f-main"));
+        // The importer's job is the id, not the command (chat-search-me9.3). This proves the
+        // pair it emits still resolves to a way back in — a source string this importer spells
+        // differently from `destination`'s table would silently offer nothing.
+        assert!(!cs_core::destinations(&c.source, &c.native_id).is_empty());
         assert_eq!(c.surface.as_deref(), Some("codex_vscode"));
         assert_eq!(c.cwd.as_deref(), Some("/w/proj"));
         assert_eq!(c.git_branch.as_deref(), Some("feature/x"));

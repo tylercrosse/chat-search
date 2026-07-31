@@ -24,7 +24,9 @@ CREATE TABLE IF NOT EXISTS conversation(
   thread_count        INTEGER NOT NULL DEFAULT 0,
   forked_from         TEXT,          -- conversation.id of the parent, if declared
   head_id             TEXT,          -- currently-selected leaf; the only mutable notion
-  resume_cmd          TEXT,
+  -- No resume command. It is a function of (source, native_id) evaluated at display time, so
+  -- storing it froze one answer and staleness-bombed every row when a CLI changed its syntax
+  -- (chat-search-me9.3). See `crate::destination`.
   deleted_upstream_at INTEGER        -- tombstone: gone from source, kept here (ADR 9)
 );
 
@@ -66,4 +68,4 @@ CREATE TABLE IF NOT EXISTS build_info(
 
 /// Bumped when importer output changes in a way that requires a rebuild. Recorded in
 /// `build_info` so a stale index is detectable rather than silently wrong.
-pub const IMPORTER_VERSION: u32 = 2;
+pub const IMPORTER_VERSION: u32 = 3;

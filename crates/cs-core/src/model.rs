@@ -125,8 +125,6 @@ pub struct Conversation {
     pub surface: Option<String>,
     /// Cross-conversation lineage: this conversation was forked from another (ADR 4).
     pub forked_from_native_id: Option<String>,
-    /// How to reopen this in its native tool.
-    pub resume_cmd: Option<String>,
     /// Currently-selected leaf. `None` means "last message of the main thread", which is
     /// right for every append-only CLI source; ChatGPT supplies its own `current_node`.
     pub head_native_id: Option<String>,
@@ -203,7 +201,6 @@ mod tests {
             model: None,
             surface: None,
             forked_from_native_id: None,
-            resume_cmd: None,
             head_native_id: None,
             // a later subagent message must not become the head
             messages: vec![msg("a", 1, false), msg("b", 2, false), msg("s", 3, true)],

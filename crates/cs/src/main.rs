@@ -126,9 +126,16 @@ enum Command {
         /// How deep the list the choice was made from went.
         #[arg(long, default_value = "200")]
         limit: i64,
-        /// Record the pick without printing the resume command.
+        /// Record the pick without printing the reopen line.
         #[arg(long)]
         quiet: bool,
+        /// Which destination to print — `terminal` or `web`. Defaults to the source's best.
+        ///
+        /// Named `--in` because the question is "open it in what". A source that cannot offer
+        /// the one asked for fails and says what it does offer, rather than quietly printing a
+        /// different one.
+        #[arg(long = "in")]
+        kind: Option<String>,
     },
     /// What you have searched for, and what answered it.
     Needs {
@@ -227,8 +234,8 @@ fn main() -> Result<()> {
         Command::Search { query: q, limit, db, source, tools, include_off_path, prefix, nested, flat, json } => {
             commands::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)
         }
-        Command::Pick { conv_id, query: q, db, source, limit, quiet } => {
-            commands::pick(&config_path, db, &conv_id, &q, source.as_deref(), limit, quiet)
+        Command::Pick { conv_id, query: q, db, source, limit, quiet, kind } => {
+            commands::pick(&config_path, db, &conv_id, &q, source.as_deref(), limit, quiet, kind.as_deref())
         }
         Command::Needs { limit, json } => commands::needs(&config_path, limit, json),
         Command::Explain { conv_id, query: q, db } => commands::explain(&config_path, db, &conv_id, &q),

@@ -116,7 +116,6 @@ fn state(native_id: &str, bytes: &[u8]) -> Option<Conversation> {
         forked_from_native_id: None,
         // No documented URL or command reopens one of these by id, and an invented one that
         // fails is worse than none.
-        resume_cmd: None,
         head_native_id: None,
         messages: Vec::new(),
     })
@@ -261,7 +260,6 @@ fn transcript(logical_path: &str, native_id: &str, bytes: &[u8]) -> Option<Conve
         model,
         surface: None,
         forked_from_native_id: None,
-        resume_cmd: None,
         // Append-only, so the last message is the head.
         head_native_id: None,
         messages,
@@ -524,13 +522,16 @@ mod tests {
             .expect("claude_code parses this, which is the hazard");
         assert_eq!(stolen.source, "claude-code", "filed under a source it does not belong to");
         assert!(
-            stolen.resume_cmd.is_some_and(|cmd| cmd.starts_with("claude --resume")),
-            "and offered a resume command that cannot reopen a desktop session"
+            !cs_core::destinations(&stolen.source, &stolen.native_id).is_empty(),
+            "and so offers a `claude --resume` that cannot reopen a desktop session"
         );
 
         let ours = import("acct/org/local_abc/audit.jsonl", &desktop).unwrap();
         assert_eq!(ours.source, SOURCE);
-        assert_eq!(ours.resume_cmd, None, "no command reopens one of these, so none is offered");
+        assert!(
+            cs_core::destinations(&ours.source, &ours.native_id).is_empty(),
+            "nothing reopens one of these, so nothing is offered"
+        );
     }
 
     #[test]

@@ -136,7 +136,7 @@ Truncation is marked in the stored text with the dropped byte count. A silently 
 
 `proposed` · 2026-07-28
 
-**Decision.** Three cases. Upstream-deleted and retention-pruned both _keep_ the content and set `deleted_upstream_at` (flagging that `resume_cmd` will fail). A deliberate `forget` removes from raw and index and writes a tombstone so the next scan cannot resurrect it from a source file that still exists.
+**Decision.** Three cases. Upstream-deleted and retention-pruned both _keep_ the content and set `deleted_upstream_at` (flagging that reopening will fail). A deliberate `forget` removes from raw and index and writes a tombstone so the next scan cannot resurrect it from a source file that still exists.
 
 **Why.** Outliving upstream deletion is the point of an archive — Claude Code's 30-day retention already destroyed everything before 2026-06-19. But a searchable index of everything is also a concentration of risk, so deliberate removal has to be possible and has to stick.
 

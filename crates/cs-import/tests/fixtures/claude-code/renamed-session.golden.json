@@ -58,7 +58,6 @@
         ],
         "model": "claude-opus-4",
         "native_id": "sess-7f80",
-        "resume_cmd": "claude --resume sess-7f80",
         "source": "claude-code",
         "surface": "cli",
         "titles": {

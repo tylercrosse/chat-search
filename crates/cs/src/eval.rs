@@ -721,7 +721,8 @@ mod tests {
             score: -1.0,
             match_count: 1,
             match_seqs: vec![2],
-            resume_cmd: None,
+            native_id: "c1".into(),
+            destinations: Vec::new(),
             deleted_upstream: false,
             hits: Vec::new(),
         }

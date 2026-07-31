@@ -82,7 +82,6 @@
         ],
         "model": "gpt-5",
         "native_id": "conv-chatgpt-0001",
-        "resume_cmd": "https://chatgpt.com/c/conv-chatgpt-0001",
         "source": "chatgpt-export",
         "surface": null,
         "titles": {

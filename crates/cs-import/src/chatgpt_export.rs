@@ -224,7 +224,6 @@ fn import_conversation(raw: &Value) -> Option<Conversation> {
         model: non_empty_str(raw.get("default_model_slug")).map(String::from).or(model),
         surface: None,
         forked_from_native_id: None,
-        resume_cmd: Some(format!("https://chatgpt.com/c/{native_id}")),
         head_native_id,
         messages,
     })
@@ -515,7 +514,9 @@ mod tests {
         assert_eq!(c.source, "chatgpt-export");
         assert_eq!(c.native_id, "conv-1");
         assert_eq!(c.id(), "chatgpt-export:conv-1");
-        assert_eq!(c.resume_cmd.as_deref(), Some("https://chatgpt.com/c/conv-1"));
+        // The url is `destination`'s to build (chat-search-me9.3); what matters here is that the
+        // id it routes on is the export's own, reused verbatim rather than reconstructed.
+        assert!(!cs_core::destinations(&c.source, &c.native_id).is_empty());
 
         let ids: Vec<&str> = c.messages.iter().map(|m| m.native_id.as_str()).collect();
         assert_eq!(ids, ["u1", "a1", "u2", "a2"], "node ids are reused verbatim");

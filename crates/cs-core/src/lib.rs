@@ -8,6 +8,7 @@
 //! `time` holds what every client needs and no client should re-derive: the clock, and the
 //! rule for naming the local day an instant fell on.
 
+pub mod destination;
 pub mod eval;
 pub mod highlight;
 pub mod index;
@@ -18,6 +19,7 @@ pub mod schema;
 pub mod search;
 pub mod time;
 
+pub use destination::{destinations, Destination};
 pub use eval::{Grade, Judged, QueryScore, Report};
 pub use index::{
     built_by, ensure_current, open, open_fresh, reset, write_conversations, write_conversations_with, IndexOptions,

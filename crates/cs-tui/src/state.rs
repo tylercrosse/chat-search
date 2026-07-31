@@ -110,14 +110,12 @@ impl App {
         // while a query is still too short to mean anything.
         let text = if self.holding() { String::new() } else { self.query.clone() };
         let t0 = std::time::Instant::now();
-        let q = cs_core::Query {
-            text: &text,
+        let q = cs_core::SearchOptions {
             limit: self.limit,
             source: self.source.as_deref(),
             // The TUI is typeahead by definition, so the word being typed is always open-ended.
             prefix: true,
-            now_ms: self.now,
-            ..cs_core::Query::new(&text)
+            ..cs_core::SearchOptions::new(&text, self.now)
         };
         // `nested = 0`: no snippets. Building them is 5-20x the cost of the ranking itself
         // — measured on the 172k-message index, `pro` goes 34 ms to 448 ms and `learning`
@@ -125,7 +123,7 @@ impl App {
         // the highlighter can agree with the ranker (chat-search-6eb.20, and 6eb.30 for the
         // schema change that would remove the insert). The row model draws hits only for an
         // expanded conversation, so per keystroke this pays for 150 snippets and draws none.
-        match cs_core::search_grouped(&self.conn, &q, 0) {
+        match cs_core::search_grouped(&self.conn, &q) {
             Ok(groups) => {
                 self.last_ms = t0.elapsed().as_secs_f64() * 1000.0;
                 self.groups = groups;
@@ -301,15 +299,14 @@ impl App {
         if cs_core::is_blank(&text) {
             return;
         }
-        let q = cs_core::Query {
-            text: &text,
+        let q = cs_core::SearchOptions {
             limit: self.limit,
             source: self.source.as_deref(),
             prefix: true,
-            now_ms: self.now,
-            ..cs_core::Query::new(&text)
+            nested: rows::MAX_HITS,
+            ..cs_core::SearchOptions::new(&text, self.now)
         };
-        if let Ok(groups) = cs_core::search_grouped(&self.conn, &q, rows::MAX_HITS) {
+        if let Ok(groups) = cs_core::search_grouped(&self.conn, &q) {
             self.groups = groups;
         }
     }

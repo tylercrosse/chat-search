@@ -160,19 +160,18 @@ pub fn search(
     let db_path = db_path.unwrap_or_else(|| cfg.default_db());
     let t0 = std::time::Instant::now();
     let conn = rusqlite_open(&db_path)?;
-    let q = cs_core::Query {
-        text,
+    let q = cs_core::SearchOptions {
         limit,
         field: if tools { cs_core::Field::Tools } else { cs_core::Field::Prose },
         source,
         include_off_path,
         prefix,
-        now_ms: cs_core::now_ms(),
-        ..cs_core::Query::new(text)
+        nested,
+        ..cs_core::SearchOptions::new(text, cs_core::now_ms())
     };
 
     if !flat {
-        let groups = cs_core::search_grouped(&conn, &q, nested)?;
+        let groups = cs_core::search_grouped(&conn, &q)?;
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         // Typeahead is excluded: `--prefix` fires once per keystroke, so logging it would
         // bury the handful of real queries under every prefix of each of them. A client
@@ -259,14 +258,12 @@ pub fn pick(
         // was wanted without anything being typed — but there is no ranking to place it in.
         (Vec::new(), 0)
     } else {
-        let q = cs_core::Query {
-            text,
+        let q = cs_core::SearchOptions {
             limit,
             source,
-            now_ms: cs_core::now_ms(),
-            ..cs_core::Query::new(text)
+            ..cs_core::SearchOptions::new(text, cs_core::now_ms())
         };
-        let groups = cs_core::search_grouped(&conn, &q, 0)?;
+        let groups = cs_core::search_grouped(&conn, &q)?;
         let ids: Vec<String> = groups.iter().map(|g| g.conv_id.clone()).collect();
         let n = ids.len();
         (ids, n)
@@ -350,7 +347,7 @@ pub fn explain(config_path: &Path, db_path: Option<PathBuf>, conv_id: &str, quer
     let cfg = Config::load(config_path)?;
     let db_path = db_path.unwrap_or_else(|| cfg.default_db());
     let conn = rusqlite_open(&db_path)?;
-    let e = cs_core::explain(&conn, conv_id, query)?;
+    let e = cs_core::explain(&conn, conv_id, query, cs_core::now_ms())?;
     println!("{:#}", serde_json::to_value(&e)?);
     Ok(())
 }

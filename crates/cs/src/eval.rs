@@ -154,15 +154,14 @@ fn run_query(
     repeat_weight: f64,
     decay: f64,
 ) -> Result<Vec<cs_core::Group>> {
-    let q = cs_core::Query {
-        text,
+    let q = cs_core::SearchOptions {
         limit,
         repeat_weight,
         decay,
-        now_ms: cs_core::now_ms(),
-        ..cs_core::Query::new(text)
+        nested: 1,
+        ..cs_core::SearchOptions::new(text, cs_core::now_ms())
     };
-    Ok(cs_core::search_grouped(conn, &q, 1)?)
+    Ok(cs_core::search_grouped(conn, &q)?)
 }
 
 /// Every conversation any variant surfaced in its top `depth`, deduplicated by id.

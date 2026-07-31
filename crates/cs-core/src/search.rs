@@ -11,7 +11,7 @@ const YEAR_MS: f64 = 365.0 * 24.0 * 60.0 * 60.0 * 1000.0;
 /// measured. At 0.3, a year-old conversation needs roughly a 30% better bm25 to hold its
 /// place against a fresh one, and a three-year-old one nearly twice as good.
 ///
-/// Settable per query via [`Query::decay`] so the eval harness can pool candidates from a
+/// Settable per query via [`SearchOptions::decay`] so the eval harness can pool candidates from a
 /// recency-blind ranker as well as this one — judging only what today's constants return is
 /// how a tuning run learns that today's constants are optimal (chat-search-6eb.13).
 pub const DECAY: f64 = 0.3;
@@ -196,7 +196,9 @@ pub fn marking_terms(query: &str, prefix: bool) -> Vec<String> {
     terms
 }
 
-pub struct Query<'a> {
+/// How to run a search, as distinct from what was asked. The query text itself moves to
+/// [`crate::query::Query`]; what remains here is tuning the caller chooses.
+pub struct SearchOptions<'a> {
     pub text: &'a str,
     pub limit: i64,
     pub field: Field,
@@ -205,15 +207,27 @@ pub struct Query<'a> {
     pub include_off_path: bool,
     /// Treat the final token as a prefix, for typeahead.
     pub prefix: bool,
+    /// The clock the recency decay is measured against. Required rather than defaulted —
+    /// see [`SearchOptions::new`].
     pub now_ms: i64,
     /// See [`REPEAT_WEIGHT`], which is the default.
     pub repeat_weight: f64,
     /// See [`DECAY`], which is the default.
     pub decay: f64,
+    /// How many matching messages each returned conversation carries. Formerly a positional
+    /// argument to [`search_grouped`], which put one of the ten options somewhere the other
+    /// nine could not be read from.
+    pub nested: usize,
 }
 
-impl<'a> Query<'a> {
-    pub fn new(text: &'a str) -> Self {
+impl<'a> SearchOptions<'a> {
+    /// `now_ms` is an argument rather than a defaulted field because zero does not mean
+    /// "the epoch" here, it means "no decay at all": the score divisor is
+    /// `1.0 + decay * max(0, now_ms - ts) / YEAR`, and with `now_ms` at zero the `max` is
+    /// zero for every real timestamp, so the divisor is exactly 1.0. That silence cost
+    /// [`explain`] its whole answer — it reported ranks from a recency-blind ranker while
+    /// telling you a shipping one had a ranking problem.
+    pub fn new(text: &'a str, now_ms: i64) -> Self {
         Self {
             text,
             limit: 10,
@@ -221,9 +235,10 @@ impl<'a> Query<'a> {
             source: None,
             include_off_path: false,
             prefix: false,
-            now_ms: 0,
+            now_ms,
             repeat_weight: REPEAT_WEIGHT,
             decay: DECAY,
+            nested: 0,
         }
     }
 }
@@ -237,7 +252,7 @@ pub fn is_blank(query: &str) -> bool {
     to_match_expr_opts(query, false).is_empty()
 }
 
-pub fn search(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Hit>> {
+pub fn search(conn: &Connection, q: &SearchOptions) -> rusqlite::Result<Vec<Hit>> {
     if is_blank(q.text) {
         return Ok(Vec::new());
     }
@@ -308,7 +323,15 @@ pub struct Explain {
     pub verdict: String,
 }
 
-pub fn explain(conn: &Connection, conv_id: &str, query: &str) -> rusqlite::Result<Explain> {
+/// `now_ms` is threaded in rather than read from the clock so this answers about the ranking
+/// that actually ran. It previously built its options with the zero default and therefore
+/// reported a rank no shipping ranker produces — while printing a verdict blaming ranking.
+pub fn explain(
+    conn: &Connection,
+    conv_id: &str,
+    query: &str,
+    now_ms: i64,
+) -> rusqlite::Result<Explain> {
     let exists: bool =
         conn.query_row("SELECT COUNT(*) FROM conversation WHERE id=?1", params![conv_id], |r| {
             Ok(r.get::<_, i64>(0)? > 0)
@@ -350,7 +373,11 @@ pub fn explain(conn: &Connection, conv_id: &str, query: &str) -> rusqlite::Resul
 
     let ranked = search(
         conn,
-        &Query { text: query, limit: 500, include_off_path: true, ..Query::new(query) },
+        &SearchOptions {
+            limit: 500,
+            include_off_path: true,
+            ..SearchOptions::new(query, now_ms)
+        },
     )?;
     let best_rank = ranked.iter().position(|h| h.conv_id == conv_id);
     let best_score = best_rank.map(|i| ranked[i].score);
@@ -387,6 +414,11 @@ pub fn explain(conn: &Connection, conv_id: &str, query: &str) -> rusqlite::Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A clock before every fixture timestamp, so `max(0, now_ms - ts)` is zero and the
+    /// recency divisor is exactly 1.0. These tests reason about raw bm25 ordering, so they
+    /// want decay off — named rather than a bare `0`, which is what made it a trap.
+    const NO_DECAY: i64 = 0;
 
     #[test]
     fn match_expr_survives_punctuation_that_would_be_a_syntax_error() {
@@ -469,7 +501,7 @@ mod tests {
         let conn = indexed(&cases.map(|(_, text)| text));
 
         for (query, text) in cases {
-            let hits = search(&conn, &Query { limit: 10, ..Query::new(query) }).unwrap();
+            let hits = search(&conn, &SearchOptions { limit: 10, ..SearchOptions::new(query, NO_DECAY) }).unwrap();
             let hit = hits
                 .iter()
                 .find(|h| h.msg_id.ends_with(":m0") && h.snippet.contains(&text[..12]))
@@ -546,7 +578,7 @@ mod tests {
     fn a_hit_carries_the_offsets_its_own_snippet_was_marked_with() {
         // The two fields are built from one call, so they cannot describe different windows.
         let conn = indexed(&["Commit current changes before the rebase"]);
-        let hits = search(&conn, &Query::new("commits")).unwrap();
+        let hits = search(&conn, &SearchOptions::new("commits", NO_DECAY)).unwrap();
         let h = hits.first().expect("`commits` ranks the row");
         assert_eq!(h.snippet_spans.len(), 1, "{:?}", h.snippet);
         let s = h.snippet_spans[0];
@@ -559,7 +591,7 @@ mod tests {
         // added but never renamed or dropped. Spelled out rather than derived from the struct,
         // because a rename would otherwise rename this list along with the contract.
         let conn = indexed(&["Commit current changes before the rebase"]);
-        let hits = search(&conn, &Query::new("commits")).unwrap();
+        let hits = search(&conn, &SearchOptions::new("commits", NO_DECAY)).unwrap();
         let json = serde_json::to_value(&hits[0]).unwrap();
         for field in [
             "conv_id", "msg_id", "source", "title", "role", "kind", "ts", "score", "snippet",
@@ -636,7 +668,7 @@ pub struct Group {
 /// agent sessions win on volume alone. 0.25 keeps the best hit leading while letting
 /// sustained discussion break ties.
 ///
-/// Settable per query via [`Query::repeat_weight`]; see [`DECAY`] for why.
+/// Settable per query via [`SearchOptions::repeat_weight`]; see [`DECAY`] for why.
 pub const REPEAT_WEIGHT: f64 = 0.25;
 
 /// Most recently active conversations, carrying no nested hits.
@@ -646,7 +678,7 @@ pub const REPEAT_WEIGHT: f64 = 0.25;
 /// characters return noise rather than a narrowing list. Recency is the only ranking
 /// available without a query and it is also the one people expect — the conversation you
 /// want is usually among the last few you had.
-pub fn recent(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Group>> {
+pub fn recent(conn: &Connection, q: &SearchOptions) -> rusqlite::Result<Vec<Group>> {
     let mut stmt = conn.prepare(
         "SELECT id, source, title, ended_at, user_turns, resume_cmd, deleted_upstream_at,
                 msg_count, prose_count, cwd
@@ -680,16 +712,13 @@ pub fn recent(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Group>> {
     rows.collect()
 }
 
-/// Conversations matching `q`, best-first, each carrying up to `nested` messages.
+/// Conversations matching `q`, best-first, each carrying up to [`SearchOptions::nested`]
+/// messages.
 ///
 /// Scores are pulled ungrouped and folded here rather than in SQL: FTS5 auxiliary functions
 /// like bm25() cannot be used through a CTE or subquery, so the grouping has to happen after
 /// the rows come back.
-pub fn search_grouped(
-    conn: &Connection,
-    q: &Query,
-    nested: usize,
-) -> rusqlite::Result<Vec<Group>> {
+pub fn search_grouped(conn: &Connection, q: &SearchOptions) -> rusqlite::Result<Vec<Group>> {
     if is_blank(q.text) {
         return recent(conn, q);
     }
@@ -759,7 +788,7 @@ pub fn search_grouped(
         // shape of the whole conversation, which `nested` would otherwise truncate to three.
         let mut seqs: Vec<i64> = hits.iter().map(|(_, seq, _)| *seq).collect();
         seqs.sort_unstable();
-        let shown = hits.into_iter().take(nested).map(|(id, _, _)| id).collect();
+        let shown = hits.into_iter().take(q.nested).map(|(id, _, _)| id).collect();
         ranked.push(Ranked { conv_id, score, match_count, seqs, shown });
     }
 
@@ -826,7 +855,7 @@ pub fn match_density(seqs: &[i64], msg_count: i64) -> String {
 /// it — are touched only for rows that survived. One prepared statement reused across the
 /// survivors beats an `IN (...)` list, which would need rebuilding per query and lose the
 /// statement cache.
-fn hydrate(conn: &Connection, q: &Query, ranked: Vec<Ranked>) -> rusqlite::Result<Vec<Group>> {
+fn hydrate(conn: &Connection, q: &SearchOptions, ranked: Vec<Ranked>) -> rusqlite::Result<Vec<Group>> {
     let mut meta = conn.prepare_cached(
         "SELECT source, title, resume_cmd, deleted_upstream_at, ended_at, user_turns,
                 msg_count, prose_count, cwd
@@ -911,6 +940,11 @@ fn hydrate(conn: &Connection, q: &Query, ranked: Vec<Ranked>) -> rusqlite::Resul
 mod group_tests {
     use super::*;
 
+    /// A clock before every fixture timestamp, so `max(0, now_ms - ts)` is zero and the
+    /// recency divisor is exactly 1.0. These tests reason about raw bm25 ordering, so they
+    /// want decay off — named rather than a bare `0`, which is what made it a trap.
+    const NO_DECAY: i64 = 0;
+
     #[test]
     fn adding_characters_never_widens_the_result_set() {
         // Reported from the TUI 2026-07-30: `deep le` returned 6 conversations and
@@ -987,10 +1021,10 @@ mod group_tests {
             .unwrap();
         }
 
-        let q = Query { limit: 10, ..Query::new("") };
+        let q = SearchOptions { limit: 10, nested: 3, ..SearchOptions::new("", NO_DECAY) };
         // An empty MATCH expression is a syntax error, so the point is that this does not
         // merely return nothing — it returns something useful, which is what a TUI opens on.
-        let groups = search_grouped(&conn, &q, 3).unwrap();
+        let groups = search_grouped(&conn, &q).unwrap();
         let ids: Vec<_> = groups.iter().map(|g| g.conv_id.as_str()).collect();
         assert_eq!(ids, ["c:a", "c:c", "c:b", "c:z"]);
         assert!(groups.iter().all(|g| g.hits.is_empty()), "no query means no hits to nest");
@@ -1015,11 +1049,11 @@ mod group_tests {
             )
             .unwrap();
         }
-        let got = recent(&conn, &Query { limit: 10, source: Some("codex"), ..Query::new("") }).unwrap();
+        let got = recent(&conn, &SearchOptions { limit: 10, source: Some("codex"), ..SearchOptions::new("", NO_DECAY) }).unwrap();
         assert_eq!(got.len(), 2);
         assert!(got.iter().all(|g| g.source == "codex"));
 
-        let capped = recent(&conn, &Query { limit: 1, ..Query::new("") }).unwrap();
+        let capped = recent(&conn, &SearchOptions { limit: 1, ..SearchOptions::new("", NO_DECAY) }).unwrap();
         assert_eq!(capped.len(), 1);
     }
 
@@ -1051,7 +1085,7 @@ mod group_tests {
         )
         .unwrap();
 
-        let groups = search_grouped(&conn, &Query { limit: 5, ..Query::new("borrow") }, 3).unwrap();
+        let groups = search_grouped(&conn, &SearchOptions { limit: 5, nested: 3, ..SearchOptions::new("borrow", NO_DECAY) }).unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].ended_at, Some(ended));
         assert_eq!(groups[0].ended_date, crate::time::local_ymd(ended));
@@ -1121,8 +1155,11 @@ mod group_tests {
         seed(&conn, "c:many-weak", 1_000, &[diluted, diluted, diluted, diluted]);
 
         let top = |w: f64| {
-            let q = Query { limit: 10, repeat_weight: w, decay: 0.0, ..Query::new("widget") };
-            search_grouped(&conn, &q, 1).unwrap()[0].conv_id.clone()
+            let q = SearchOptions {
+                limit: 10, nested: 1, repeat_weight: w, decay: 0.0,
+                ..SearchOptions::new("widget", NO_DECAY)
+            };
+            search_grouped(&conn, &q).unwrap()[0].conv_id.clone()
         };
         assert_eq!(top(0.0), "c:one-strong", "pure max: the single best hit is the whole score");
         assert_eq!(top(1.0), "c:many-weak", "pure sum: volume wins, which is what damping prevents");
@@ -1140,10 +1177,11 @@ mod group_tests {
         seed(&conn, "c:b-new", 3 * year, &[text]);
 
         let top = |d: f64| {
-            let q = Query {
-                limit: 10, decay: d, now_ms: 3 * year, ..Query::new("widget")
+            let q = SearchOptions {
+                limit: 10, nested: 1, decay: d, now_ms: 3 * year,
+                ..SearchOptions::new("widget", NO_DECAY)
             };
-            search_grouped(&conn, &q, 1).unwrap()[0].conv_id.clone()
+            search_grouped(&conn, &q).unwrap()[0].conv_id.clone()
         };
         assert_eq!(top(0.0), "c:a-old", "recency-blind: equal scores, tie broken by id");
         assert_eq!(top(DECAY), "c:b-new", "three years of age is enough to lose the top slot");

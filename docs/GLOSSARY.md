@@ -101,6 +101,26 @@ The split from the archiver is what makes **retroactive reparse** possible: fix 
 
 ---
 
+## Search
+
+**Query** The parsed form of what the user asked for — terms, filters, and whether it can be run. Distinct from **search options** (limit, field, decay, `now_ms`), which are how to run it. Conflating the two is why `recent` once accepted a query object and silently ignored seven of its nine fields.
+
+Parsed exactly once, by `cs_core::query`. Everything downstream reads the parsed value; nothing re-reads the string. Before that rule existed the ranker and the highlighter each tokenized it themselves and disagreed twice — `agent:codex` reached FTS5 as two literal words, and a repeated final word lost its prefix star.
+
+**Term** One word the ranker matches on, after filter tokens have been lifted out. Held in the order typed and **not** deduplicated: the ranker ANDs a repeat, and `learn deep learn` must still put its prefix star on the final `learn`.
+
+**Marking terms** The same terms rendered for a highlighter rather than for FTS5 — deduplicated, since marking a word twice paints it twice. Both renderings come from one term list, which is what keeps "what ranked" and "what is highlighted" the same answer.
+
+**Filter** A token naming a facet rather than text to find: `agent:codex`, `dir:web-app`, `date:<3d`, and the negated `-agent:codex`. Lifted out of the query text because a TUI has one input box and a `--source` flag does not survive the move off the CLI.
+
+**Facet** Which column a filter selects on — `agent` → `conversation.source`, `dir` → `conversation.cwd` (case-insensitive substring; enums want equality, paths want substring), `date` → `conversation.ended_at`.
+
+**Active** vs **unapplied** A filter is _active_ when it reaches the SQL and _unapplied_ when it is understood but has no clause yet. Unapplied filters are reported, never dropped: returning unfiltered results for a query that names a filter looks like it worked.
+
+**Mode** Whether a query can be run — `Empty` (nothing searchable typed), `TooShort` (a lone term below the prefix floor), or `Searchable`. `cs-core` owns the fact, a client owns what to show for it. The distinction is a measured ranking cost rather than a matter of taste: `h*` is 2510 ms against `hov*` at 16 ms, because BM25 scores every matching row before it can sort.
+
+---
+
 ## Vendor translation
 
 | our term | Codex | Claude Code | ChatGPT export |

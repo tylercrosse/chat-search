@@ -12,6 +12,7 @@ pub mod eval;
 pub mod highlight;
 pub mod index;
 pub mod model;
+pub mod query;
 pub mod querylog;
 pub mod schema;
 pub mod search;
@@ -23,6 +24,7 @@ pub use index::{
     IndexStats, TOOL_TEXT_MAX,
 };
 pub use model::{Conversation, Kind, Message, Role, Titles};
+pub use query::{Facet, Filter, Mode, Query};
 pub use schema::IMPORTER_VERSION;
 pub use search::{
     explain, is_blank, match_density, recent, search, search_grouped, Explain, Field, Group, Hit,

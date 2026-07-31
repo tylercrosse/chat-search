@@ -166,6 +166,89 @@ pub fn spans(text: &str, terms: &[String]) -> Vec<Span> {
     }
 }
 
+/// [`spans`] for a whole conversation at once, returning one span list per text.
+///
+/// Identical answers, one trip through the scratch table instead of one per message. That is the
+/// whole of it, and it is worth a separate entry point because the cost here is *per call*, not
+/// per byte. Measured on the corpus's longest conversation, marking the same 937 KB:
+///
+/// | calls | time |
+/// | ---: | ---: |
+/// | 1,468 | 224.3 ms |
+/// | 367 | 135.1 ms |
+/// | 23 | 68.0 ms |
+/// | 1 | 52.7 ms |
+///
+/// Same bytes throughout, so ~170 ms of that was round trips rather than work. Outside an
+/// explicit transaction SQLite wraps every `INSERT` in an implicit one of its own, and a
+/// `DELETE` and a `MATCH` were being paid per message on top.
+///
+/// A text that matched nothing gets an empty list, exactly as [`spans`] would give it, so
+/// position in the returned vector is the only thing tying an answer to its input.
+pub fn spans_many(texts: &[&str], terms: &[String]) -> Vec<Vec<Span>> {
+    let nothing = || texts.iter().map(|_| Vec::new()).collect::<Vec<_>>();
+    if terms.is_empty() || texts.is_empty() {
+        return nothing();
+    }
+    // Chosen against every text at once: a delimiter that is free in one message and present in
+    // the next would shift that message's offsets and nothing would say so.
+    //
+    // Falling back rather than giving up, because the pool is shared here and a single text that
+    // spends the last free pair would otherwise cost the *whole conversation* its marks, where
+    // asking one at a time costs only the message that did it. This is an optimisation; it may
+    // not answer worse than the thing it optimises.
+    let Some((open, close)) = sentinels_for(texts) else {
+        return texts.iter().map(|text| spans(text, terms)).collect();
+    };
+    let expr = any_expr(terms);
+
+    let marked = SCRATCH.with(|cell| -> rusqlite::Result<Vec<(i64, String)>> {
+        let mut slot = cell.borrow_mut();
+        if slot.is_none() {
+            *slot = Some(scratch_table()?);
+        }
+        let conn = slot.as_ref().expect("just built");
+
+        conn.execute_batch("BEGIN")?;
+        let filled = (|| -> rusqlite::Result<()> {
+            conn.prepare_cached("DELETE FROM hl")?.execute([])?;
+            let mut ins = conn.prepare_cached("INSERT INTO hl(rowid, text) VALUES (?1, ?2)")?;
+            for (i, text) in texts.iter().enumerate() {
+                ins.execute(params![i as i64 + 1, text])?;
+            }
+            Ok(())
+        })();
+        // Ended whichever way it went. A transaction left open would poison every later call on
+        // this thread-local connection, and that failure surfaces somewhere else entirely.
+        let ended = conn.execute_batch(if filled.is_ok() { "COMMIT" } else { "ROLLBACK" });
+        filled?;
+        ended?;
+
+        // Named, not a tail expression, for the same reason [`spans`] names its own: the
+        // statement borrows the connection, which borrows the `RefCell` guard, and the rows
+        // have to be collected before any of that is released.
+        let mut q = conn.prepare_cached(
+            "SELECT rowid, highlight(hl, 0, char(?1), char(?2)) FROM hl WHERE hl MATCH ?3",
+        )?;
+        let found = q
+            .query_map(params![open, close, expr], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<(i64, String)>>>()?;
+        drop(q);
+        Ok(found)
+    });
+
+    let mut out = nothing();
+    // Only matching rows come back, so anything absent keeps the empty list it started with.
+    if let Ok(rows) = marked {
+        for (rowid, text) in rows {
+            if let Some(slot) = out.get_mut((rowid - 1).max(0) as usize) {
+                *slot = marked_spans(&text, open, close);
+            }
+        }
+    }
+    out
+}
+
 /// A window of `text` around its densest cluster of matches, with spans relative to the
 /// window.
 ///
@@ -306,14 +389,38 @@ fn scratch_table() -> rusqlite::Result<rusqlite::Connection> {
 /// continuation byte falls in that range, so the byte scan and the char scan agree — and on
 /// the 100 KB messages this corpus does contain, the char scan was measurable on its own.
 fn sentinels(text: &str) -> Option<(u8, u8)> {
-    const CANDIDATES: usize = 6; // U+0001..=U+0006
-    let mut taken = [false; CANDIDATES];
-    for &b in text.as_bytes() {
-        if (1..=CANDIDATES as u8).contains(&b) {
-            taken[b as usize - 1] = true;
+    sentinels_for(&[text])
+}
+
+/// Control bytes that may stand in as delimiters: C0 minus tab, newline and carriage return,
+/// which are ordinary text here.
+///
+/// Every one encodes as itself and no UTF-8 continuation byte falls in the range, so scanning
+/// bytes and scanning chars agree — and on the 100 KB messages this corpus contains, the char
+/// scan was measurable on its own.
+///
+/// Wide on purpose. A single message rarely holds any of these, but [`spans_many`] has to find a
+/// pair free across *every* message at once, and the six candidates this started with were
+/// exhausted by a handful of texts between them. Running out is still possible and still
+/// handled; it just stops being likely.
+const DELIMITERS: [u8; 28] = [
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x0B, 0x0C, 0x0E, 0x0F, 0x10, 0x11, 0x12,
+    0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+];
+
+/// [`sentinels`] over several texts, which all have to share one pair — a batch reads its
+/// answers back out of one query, so a delimiter free in one text and present in another would
+/// silently shift the second one's offsets.
+fn sentinels_for(texts: &[&str]) -> Option<(u8, u8)> {
+    let mut taken = [false; DELIMITERS.len()];
+    for text in texts {
+        for &b in text.as_bytes() {
+            if let Some(i) = DELIMITERS.iter().position(|&d| d == b) {
+                taken[i] = true;
+            }
         }
     }
-    let mut free = (0..CANDIDATES).filter(|&i| !taken[i]).map(|i| i as u8 + 1);
+    let mut free = DELIMITERS.iter().enumerate().filter(|(i, _)| !taken[*i]).map(|(_, &d)| d);
     Some((free.next()?, free.next()?))
 }
 
@@ -370,6 +477,70 @@ mod tests {
         ] {
             assert!(!spans(text, &terms(query)).is_empty(), "{query:?} in {text:?}");
         }
+    }
+
+    #[test]
+    fn marking_a_batch_gives_every_text_the_answer_it_would_have_got_alone() {
+        // The batch exists only to be faster, so the one thing that must never differ is the
+        // answer. Position is all that ties a result to its input, so a text that matched
+        // nothing has to hold its place rather than be dropped.
+        let texts = [
+            "Commit current changes",
+            "nothing of interest here",
+            "the café was closed",
+            "",
+            "commit, commits and committing",
+            "learned something",
+        ];
+        for query in ["commits", "cafe", "learning", "elephant", "commit café"] {
+            let t = terms(query);
+            let batch = spans_many(&texts, &t);
+            let alone: Vec<Vec<Span>> = texts.iter().map(|x| spans(x, &t)).collect();
+            assert_eq!(batch, alone, "{query:?}");
+            assert_eq!(batch.len(), texts.len(), "{query:?} lost a text");
+        }
+        // Degenerate inputs keep the shape callers index into.
+        assert_eq!(spans_many(&texts, &[]).len(), texts.len());
+        assert!(spans_many(&[], &terms("commit")).is_empty());
+    }
+
+    #[test]
+    fn a_batch_shares_one_pair_of_delimiters_across_every_text() {
+        // Offsets are read back out of one query, so a delimiter free in one text and present
+        // in the next would shift the second one's marks with nothing to say so.
+        let texts = ["\u{1}\u{2} café here", "plain café", "\u{3}\u{4}\u{5} café again"];
+        let got = spans_many(&texts, &terms("cafe"));
+        for (text, marks) in texts.iter().zip(&got) {
+            assert_eq!(marks.len(), 1, "{text:?}");
+            assert_eq!(&text[marks[0].start..marks[0].end], "café");
+        }
+    }
+
+    #[test]
+    fn a_batch_that_runs_out_of_delimiters_falls_back_instead_of_marking_nothing() {
+        // The pool is shared across the batch, so one text holding every candidate would cost
+        // the whole conversation its marks — where asking one at a time costs only that text.
+        // A batch is an optimisation and may not answer worse than what it optimises.
+        let hog: String = DELIMITERS.iter().map(|&b| b as char).collect();
+        let texts = [hog.as_str(), "the borrow checker", "borrowing again"];
+        assert_eq!(sentinels_for(&texts), None, "the fixture has to actually exhaust the pool");
+
+        let got = spans_many(&texts, &terms("borrow"));
+        let alone: Vec<Vec<Span>> = texts.iter().map(|t| spans(t, &terms("borrow"))).collect();
+        assert_eq!(got, alone);
+        assert!(!got[1].is_empty() && !got[2].is_empty(), "the innocent texts still got marks");
+    }
+
+    #[test]
+    fn a_failed_batch_leaves_the_scratch_connection_usable() {
+        // A transaction left open would poison every later call on this thread's connection,
+        // and the damage would surface in whatever ran next rather than here.
+        let broken = vec!["\"".to_string()];
+        let _ = spans_many(&["commit current changes"], &broken);
+        assert!(
+            !spans("commit current changes", &terms("commits")).is_empty(),
+            "the scratch table did not survive a failed batch",
+        );
     }
 
     #[test]

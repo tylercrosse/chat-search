@@ -168,8 +168,17 @@ impl Preview {
         // faster. The structural fix is chat-search-6eb.30, which removes the insert entirely.
         let mut blocks = blocks;
         if !terms.is_empty() {
-            for block in blocks.iter_mut().filter(|b| b.drawn()) {
-                block.marks = highlight::spans(&block.text, terms);
+            // One trip through the highlighter for the whole conversation. Marking cost is per
+            // *call*, not per byte — the same 937 KB took 224 ms as 1,468 calls and 53 ms as
+            // one — so the number of messages, not their size, was what made opening a long
+            // conversation slow.
+            let marks = {
+                let drawn: Vec<&str> =
+                    blocks.iter().filter(|b| b.drawn()).map(|b| b.text.as_str()).collect();
+                highlight::spans_many(&drawn, terms)
+            };
+            for (block, found) in blocks.iter_mut().filter(|b| b.drawn()).zip(marks) {
+                block.marks = found;
             }
         }
 

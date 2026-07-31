@@ -81,13 +81,12 @@ fn search(frame: &mut Frame, area: Rect, app: &App) {
             app.theme.dim,
         ));
     }
-    // A filter that was understood but is not in force, said where it was typed. Without
-    // this the rows below look filtered and are not, which is a worse answer than none
-    // (`me9.15`; `6eb.11` is what makes these active).
-    let unapplied = app.parsed().unapplied();
-    if !unapplied.is_empty() {
+    // A filter token whose value selects nothing, said where it was typed. Without this the
+    // rows below look filtered and are not, which is a worse answer than none (`me9.15`).
+    let rejected = app.parsed().rejected();
+    if !rejected.is_empty() {
         spans.push(Span::styled(
-            format!("   {} not a filter yet", unapplied.join(" ")),
+            format!("   {} matches no value", rejected.join(" ")),
             app.theme.dim,
         ));
     }

@@ -87,36 +87,216 @@ impl Facet {
     }
 }
 
-/// One filter token lifted out of the query text.
+/// The values one `agent:` or `dir:` token names, with the two negation forms already folded
+/// together.
 ///
-/// Recognising a filter is not the same as applying one. Only a plain positive `agent:` has
-/// somewhere to go today — it feeds the `source` clause the ranker already has. Everything
-/// else is carried and reported rather than dropped, because a filter that is silently
-/// ignored returns unfiltered results that look filtered. Wiring the rest is
-/// `chat-search-6eb.11`.
+/// `-agent:codex` and `agent:!codex` mean the same thing and land in the same place, so the
+/// SQL never has to know which spelling arrived. A prefix `-` distributes over every comma
+/// value, and an inline `!` flips its own — so `-agent:claude,!codex` excludes claude and
+/// includes codex, which is the only reading under which both marks keep meaning "not".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Selection {
+    pub include: Vec<String>,
+    pub exclude: Vec<String>,
+}
+
+impl Selection {
+    pub fn is_empty(&self) -> bool {
+        self.include.is_empty() && self.exclude.is_empty()
+    }
+
+    fn merge(&mut self, other: &Selection) {
+        for v in &other.include {
+            if !self.include.contains(v) {
+                self.include.push(v.clone());
+            }
+        }
+        for v in &other.exclude {
+            if !self.exclude.contains(v) {
+                self.exclude.push(v.clone());
+            }
+        }
+    }
+}
+
+/// A span of time measured backwards from now.
+///
+/// Split by whether the unit is a duration or a calendar step, because that is exactly the
+/// distinction DST makes real: an hour is always 3,600,000 ms, a day is 23, 24 or 25 of them.
+/// See [`crate::time::shift_days_in`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Age {
+    Millis(i64),
+    Days(i64),
+    Months(i64),
+}
+
+/// What a `date:` value selects.
+///
+/// Named days are whole civil days; everything else is an age measured back from now, so
+/// `date:week` and `date:<1w` are the same query written two ways.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateSpec {
+    /// One whole civil day, `n` days back from today. `today` is 0, `yesterday` is 1.
+    Day(i64),
+    /// Younger than this age — `date:<3h`, and what `date:week` means.
+    Younger(Age),
+    /// Older than this age — `date:>1w`.
+    Older(Age),
+}
+
+/// A resolved half-open window of epoch millis, `[from, until)`.
+///
+/// Half-open so that consecutive days tile without a millisecond falling in both or neither.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Window {
+    pub from: Option<i64>,
+    pub until: Option<i64>,
+}
+
+impl DateSpec {
+    /// Resolve against a clock and a zone. `None` if the arithmetic left chrono's range.
+    pub fn window_in<Tz: chrono::TimeZone>(self, tz: &Tz, now_ms: i64) -> Option<Window> {
+        match self {
+            DateSpec::Day(back) => {
+                let on = crate::time::shift_days_in(tz, now_ms, -back)?;
+                let from = crate::time::day_start_in(tz, on)?;
+                let until = crate::time::shift_days_in(tz, from, 1)?;
+                Some(Window { from: Some(from), until: Some(until) })
+            }
+            DateSpec::Younger(age) => {
+                Some(Window { from: Some(age.before(tz, now_ms)?), until: None })
+            }
+            DateSpec::Older(age) => {
+                Some(Window { from: None, until: Some(age.before(tz, now_ms)?) })
+            }
+        }
+    }
+
+    /// Resolve against the machine's own zone.
+    pub fn window(self, now_ms: i64) -> Option<Window> {
+        self.window_in(&chrono::Local, now_ms)
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "today" => return Some(DateSpec::Day(0)),
+            "yesterday" => return Some(DateSpec::Day(1)),
+            "week" => return Some(DateSpec::Younger(Age::Days(7))),
+            "month" => return Some(DateSpec::Younger(Age::Months(1))),
+            _ => {}
+        }
+        let (rest, wrap): (&str, fn(Age) -> DateSpec) = match value.split_at_checked(1) {
+            Some(("<", rest)) => (rest, DateSpec::Younger),
+            Some((">", rest)) => (rest, DateSpec::Older),
+            _ => return None,
+        };
+        Age::parse(rest).map(wrap)
+    }
+}
+
+impl Age {
+    /// The instant this far before `now_ms`.
+    fn before<Tz: chrono::TimeZone>(self, tz: &Tz, now_ms: i64) -> Option<i64> {
+        match self {
+            Age::Millis(ms) => now_ms.checked_sub(ms),
+            Age::Days(d) => crate::time::shift_days_in(tz, now_ms, -d),
+            Age::Months(m) => crate::time::shift_months_in(tz, now_ms, -m),
+        }
+    }
+
+    /// `3h`, `2d`, `1mo`. `mo` is matched before `m`, or every month would be a minute.
+    fn parse(text: &str) -> Option<Self> {
+        let split = text.find(|c: char| !c.is_ascii_digit())?;
+        let count: i64 = text.get(..split)?.parse().ok()?;
+        match text.get(split..)? {
+            "m" => count.checked_mul(60_000).map(Age::Millis),
+            "h" => count.checked_mul(3_600_000).map(Age::Millis),
+            "d" => Some(Age::Days(count)),
+            "w" => count.checked_mul(7).map(Age::Days),
+            "mo" => Some(Age::Months(count)),
+            "y" => count.checked_mul(12).map(Age::Months),
+            _ => None,
+        }
+    }
+}
+
+/// What a filter token turned out to mean.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FilterKind {
+    /// `agent:` and `dir:` — a set to keep and a set to drop.
+    Names(Selection),
+    /// `date:`, with the flag set by either negation form.
+    Date(DateSpec, bool),
+    /// Understood as a filter token, but the value names nothing that can be selected on:
+    /// a half-typed `agent:`, a `date:nope`, a `date:today,week` that asks for two days at
+    /// once. Kept rather than discarded so a surface can say the query is not doing what it
+    /// reads as doing.
+    Rejected,
+}
+
+/// One filter token lifted out of the query text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Filter {
-    pub facet: Facet,
-    pub value: String,
-    /// From the `-agent:codex` form.
-    pub negated: bool,
+    facet: Facet,
+    kind: FilterKind,
+    as_typed: String,
 }
 
 impl Filter {
-    /// Whether this filter reaches the SQL.
-    ///
-    /// Deliberately narrow. `dir:` and `date:` have columns but no clause yet; negation and
-    /// the multi-value `agent:claude,codex` form need SQL this change does not write. Each
-    /// of those is surfaced by [`Query::unapplied`] instead of quietly doing nothing.
+    fn new(facet: Facet, value: &str, negated: bool, as_typed: String) -> Self {
+        let kind = match facet {
+            Facet::Date => match DateSpec::parse(value) {
+                Some(spec) => FilterKind::Date(spec, negated),
+                None => FilterKind::Rejected,
+            },
+            Facet::Agent | Facet::Dir => match parse_selection(value, negated) {
+                Some(selection) => FilterKind::Names(selection),
+                None => FilterKind::Rejected,
+            },
+        };
+        Self { facet, kind, as_typed }
+    }
+
+    pub fn facet(&self) -> Facet {
+        self.facet
+    }
+
+    pub fn kind(&self) -> &FilterKind {
+        &self.kind
+    }
+
+    /// Whether this filter reaches the SQL. False only for a value nothing can select on.
     pub fn is_active(&self) -> bool {
-        self.facet == Facet::Agent && !self.negated && !self.value.contains(',') && !self.value.is_empty()
+        self.kind != FilterKind::Rejected
     }
 
     /// The token as the user typed it, for reporting back to them.
-    pub fn as_typed(&self) -> String {
-        let dash = if self.negated { "-" } else { "" };
-        format!("{dash}{}{}", self.facet.keyword(), self.value)
+    pub fn as_typed(&self) -> &str {
+        &self.as_typed
     }
+}
+
+/// Split a comma list into keep and drop, honouring both negation marks.
+///
+/// `None` when nothing selectable survives — `agent:`, `dir:,,` — which is the half-typed
+/// state a typeahead is in for most of its life and not something to raise an error over.
+fn parse_selection(value: &str, prefix_negated: bool) -> Option<Selection> {
+    let mut selection = Selection::default();
+    for piece in value.split(',') {
+        let (negated, name) = match piece.strip_prefix('!') {
+            Some(rest) => (!prefix_negated, rest),
+            None => (prefix_negated, piece),
+        };
+        if name.is_empty() {
+            continue;
+        }
+        let bucket = if negated { &mut selection.exclude } else { &mut selection.include };
+        if !bucket.iter().any(|v| v == name) {
+            bucket.push(name.to_string());
+        }
+    }
+    (!selection.is_empty()).then_some(selection)
 }
 
 /// A parsed query: what was asked, as distinct from [`crate::SearchOptions`], which is how to
@@ -171,7 +351,7 @@ impl Query {
                 None => (false, word),
             };
             if let Some((facet, value)) = Facet::parse(bare) {
-                filters.push(Filter { facet, value: value.to_string(), negated });
+                filters.push(Filter::new(facet, value, negated, word.to_string()));
                 continue;
             }
             // Not a filter, so it is text. Split the *whole* word, leading dash included:
@@ -214,12 +394,11 @@ impl Query {
     /// a flag.
     pub fn with_source(mut self, source: Option<&str>) -> Self {
         if let Some(source) = source {
-            if self.source_filter().is_none() {
-                self.filters.push(Filter {
-                    facet: Facet::Agent,
-                    value: source.to_lowercase(),
-                    negated: false,
-                });
+            let already_named = self.filters.iter().any(|f| f.facet == Facet::Agent && f.is_active());
+            if !already_named {
+                let value = source.to_lowercase();
+                let as_typed = format!("{}{value}", Facet::Agent.keyword());
+                self.filters.push(Filter::new(Facet::Agent, &value, false, as_typed));
             }
         }
         self
@@ -293,20 +472,56 @@ impl Query {
         out
     }
 
-    /// The source this query selects on, if it names one that can be applied.
-    pub fn source_filter(&self) -> Option<&str> {
-        self.filters
-            .iter()
-            .find(|f| f.facet == Facet::Agent && f.is_active())
-            .map(|f| f.value.as_str())
+    /// Everything this query keeps and drops on one name-valued facet.
+    ///
+    /// Merged across tokens rather than last-one-wins, so `agent:codex agent:claude` selects
+    /// both. That is the reading the facet bar needs: it filters by rewriting the query text
+    /// (`TUI-DESIGN.md` §5), so clicking a second chip has to add to the first rather than
+    /// replace it.
+    pub fn selection(&self, facet: Facet) -> Selection {
+        let mut out = Selection::default();
+        for filter in self.filters.iter().filter(|f| f.facet == facet) {
+            if let FilterKind::Names(names) = &filter.kind {
+                out.merge(names);
+            }
+        }
+        out
     }
 
-    /// Filter tokens that were understood but are not in force, as typed.
+    /// Every `date:` window in force, resolved against `now_ms`, each with its negation flag.
+    ///
+    /// Tokens intersect rather than union: `date:>1d date:<7d` is the week before yesterday,
+    /// which is the only reading that lets two bounds describe a range. A window whose
+    /// arithmetic overflowed chrono's range is dropped here and reported by [`Query::rejected`]
+    /// — it cannot be silently widened to "everything".
+    pub fn date_windows_in<Tz: chrono::TimeZone>(&self, tz: &Tz, now_ms: i64) -> Vec<(Window, bool)> {
+        self.filters
+            .iter()
+            .filter_map(|f| match f.kind {
+                FilterKind::Date(spec, negated) => Some((spec.window_in(tz, now_ms)?, negated)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// [`Query::date_windows_in`] against the machine's own zone.
+    pub fn date_windows(&self, now_ms: i64) -> Vec<(Window, bool)> {
+        self.date_windows_in(&chrono::Local, now_ms)
+    }
+
+    /// Filter tokens that were understood as filters but select nothing, as typed.
     ///
     /// A surface is expected to say so. Returning unfiltered results for a query that names a
-    /// filter is a worse answer than returning none, because it looks like it worked.
-    pub fn unapplied(&self) -> Vec<String> {
-        self.filters.iter().filter(|f| !f.is_active()).map(Filter::as_typed).collect()
+    /// filter is a worse answer than returning none, because it looks like it worked. Since
+    /// `chat-search-6eb.11` every filter the parser accepts is applied, so this is now the
+    /// narrow case of a value nothing can be selected on — `date:nope`, a half-typed `agent:`
+    /// — rather than the broad "not wired up yet" it started as.
+    pub fn rejected(&self) -> Vec<String> {
+        self.filters
+            .iter()
+            .filter(|f| !f.is_active())
+            .map(|f| f.as_typed().to_string())
+            .collect()
     }
 }
 
@@ -326,7 +541,7 @@ mod tests {
         let q = Query::typeahead("agent:codex borrow");
         assert_eq!(q.terms(), ["borrow"]);
         assert_eq!(q.match_expr(), "\"borrow\"*");
-        assert_eq!(q.source_filter(), Some("codex"));
+        assert_eq!(q.selection(Facet::Agent).include, ["codex"]);
     }
 
     #[test]
@@ -430,20 +645,51 @@ mod tests {
         assert!(Query::typeahead("age").filters().is_empty());
         let bare = Query::typeahead("agent:");
         assert_eq!(bare.filters().len(), 1);
-        assert_eq!(bare.source_filter(), None, "an empty value selects nothing");
-        assert_eq!(bare.unapplied(), ["agent:"]);
+        assert!(bare.selection(Facet::Agent).is_empty(), "an empty value selects nothing");
+        assert_eq!(bare.rejected(), ["agent:"]);
     }
 
     #[test]
-    fn a_filter_that_cannot_be_applied_is_reported_rather_than_dropped() {
-        let q = Query::typeahead("dir:web-app date:<3d -agent:codex agent:claude,gemini rust");
-        assert_eq!(q.terms(), ["rust"]);
-        assert_eq!(q.source_filter(), None);
-        assert_eq!(
-            q.unapplied(),
-            ["dir:web-app", "date:<3d", "-agent:codex", "agent:claude,gemini"],
-            "each is understood, none is in force, and the user has to be told"
-        );
+    fn every_form_of_the_dsl_parses_out_of_one_input_string() {
+        // The acceptance criterion of `chat-search-6eb.11`, as one query: multi-value,
+        // both negation forms, a substring facet, a relative date and free text, mixed in
+        // any order, with none of it reaching the ranker as words to find.
+        let q = Query::typeahead("agent:claude,codex -agent:gemini dir:!web-app date:<3h rust");
+        assert_eq!(q.terms(), ["rust"], "a filter is never also a word to search for");
+
+        let agents = q.selection(Facet::Agent);
+        assert_eq!(agents.include, ["claude", "codex"]);
+        assert_eq!(agents.exclude, ["gemini"]);
+
+        let dirs = q.selection(Facet::Dir);
+        assert!(dirs.include.is_empty());
+        assert_eq!(dirs.exclude, ["web-app"], "an inline ! excludes just as a leading - does");
+
+        assert_eq!(q.filters().len(), 4);
+        assert!(q.rejected().is_empty(), "every one of these is in force");
+    }
+
+    #[test]
+    fn the_two_negation_spellings_are_the_same_filter() {
+        for text in ["-agent:codex", "agent:!codex"] {
+            let selection = Query::typeahead(text).selection(Facet::Agent);
+            assert_eq!(selection.exclude, ["codex"], "{text}");
+            assert!(selection.include.is_empty(), "{text}");
+        }
+        // A leading `-` distributes over the whole comma list, and an inline `!` flips its
+        // own value back — the only reading under which both marks keep meaning "not".
+        let mixed = Query::typeahead("-agent:claude,!codex").selection(Facet::Agent);
+        assert_eq!(mixed.exclude, ["claude"]);
+        assert_eq!(mixed.include, ["codex"]);
+    }
+
+    #[test]
+    fn repeating_a_facet_widens_the_selection_rather_than_replacing_it() {
+        // The facet bar filters by rewriting the query text (`TUI-DESIGN.md` §5), so
+        // clicking a second chip has to add to the first. Last-one-wins would make the bar
+        // unable to express "these two sources" at all.
+        let q = Query::typeahead("agent:codex agent:claude");
+        assert_eq!(q.selection(Facet::Agent).include, ["codex", "claude"]);
     }
 
     #[test]
@@ -455,13 +701,57 @@ mod tests {
         assert_eq!(expr("-borrow"), "\"borrow\"*");
         let q = Query::typeahead("-agent:codex");
         assert!(q.terms().is_empty());
-        assert!(q.filters()[0].negated);
+        assert_eq!(q.selection(Facet::Agent).exclude, ["codex"]);
+    }
+
+    #[test]
+    fn every_prefix_of_a_filter_being_typed_is_safe() {
+        // A typeahead parses what is in the box on every keystroke, so it parses every
+        // prefix of every filter anyone ever types. None of them may panic, and none may
+        // silently become a filter that does something other than what the finished token
+        // will do — `date:<3` must not filter as though it said `date:<3h`.
+        for finished in ["date:<3h", "date:>12mo", "agent:claude,codex", "dir:!web-app", "date:today"] {
+            for end in 1..=finished.len() {
+                let Some(prefix) = finished.get(..end) else { continue };
+                let q = Query::typeahead(prefix);
+                // The invariant: parsing succeeded and produced a coherent value.
+                let _ = q.match_expr();
+                let _ = q.rejected();
+                let _ = q.selection(Facet::Agent);
+                let _ = q.date_windows(1_785_000_000_000);
+            }
+        }
+    }
+
+    #[test]
+    fn a_date_value_that_cannot_be_a_date_is_rejected_rather_than_guessed_at() {
+        for text in ["date:nope", "date:", "date:<", "date:>", "date:<h", "date:3h", "date:<3z", "date:<-3h"] {
+            let q = Query::typeahead(text);
+            assert_eq!(q.rejected(), [text], "{text} should be reported, not applied");
+            assert!(q.date_windows(1_785_000_000_000).is_empty(), "{text} must not filter");
+        }
+        for text in ["date:<3h", "date:>1w", "date:today", "date:yesterday", "date:week", "date:month", "date:<90mo"] {
+            let q = Query::typeahead(text);
+            assert!(q.rejected().is_empty(), "{text} should be understood");
+            assert_eq!(q.date_windows(1_785_000_000_000).len(), 1, "{text} should resolve");
+        }
+    }
+
+    #[test]
+    fn an_age_too_large_to_resolve_is_reported_rather_than_silently_unbounded() {
+        // The failure that matters is not the panic, it is the fallback: an overflow that
+        // quietly produced "no lower bound" would turn `date:<9999999999y` into a filter
+        // that matches everything while still reading as a narrow one.
+        let q = Query::typeahead("date:<9999999999999999999y borrow");
+        assert!(q.date_windows(1_785_000_000_000).is_empty(), "nothing resolvable, so nothing applied");
+        assert_eq!(q.terms(), ["borrow"], "and the rest of the query still works");
     }
 
     #[test]
     fn case_is_folded_before_anything_else_looks_at_the_query() {
-        assert_eq!(Query::typeahead("Agent:Codex Borrow").source_filter(), Some("codex"));
-        assert_eq!(Query::typeahead("Agent:Codex Borrow").terms(), ["borrow"]);
+        let q = Query::typeahead("Agent:Codex Borrow");
+        assert_eq!(q.selection(Facet::Agent).include, ["codex"]);
+        assert_eq!(q.terms(), ["borrow"]);
     }
 
     #[test]

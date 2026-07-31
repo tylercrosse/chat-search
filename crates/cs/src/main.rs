@@ -84,6 +84,15 @@ enum Command {
     },
     /// Search indexed conversations.
     Search {
+        /// What to search for, filters included: `agent:claude,codex`, `-agent:codex`,
+        /// `dir:!web-app`, `date:<3h`, `date:today`.
+        ///
+        /// `allow_hyphen_values` because `-agent:codex` is one of the DSL's two negation
+        /// spellings (`chat-search-6eb.11`) and clap would otherwise read it as a bundle of
+        /// short flags and refuse the query. The filters have to live in the query text so
+        /// they survive the move to a TUI, which has one input box and no flags at all — so
+        /// a query that works there and fails here would defeat the point of one parser.
+        #[arg(allow_hyphen_values = true)]
         query: String,
         #[arg(long, default_value = "10")]
         limit: i64,
@@ -147,6 +156,8 @@ enum Command {
     /// Why a conversation did not come back for a query.
     Explain {
         conv_id: String,
+        /// Same syntax as `cs search`, so the explanation is of the query you actually ran.
+        #[arg(allow_hyphen_values = true)]
         query: String,
         #[arg(long)]
         db: Option<PathBuf>,

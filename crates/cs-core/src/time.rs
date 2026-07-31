@@ -6,7 +6,7 @@
 //! Local-ness is a presentation concern; storing it would make the index depend on where the
 //! machine was sitting when it was built.
 
-use chrono::{Local, TimeZone};
+use chrono::{DateTime, Days, Local, Months, NaiveDateTime, TimeZone};
 
 /// Now, as epoch millis — the unit `message.ts` and `conversation.ended_at` are stored in.
 ///
@@ -43,6 +43,79 @@ pub fn ymd_in<Tz: TimeZone>(tz: &Tz, ms: i64) -> Option<String> {
         .map(|dt| dt.date_naive().format("%Y-%m-%d").to_string())
 }
 
+/// Midnight opening the civil day that contains `ms`.
+///
+/// The lower edge of `date:today`. Zone-explicit for the same reason [`ymd_in`] is.
+pub fn day_start_in<Tz: TimeZone>(tz: &Tz, ms: i64) -> Option<i64> {
+    let local = tz.timestamp_millis_opt(ms).single()?;
+    let midnight = local.date_naive().and_hms_opt(0, 0, 0)?;
+    Some(resolve(tz, midnight)?.timestamp_millis())
+}
+
+/// [`day_start_in`] against the machine's own zone.
+pub fn local_day_start(ms: i64) -> Option<i64> {
+    day_start_in(&Local, ms)
+}
+
+/// `ms` moved by whole civil days, keeping its wall-clock time of day.
+///
+/// Civil rather than a fixed 86,400,000 ms per step, because across a DST boundary a day
+/// really is 23 or 25 hours. `date:<1d` means "since this time yesterday"; subtracting a
+/// fixed 24 h lands an hour off on two days a year, and always in the direction that makes
+/// yesterday's last hour disappear from a filter that claims to include it.
+pub fn shift_days_in<Tz: TimeZone>(tz: &Tz, ms: i64, days: i64) -> Option<i64> {
+    shift(tz, ms, |naive| match days >= 0 {
+        true => naive.checked_add_days(Days::new(days as u64)),
+        false => naive.checked_sub_days(Days::new(days.unsigned_abs())),
+    })
+}
+
+/// `ms` moved by whole civil months, clamping to the last day of a shorter month.
+///
+/// chrono's own clamping rule: one month before 31 March is 28 February, not 3 March.
+pub fn shift_months_in<Tz: TimeZone>(tz: &Tz, ms: i64, months: i64) -> Option<i64> {
+    let magnitude = u32::try_from(months.unsigned_abs()).ok()?;
+    shift(tz, ms, |naive| match months >= 0 {
+        true => naive.checked_add_months(Months::new(magnitude)),
+        false => naive.checked_sub_months(Months::new(magnitude)),
+    })
+}
+
+fn shift<Tz: TimeZone>(
+    tz: &Tz,
+    ms: i64,
+    move_it: impl FnOnce(NaiveDateTime) -> Option<NaiveDateTime>,
+) -> Option<i64> {
+    let local = tz.timestamp_millis_opt(ms).single()?;
+    let moved = move_it(local.naive_local())?;
+    Some(resolve(tz, moved)?.timestamp_millis())
+}
+
+/// A wall clock back to the instant it names.
+///
+/// The direction that can genuinely fail, unlike [`ymd_in`]'s. An hour repeats every autumn
+/// and one never happens each spring, so a civil-time calculation can land on a reading no
+/// clock in that zone ever showed. Taking the earlier of an ambiguous pair and walking
+/// forward out of a gap keeps a filter edge monotonic, which is what callers depend on: a
+/// window's lower bound must not overtake its upper one twice a year.
+fn resolve<Tz: TimeZone>(tz: &Tz, naive: NaiveDateTime) -> Option<DateTime<Tz>> {
+    use chrono::LocalResult;
+    match tz.from_local_datetime(&naive) {
+        LocalResult::Single(dt) => Some(dt),
+        LocalResult::Ambiguous(earlier, _) => Some(earlier),
+        // No zone shifts by more than a couple of hours, so the first valid minute is well
+        // inside this walk; the bound is here so a malformed zone cannot spin.
+        LocalResult::None => (1..=180).find_map(|minutes| {
+            let stepped = naive.checked_add_signed(chrono::Duration::minutes(minutes))?;
+            match tz.from_local_datetime(&stepped) {
+                LocalResult::Single(dt) => Some(dt),
+                LocalResult::Ambiguous(earlier, _) => Some(earlier),
+                LocalResult::None => None,
+            }
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -71,6 +144,60 @@ mod tests {
         assert_eq!(ymd_in(&Utc, summer).unwrap(), "2026-07-15");
         assert_eq!(ymd_in(&Los_Angeles, winter).unwrap(), "2026-01-15");
         assert_eq!(ymd_in(&Los_Angeles, summer).unwrap(), "2026-07-15");
+    }
+
+    /// Noon in Los Angeles, which is never inside a DST transition.
+    fn noon(month: u32, day: u32) -> i64 {
+        Los_Angeles.with_ymd_and_hms(2026, month, day, 12, 0, 0).unwrap().timestamp_millis()
+    }
+
+    #[test]
+    fn a_civil_day_is_23_hours_across_spring_forward_and_25_across_fall_back() {
+        // The reason `date:` cannot do its arithmetic in fixed 86,400,000 ms steps. In 2026
+        // Los Angeles springs forward at 02:00 on 8 March and falls back at 02:00 on
+        // 1 November. The short and long days are therefore those two days themselves —
+        // measured midnight to midnight, the transition has to fall *inside* the interval.
+        let day_after = |a: i64| {
+            let start = day_start_in(&Los_Angeles, a).unwrap();
+            let next = shift_days_in(&Los_Angeles, start, 1).unwrap();
+            (next - start) / 1000
+        };
+        assert_eq!(day_after(noon(3, 8)), 82_800, "spring forward");
+        assert_eq!(day_after(noon(11, 1)), 90_000, "fall back");
+        assert_eq!(day_after(noon(6, 1)), 86_400, "an ordinary day");
+    }
+
+    #[test]
+    fn shifting_by_a_day_keeps_the_time_of_day_rather_than_subtracting_24_hours() {
+        // `date:<1d` means "since this time yesterday". A fixed 24 h would land at 11:00 or
+        // 13:00 on the two days a year the calendar disagrees with the clock.
+        // Noon on the 8th is PDT and noon on the 7th is PST, so the same wall clock really is
+        // 23 h apart; 1 November against 31 October is the 25 h case.
+        for (from, to) in [((3, 8), (3, 7)), ((11, 1), (10, 31)), ((6, 2), (6, 1))] {
+            let moved = shift_days_in(&Los_Angeles, noon(from.0, from.1), -1).unwrap();
+            assert_eq!(moved, noon(to.0, to.1), "{from:?} back one civil day");
+        }
+        assert_eq!(noon(3, 8) - noon(3, 7), 82_800_000, "and the gap really is 23 h");
+        assert_eq!(noon(11, 1) - noon(10, 31), 90_000_000, "and 25 h the other way");
+    }
+
+    #[test]
+    fn a_month_back_clamps_to_the_last_day_of_a_shorter_month() {
+        let march31 = Los_Angeles.with_ymd_and_hms(2026, 3, 31, 9, 0, 0).unwrap().timestamp_millis();
+        let got = shift_months_in(&Los_Angeles, march31, -1).unwrap();
+        assert_eq!(ymd_in(&Los_Angeles, got).unwrap(), "2026-02-28");
+    }
+
+    #[test]
+    fn midnight_that_never_happened_resolves_forward_into_the_day() {
+        // Some zones shift at midnight rather than at 02:00, so `date:today` has to have an
+        // answer on a day whose first wall-clock minute does not exist. Havana springs
+        // forward at 00:00, making 2026-03-08 start at 01:00 local.
+        use chrono_tz::America::Havana;
+        let ms = Havana.with_ymd_and_hms(2026, 3, 8, 12, 0, 0).unwrap().timestamp_millis();
+        let start = day_start_in(&Havana, ms).unwrap();
+        assert_eq!(ymd_in(&Havana, start).unwrap(), "2026-03-08", "stays inside its own day");
+        assert!(start <= ms, "the day cannot start after noon on it");
     }
 
     #[test]

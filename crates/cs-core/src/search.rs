@@ -1,6 +1,6 @@
 use crate::highlight;
-use crate::query::Query;
-use rusqlite::{params, Connection};
+use crate::query::{Facet, Query};
+use rusqlite::{params, params_from_iter, types::Value, Connection};
 use serde::Serialize;
 
 const YEAR_MS: f64 = 365.0 * 24.0 * 60.0 * 60.0 * 1000.0;
@@ -169,38 +169,135 @@ impl SearchOptions {
     }
 }
 
+/// Append `value` to the bind list and return the placeholder that reads it back.
+fn bind(binds: &mut Vec<Value>, value: Value) -> String {
+    binds.push(value);
+    format!("?{}", binds.len())
+}
+
+/// A LIKE pattern matching `value` anywhere in a column, with any wildcards it contains
+/// escaped.
+///
+/// `_` is LIKE's single-character wildcard and paths have underscores in them all the time,
+/// so without this `dir:my_app` would also match `my-app` and `myXapp`.
+fn like_contains(value: &str) -> String {
+    let mut pattern = String::with_capacity(value.len() + 2);
+    pattern.push('%');
+    for c in value.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            pattern.push('\\');
+        }
+        pattern.push(c);
+    }
+    pattern.push('%');
+    pattern
+}
+
+/// The `WHERE` fragment a query's filters add, with their values appended to `binds`.
+///
+/// Rendered here rather than in [`crate::query`] because it is the half of a filter that is
+/// specific to *running* one: the parser decides what a token means, and every meaning it
+/// accepts has a clause in this function. The two stay in step by construction — a filter
+/// [`crate::query::Filter::is_active`] admits is one this emits, and `rejected()` is exactly
+/// the complement, so there is no third list to keep synchronised.
+///
+/// Every fragment opens with `AND`, so a caller either has a condition already or starts from
+/// `WHERE 1 = 1`. Values are bound rather than interpolated: `agent:codex` and `agent:claude`
+/// then produce one cached statement instead of two, which is what keeps the typeahead's
+/// prepared-statement cache useful.
+fn filter_sql(query: &Query, now_ms: i64, binds: &mut Vec<Value>) -> String {
+    let mut sql = String::new();
+
+    // `agent:` is equality — a source id is an enum, and a substring match on one would make
+    // `agent:claude` silently mean claude-code as well as claude-ai.
+    let agents = query.selection(Facet::Agent);
+    if !agents.include.is_empty() {
+        let slots: Vec<String> =
+            agents.include.iter().map(|v| bind(binds, Value::Text(v.clone()))).collect();
+        sql.push_str(&format!("\n           AND c.source IN ({})", slots.join(", ")));
+    }
+    for value in &agents.exclude {
+        let slot = bind(binds, Value::Text(value.clone()));
+        sql.push_str(&format!("\n           AND c.source <> {slot}"));
+    }
+
+    // `dir:` is a case-insensitive substring, because a path is not an enum and nobody types
+    // the whole of one. `ifnull` rather than a bare column so an undated-directory row is
+    // dropped by an include and *kept* by an exclude: a conversation with no recorded cwd is
+    // certainly not inside the directory being excluded, but `NULL NOT LIKE …` is unknown
+    // rather than true and would drop it.
+    let dirs = query.selection(Facet::Dir);
+    if !dirs.include.is_empty() {
+        let any: Vec<String> = dirs
+            .include
+            .iter()
+            .map(|v| {
+                let slot = bind(binds, Value::Text(like_contains(v)));
+                format!("ifnull(lower(c.cwd), '') LIKE {slot} ESCAPE '\\'")
+            })
+            .collect();
+        sql.push_str(&format!("\n           AND ({})", any.join(" OR ")));
+    }
+    for value in &dirs.exclude {
+        let slot = bind(binds, Value::Text(like_contains(value)));
+        sql.push_str(&format!(
+            "\n           AND ifnull(lower(c.cwd), '') NOT LIKE {slot} ESCAPE '\\'"
+        ));
+    }
+
+    // `date:` is a half-open window on when the conversation ended.
+    for (window, negated) in query.date_windows(now_ms) {
+        let mut bounds = Vec::new();
+        if let Some(from) = window.from {
+            bounds.push(format!("c.ended_at >= {}", bind(binds, Value::Integer(from))));
+        }
+        if let Some(until) = window.until {
+            bounds.push(format!("c.ended_at < {}", bind(binds, Value::Integer(until))));
+        }
+        if bounds.is_empty() {
+            continue;
+        }
+        let inside = format!("(c.ended_at IS NOT NULL AND {})", bounds.join(" AND "));
+        // Negation wraps the whole test rather than flipping each comparison, which is what
+        // makes an undated conversation survive `-date:today`: it is not in the window, so
+        // it belongs in the complement. Flipped comparisons would leave it NULL and drop it.
+        let clause = if negated { format!("NOT {inside}") } else { inside };
+        sql.push_str(&format!("\n           AND {clause}"));
+    }
+
+    sql
+}
+
 pub fn search(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::Result<Vec<Hit>> {
     if !query.is_searchable() {
         return Ok(Vec::new());
     }
     let table = q.field.table();
+    let mut binds = vec![
+        Value::Integer(q.now_ms),
+        Value::Text(query.match_expr()),
+        Value::Integer(q.include_off_path as i64),
+        Value::Integer(q.limit),
+        Value::Real(q.decay),
+    ];
+    let filters = filter_sql(query, q.now_ms, &mut binds);
     // bm25() and MATCH need the literal table name — an alias raises "no such column".
     let sql = format!(
         "SELECT m.id, m.conv_id, m.role, m.kind, m.ts, m.text, m.on_head_path,
                 m.is_sidechain, m.thread_key,
                 c.source, c.title, c.native_id, c.deleted_upstream_at,
-                bm25({table}) / (1.0 + ?6 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
+                bm25({table}) / (1.0 + ?5 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
          FROM {table}
          JOIN message m      ON m.rowid = {table}.rowid
          JOIN conversation c ON c.id = m.conv_id
          WHERE {table} MATCH ?2
-           AND (?3 = 1 OR m.on_head_path = 1)
-           AND (?4 IS NULL OR c.source = ?4)
+           AND (?3 = 1 OR m.on_head_path = 1){filters}
          ORDER BY score
-         LIMIT ?5"
+         LIMIT ?4"
     );
 
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(
-        params![
-            q.now_ms,
-            query.match_expr(),
-            q.include_off_path as i64,
-            query.source_filter(),
-            q.limit,
-            q.decay
-        ],
-        |r| {
+    let rows = stmt.query_map(params_from_iter(binds.iter()), |r| {
             let text: String = r.get(5)?;
             let (snippet, snippet_spans) = snippet_marked(&text, query, 160);
             Ok(Hit {
@@ -220,9 +317,8 @@ pub fn search(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::
                 destinations: crate::destinations(&r.get::<_, String>(9)?, &r.get::<_, String>(11)?),
                 deleted_upstream: r.get::<_, Option<i64>>(12)?.is_some(),
                 score: r.get(13)?,
-            })
-        },
-    )?;
+        })
+    })?;
     rows.collect()
 }
 
@@ -632,20 +728,34 @@ pub const REPEAT_WEIGHT: f64 = 0.25;
 /// available without a query and it is also the one people expect — the conversation you
 /// want is usually among the last few you had.
 ///
-/// Takes the two values it reads rather than a whole [`SearchOptions`]. The old signature
+/// Takes the values it reads rather than a whole [`SearchOptions`]. The old signature
 /// accepted every option and silently ignored seven of them, so a caller setting `decay` here
 /// had no way to learn it did nothing.
-pub fn recent(conn: &Connection, source: Option<&str>, limit: i64) -> rusqlite::Result<Vec<Group>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, source, title, ended_at, user_turns, native_id, deleted_upstream_at,
-                msg_count, prose_count, cwd
-         FROM conversation
-         WHERE (?1 IS NULL OR source = ?1)
+///
+/// Filtered, though nothing is ranked: `date:today` with no search terms is a real question —
+/// "what did I work on today" — and answering it with the whole recent list would be the
+/// silent-no-op this crate refuses everywhere else.
+pub fn recent(
+    conn: &Connection,
+    query: &Query,
+    now_ms: i64,
+    limit: i64,
+) -> rusqlite::Result<Vec<Group>> {
+    let mut binds = vec![Value::Integer(limit)];
+    let filters = filter_sql(query, now_ms, &mut binds);
+    // `1 = 1` so the fragment's leading `AND` has something to attach to when there are no
+    // filters at all, which is the common case here.
+    let sql = format!(
+        "SELECT c.id, c.source, c.title, c.ended_at, c.user_turns, c.native_id,
+                c.deleted_upstream_at, c.msg_count, c.prose_count, c.cwd
+         FROM conversation c
+         WHERE 1 = 1{filters}
          -- `NULLS LAST` is not portable to older SQLite; this expresses the same order.
-         ORDER BY ended_at IS NULL, ended_at DESC
-         LIMIT ?2",
-    )?;
-    let rows = stmt.query_map(params![source, limit], |r| {
+         ORDER BY c.ended_at IS NULL, c.ended_at DESC
+         LIMIT ?1"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(binds.iter()), |r| {
         let ended_at: Option<i64> = r.get(3)?;
         Ok(Group {
             conv_id: r.get(0)?,
@@ -685,7 +795,7 @@ pub fn search_grouped(
     // of the two it is showing; the routing is the same, and doing it here is what lets the
     // TUI stop blanking its own query text to force this branch.
     if !query.is_searchable() {
-        return recent(conn, query.source_filter(), q.limit);
+        return recent(conn, query, q.now_ms, q.limit);
     }
     // Pull well beyond `limit` conversations' worth of messages, since one conversation can
     // account for many hits and would otherwise crowd out the tail.
@@ -697,39 +807,38 @@ pub fn search_grouped(
     // Warm, at limit=200, against building a snippet per candidate: "the" 432ms -> 79ms,
     // "cod" 380ms -> 32ms, "code" 469ms -> 98ms.
     let table = q.field.table();
+    let mut binds = vec![
+        Value::Integer(q.now_ms),
+        Value::Text(query.match_expr()),
+        Value::Integer(q.include_off_path as i64),
+        Value::Integer(ceiling),
+        Value::Real(q.decay),
+    ];
+    let filters = filter_sql(query, q.now_ms, &mut binds);
     let sql = format!(
         "SELECT m.id, m.conv_id, m.seq,
-                bm25({table}) / (1.0 + ?6 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
+                bm25({table}) / (1.0 + ?5 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
          FROM {table}
          JOIN message m      ON m.rowid = {table}.rowid
          JOIN conversation c ON c.id = m.conv_id
          WHERE {table} MATCH ?2
-           AND (?3 = 1 OR m.on_head_path = 1)
-           AND (?4 IS NULL OR c.source = ?4)
+           AND (?3 = 1 OR m.on_head_path = 1){filters}
          ORDER BY score
-         LIMIT ?5"
+         LIMIT ?4"
     );
     // Bound rather than interpolated: a decay swept across a range would otherwise mint a
-    // new statement per value and defeat the cache this call relies on.
+    // new statement per value and defeat the cache this call relies on. The filter fragment
+    // varies only with the *shape* of the query's filters, not their values, for the same
+    // reason — so a typeahead under one `agent:` filter still hits a single cached statement.
     let mut stmt = conn.prepare_cached(&sql)?;
-    let rows = stmt.query_map(
-        params![
-            q.now_ms,
-            query.match_expr(),
-            q.include_off_path as i64,
-            query.source_filter(),
-            ceiling,
-            q.decay
-        ],
-        |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, i64>(2)?,
-                r.get::<_, f64>(3)?,
-            ))
-        },
-    )?;
+    let rows = stmt.query_map(params_from_iter(binds.iter()), |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, i64>(2)?,
+            r.get::<_, f64>(3)?,
+        ))
+    })?;
 
     let mut order: Vec<String> = Vec::new();
     let mut by_conv: std::collections::HashMap<String, Vec<(String, i64, f64)>> = Default::default();
@@ -977,11 +1086,11 @@ mod group_tests {
             )
             .unwrap();
         }
-        let got = recent(&conn, Some("codex"), 10).unwrap();
+        let got = recent(&conn, &Query::exact("agent:codex"), NO_DECAY, 10).unwrap();
         assert_eq!(got.len(), 2);
         assert!(got.iter().all(|g| g.source == "codex"));
 
-        let capped = recent(&conn, None, 1).unwrap();
+        let capped = recent(&conn, &Query::exact(""), NO_DECAY, 1).unwrap();
         assert_eq!(capped.len(), 1);
     }
 
@@ -1124,5 +1233,296 @@ mod group_tests {
         let decayed = |age_years: f64| bm25 / (1.0 + 0.3 * age_years);
         assert!(decayed(3.0) > decayed(0.0), "older must rank lower, not higher");
         assert!((decayed(0.0) - bm25).abs() < f64::EPSILON);
+    }
+}
+
+/// The DSL, against SQL rather than against the parser.
+///
+/// `query::tests` proves a token parses; these prove the parse reaches the database and
+/// changes which rows come back. The two halves fail differently — a filter that parses and
+/// does not filter is exactly the silent no-op `chat-search-6eb.11` was filed to remove —
+/// so both are asserted (`chat-search-6eb.11`).
+#[cfg(test)]
+mod filter_tests {
+    use super::*;
+
+    /// An arbitrary fixed instant. Every date assertion below is built *from* this via the
+    /// same civil-time rule the filter uses, never from a literal, so none of them depends
+    /// on the zone the test happens to run in.
+    const NOW: i64 = 1_784_433_600_000; // 2026-07-19T04:00Z
+
+    fn day_start(ms: i64) -> i64 {
+        crate::time::local_day_start(ms).unwrap()
+    }
+
+    fn days_from(ms: i64, days: i64) -> i64 {
+        crate::time::shift_days_in(&chrono::Local, ms, days).unwrap()
+    }
+
+    /// A conversation with all three filterable columns set, carrying one searchable message.
+    fn seed(conn: &Connection, id: &str, source: &str, cwd: Option<&str>, ended: i64) {
+        conn.execute(
+            "INSERT INTO conversation(id, source, native_id, title, ended_at, user_turns, cwd)
+             VALUES (?1, ?2, ?1, ?1, ?3, 1, ?4)",
+            params![id, source, ended, cwd],
+        )
+        .unwrap();
+        let text = "the borrow checker again";
+        conn.execute(
+            "INSERT INTO message(id, conv_id, thread_key, seq, role, kind, ts, text)
+             VALUES (?1, ?2, 'main', 1, 'user', 'prose', ?3, ?4)",
+            params![format!("{id}:m"), id, ended, text],
+        )
+        .unwrap();
+        // fts5 here is contentless, so postings are written explicitly rather than by trigger.
+        let rowid = conn.last_insert_rowid();
+        conn.execute("INSERT INTO fts_prose(rowid, text) VALUES (?1, ?2)", params![rowid, text])
+            .unwrap();
+    }
+
+    /// Anchored on the local day, for the named-day filters.
+    ///
+    /// Every timestamp is derived from `day_start` and `days_from` — the same two rules the
+    /// filter itself resolves through — so which civil day a row lands on is the same fact in
+    /// the fixture and in the query, in any zone. A literal offset from midnight would not
+    /// be: `NOW` is a fixed instant, so its distance from local midnight is whatever the
+    /// machine's offset makes it, and an hour after midnight can be twenty hours ago or
+    /// four hours from now.
+    fn corpus() -> Connection {
+        let conn = crate::open(":memory:").unwrap();
+        let today = day_start(NOW);
+        seed(&conn, "codex-web", "codex", Some("/home/t/dev/web-app"), today);
+        seed(&conn, "claude-api", "claude-code", Some("/home/t/dev/API-Server"), today);
+        seed(&conn, "gemini-web", "gemini-cli", Some("/home/t/dev/web-app"), days_from(today, -1));
+        seed(&conn, "codex-old", "codex", None, days_from(today, -10));
+        conn
+    }
+
+    /// Anchored on `NOW` itself, for the age filters, which measure from now rather than
+    /// from midnight. Same reasoning as [`corpus`]: fixture and filter share an anchor.
+    fn aged_corpus() -> Connection {
+        let conn = crate::open(":memory:").unwrap();
+        seed(&conn, "an-hour", "codex", None, NOW - 3_600_000);
+        seed(&conn, "five-hours", "codex", None, NOW - 5 * 3_600_000);
+        seed(&conn, "three-days", "codex", None, days_from(NOW, -3));
+        seed(&conn, "a-month", "codex", None, days_from(NOW, -30));
+        conn
+    }
+
+    fn opts() -> SearchOptions {
+        SearchOptions { limit: 50, nested: 0, ..SearchOptions::new(NOW) }
+    }
+
+    /// Conversation ids a query returns, sorted so the assertion is about the set.
+    fn ids(conn: &Connection, text: &str) -> Vec<String> {
+        let mut got: Vec<String> = search_grouped(conn, &Query::exact(text), &opts())
+            .unwrap()
+            .into_iter()
+            .map(|g| g.conv_id)
+            .collect();
+        got.sort();
+        got
+    }
+
+    #[test]
+    fn every_form_in_the_acceptance_criteria_filters_the_result_set() {
+        let conn = corpus();
+        assert_eq!(ids(&conn, "borrow").len(), 4, "unfiltered, everything matches");
+
+        assert_eq!(ids(&conn, "agent:claude-code,codex borrow"), ["claude-api", "codex-old", "codex-web"]);
+        assert_eq!(ids(&conn, "-agent:codex borrow"), ["claude-api", "gemini-web"]);
+        assert_eq!(ids(&conn, "dir:!web-app borrow"), ["claude-api", "codex-old"]);
+        assert_eq!(ids(&conn, "date:today borrow"), ["claude-api", "codex-web"]);
+        assert_eq!(ids(&conn, "date:yesterday borrow"), ["gemini-web"]);
+        assert_eq!(ids(&conn, "date:week borrow"), ["claude-api", "codex-web", "gemini-web"]);
+
+        let aged = aged_corpus();
+        assert_eq!(ids(&aged, "date:<3h borrow"), ["an-hour"]);
+        assert_eq!(ids(&aged, "date:>1d borrow"), ["a-month", "three-days"]);
+        // `date:week` is `date:<1w` written the other way, and has to mean the same thing.
+        assert_eq!(ids(&aged, "date:week borrow"), ids(&aged, "date:<1w borrow"));
+        assert_eq!(ids(&aged, "date:week borrow"), ["an-hour", "five-hours", "three-days"]);
+    }
+
+    #[test]
+    fn filters_compose_within_one_input_string() {
+        // The whole point of the DSL: a TUI has one input box, so the filters have to stack
+        // inside it rather than arrive as separate flags.
+        let conn = corpus();
+        assert_eq!(ids(&conn, "agent:codex,gemini-cli dir:web-app date:today borrow"), ["codex-web"]);
+        assert_eq!(ids(&conn, "-agent:codex -dir:web-app borrow"), ["claude-api"]);
+    }
+
+    #[test]
+    fn dir_matches_a_case_insensitive_substring_while_agent_matches_exactly() {
+        let conn = corpus();
+        // The cwd is `/home/t/dev/API-Server`; none of these is the whole of it.
+        for text in ["dir:api borrow", "dir:API-Server borrow", "dir:/dev/api borrow"] {
+            assert_eq!(ids(&conn, text), ["claude-api"], "{text}");
+        }
+        // A source id is an enum, so a substring of one selects nothing rather than
+        // silently meaning both claude-code and any other claude.
+        assert_eq!(ids(&conn, "agent:claude borrow"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_wildcard_in_a_dir_value_matches_itself_rather_than_anything() {
+        let conn = crate::open(":memory:").unwrap();
+        let today = day_start(NOW);
+        seed(&conn, "literal", "codex", Some("/home/t/my_app"), today);
+        seed(&conn, "wildcard", "codex", Some("/home/t/myXapp"), today);
+        // `_` is LIKE's single-character wildcard. Unescaped, this would return both.
+        assert_eq!(ids(&conn, "dir:my_app borrow"), ["literal"]);
+    }
+
+    #[test]
+    fn a_conversation_with_no_directory_survives_an_exclusion_but_not_an_inclusion() {
+        // `codex-old` has a NULL cwd. It is certainly not inside web-app, so excluding
+        // web-app has to keep it — a bare `NOT LIKE` against NULL is unknown and would drop
+        // it, which is the failure mode this is here to pin.
+        let conn = corpus();
+        assert!(ids(&conn, "dir:!web-app borrow").contains(&"codex-old".to_string()));
+        assert!(!ids(&conn, "dir:web-app borrow").contains(&"codex-old".to_string()));
+    }
+
+    #[test]
+    fn two_date_bounds_intersect_into_a_range() {
+        let conn = aged_corpus();
+        // Older than a day and younger than a week. Intersecting rather than unioning is
+        // what lets two bounds describe a range at all; unioned, this would be everything.
+        assert_eq!(ids(&conn, "date:>1d date:<1w borrow"), ["three-days"]);
+    }
+
+    #[test]
+    fn a_value_nothing_can_select_on_is_reported_and_does_not_filter() {
+        // The acceptance criterion's other half: mid-word is the normal state in a
+        // typeahead, so a filter nobody finished typing must neither error nor quietly
+        // narrow the results — it says so and stays out of the way.
+        let conn = corpus();
+        for text in ["date:nope borrow", "agent: borrow", "date: borrow"] {
+            assert_eq!(ids(&conn, text).len(), 4, "{text} must not filter");
+            assert!(!Query::exact(text).rejected().is_empty(), "{text} must say so");
+        }
+        assert_eq!(Query::exact("date:nope borrow").rejected(), ["date:nope"]);
+    }
+
+    #[test]
+    fn a_filter_narrows_the_recency_fallback_as_well_as_a_search() {
+        // "What did I work on today" is a real question with no search terms in it. Before
+        // this, an unsearchable query dropped every filter but the source and answered with
+        // the whole recent list.
+        let conn = corpus();
+        let recent_ids = |text: &str| {
+            let mut got: Vec<String> = search_grouped(&conn, &Query::typeahead(text), &opts())
+                .unwrap()
+                .into_iter()
+                .map(|g| g.conv_id)
+                .collect();
+            got.sort();
+            got
+        };
+        assert_eq!(recent_ids("").len(), 4, "no query and no filter is the whole list");
+        assert_eq!(recent_ids("date:today"), ["claude-api", "codex-web"]);
+        assert_eq!(recent_ids("dir:web-app"), ["codex-web", "gemini-web"]);
+        // `le` is below the prefix floor, so this is the held-query path rather than the
+        // blank one, and it has to carry the filter too.
+        assert_eq!(recent_ids("date:today le"), ["claude-api", "codex-web"]);
+    }
+
+    #[test]
+    fn the_flat_path_filters_exactly_as_the_grouped_one_does() {
+        // Two call sites, one fragment. They drifted apart once already, which is how
+        // `agent:codex` came to return ten claude-code rows.
+        let conn = corpus();
+        for text in ["agent:codex borrow", "dir:web-app borrow", "date:today borrow"] {
+            let flat: std::collections::BTreeSet<String> =
+                search(&conn, &Query::exact(text), &opts()).unwrap().into_iter().map(|h| h.conv_id).collect();
+            let grouped: std::collections::BTreeSet<String> = ids(&conn, text).into_iter().collect();
+            assert_eq!(flat, grouped, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_source_flag_and_a_typed_filter_are_the_same_filter() {
+        // `--source` desugars into the query rather than living beside it, so the two
+        // spellings cannot disagree — the reconciliation methods `TUI-DESIGN.md` §5 records
+        // fast-resume paying for have nowhere to live.
+        let conn = corpus();
+        let flagged = Query::exact("borrow").with_source(Some("codex"));
+        let typed = Query::exact("agent:codex borrow");
+        let run = |q: &Query| {
+            let mut got: Vec<String> =
+                search_grouped(&conn, q, &opts()).unwrap().into_iter().map(|g| g.conv_id).collect();
+            got.sort();
+            got
+        };
+        assert_eq!(run(&flagged), run(&typed));
+        assert_eq!(run(&flagged), ["codex-old", "codex-web"]);
+        // A source named in the text wins: it was typed more recently than the flag was passed.
+        let both = Query::exact("agent:gemini-cli borrow").with_source(Some("codex"));
+        assert_eq!(run(&both), ["gemini-web"]);
+    }
+}
+
+/// What a filter costs a keystroke, measured in-process against the real index.
+///
+/// The CLI cannot answer this: `cs search` opens a 306 MB database per invocation, and that
+/// dominates everything the TUI actually pays per keystroke, which is this call and nothing
+/// else (ADR 14 — the search is synchronous in the event loop). Measuring through the binary
+/// made a filter look 4x more expensive than it is.
+#[cfg(test)]
+mod filter_cost {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a real index; set CS_INDEX to an index.db"]
+    fn a_filter_does_not_cost_a_keystroke_its_budget() {
+        let Ok(path) = std::env::var("CS_INDEX") else { return };
+        let conn = Connection::open(path).expect("readable index");
+        let opts = || SearchOptions {
+            limit: 50,
+            nested: 3,
+            ..SearchOptions::new(crate::time::now_ms())
+        };
+
+        // Best of seven. The interesting quantity is the floor — a keystroke competing with
+        // a backup for the disk is not what a budget is set against.
+        let cost = |text: &str| {
+            let query = Query::typeahead(text);
+            (0..7)
+                .map(|_| {
+                    let t0 = std::time::Instant::now();
+                    let groups = search_grouped(&conn, &query, &opts()).unwrap();
+                    std::hint::black_box(groups);
+                    t0.elapsed().as_secs_f64() * 1000.0
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+
+        // Each pair is the same search with and without a filter, so the difference is the
+        // filter and not the term. `the` is the corpus's worst case and is over budget
+        // before any filter is added (chat-search-6eb.29, chat-search-6eb.30); it is here to
+        // show a filter does not make that worse either.
+        let pairs = [
+            ("borrow checker", "agent:codex borrow checker"),
+            ("borrow checker", "-agent:codex borrow checker"),
+            ("borrow checker", "agent:codex,claude-code borrow checker"),
+            ("borrow checker", "dir:dev borrow checker"),
+            ("borrow checker", "date:week borrow checker"),
+            ("borrow checker", "date:<3d borrow checker"),
+            ("the", "date:week the"),
+        ];
+        let mut worst: f64 = 0.0;
+        for (plain, filtered) in pairs {
+            let (base, with) = (cost(plain), cost(filtered));
+            println!("{base:8.1} ms  ->{with:8.1} ms   {filtered}");
+            worst = worst.max(with - base);
+        }
+        println!("worst filter overhead: {worst:.1} ms");
+        // Generous against the measurement, tight against the failure it guards: the filter
+        // reads two columns off a row already joined, so its cost is a row fetch per
+        // candidate and nothing that scales with the corpus. A regression into a per-message
+        // subquery or a lost index would land far outside this.
+        assert!(worst < 25.0, "a filter added {worst:.1} ms to a keystroke");
     }
 }

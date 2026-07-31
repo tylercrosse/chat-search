@@ -26,10 +26,12 @@ pub use index::{
     IndexStats, TOOL_TEXT_MAX,
 };
 pub use model::{Conversation, Kind, Message, Role, Titles};
-pub use query::{Facet, Filter, Mode, Query};
+pub use query::{Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection, Window};
 pub use schema::IMPORTER_VERSION;
 pub use search::{
     explain, match_density, recent, search, search_grouped, snippet_marked, Explain, Field, Group, Hit,
     SearchOptions, DECAY, REPEAT_WEIGHT,
 };
-pub use time::{local_ymd, now_ms, ymd_in};
+pub use time::{
+    day_start_in, local_day_start, local_ymd, now_ms, shift_days_in, shift_months_in, ymd_in,
+};

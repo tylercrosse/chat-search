@@ -202,11 +202,24 @@ argument for pulling `6eb.15` (title resolution fold) up from P3.
 
 ## 5. Filters: one source of truth
 
-**Sequencing note, 2026-07-30.** `6eb.11` is now blocked by `6eb.26` (project as a filter), so
-the DSL is not available at TUI v1. Ship with a plain-text query plus the facet bar, and gain the
-DSL later — which makes the facet bar the *only* filter surface at v1 and raises `me9.14`
-accordingly. `6eb.26` also confirms the column priority in §2 empirically: date and project are
-the strongest recognition cues, "stronger than anything in the text."
+**Sequencing note, superseded 2026-07-31.** This section previously recorded `6eb.11` as
+blocked by `6eb.26` and therefore unavailable at TUI v1. That dependency was removed on
+2026-07-30 — `dir:` selects on `conversation.cwd`, which is already populated (100% on both
+agent sources) and needs no project derivation — and `6eb.11` landed on 2026-07-31. The DSL
+*is* available at v1. What `6eb.26` still buys is the facet **name** for the chip row, which
+belongs with `me9.14`. `6eb.26`'s empirical finding stands and is unaffected: date and project
+are the strongest recognition cues, "stronger than anything in the text."
+
+**As shipped.** `cs_core::query` parses the whole DSL and `cs_core::search` applies it, so the
+CLI and the TUI filter through one parser and one set of SQL clauses. `agent:` and `dir:` take
+comma lists; both negation spellings work and mean the same thing; repeated tokens of one facet
+union, and repeated `date:` tokens intersect so two bounds make a range. `date:` takes
+`today`, `yesterday`, `week`, `month`, `<Nu` and `>Nu` with units `m|h|d|w|mo|y`, and its
+day/week/month/year arithmetic is civil rather than fixed-width — a day across a DST boundary
+is 23 or 25 hours, pinned in `cs_core::time`'s tests at 82,800 s and 90,000 s. A value nothing
+can select on (`date:nope`, a half-typed `agent:`) neither errors nor filters: it is reported
+by `Query::rejected` and shown by both clients, which is the affordance the struck-through
+rendering below builds on.
 
 fast-resume already ships the DSL `6eb.11` specifies (`query.rs`): `agent:claude,!codex`,
 `-dir:test`, `dir:"my project"`, `date:today|yesterday|week|month`, `date:<2d`, `date:>1w` with

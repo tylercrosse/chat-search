@@ -172,13 +172,15 @@ pub fn search(
         ..cs_core::SearchOptions::new(cs_core::now_ms())
     };
 
-    // A filter that is understood but not yet wired has to say so. Returning unfiltered
-    // results for a query that names a filter is a worse answer than returning none, because
-    // it looks like it worked (chat-search-6eb.11 wires the rest; chat-search-me9.15 is the
-    // discoverability half of the same gap).
-    let unapplied = parsed.unapplied();
-    if !unapplied.is_empty() && !json {
-        eprintln!("note: {} not yet a filter — showing unfiltered results", unapplied.join(", "));
+    // A filter token whose value selects nothing has to say so. Returning unfiltered results
+    // for a query that names a filter is a worse answer than returning none, because it looks
+    // like it worked (chat-search-me9.15 is the discoverability half of the same gap).
+    let rejected = parsed.rejected();
+    if !rejected.is_empty() && !json {
+        eprintln!(
+            "note: {} — not a value this can select on, so it is not filtering",
+            rejected.join(", ")
+        );
     }
 
     if !flat {
@@ -190,7 +192,7 @@ pub fn search(
         if !prefix {
             log_search(&cfg, text, source, &groups, ms);
         }
-        return render_groups(&groups, text, &unapplied, ms, json);
+        return render_groups(&groups, text, &rejected, ms, json);
     }
 
     let hits = cs_core::search(&conn, &parsed, &q)?;
@@ -200,7 +202,10 @@ pub fn search(
         // Field names here are a contract a GUI consumes verbatim — additive changes only.
         println!("{:#}", serde_json::json!({
             "query": text, "ms": (ms * 100.0).round() / 100.0, "count": hits.len(),
-            "results": hits, "unapplied_filters": unapplied,
+            // `unapplied_filters` keeps its name: it is a published field (ADR 12) and still
+            // means what it says. What narrowed is which filters land in it — since
+            // `chat-search-6eb.11` only a value nothing can select on does.
+            "results": hits, "unapplied_filters": rejected,
         }));
     } else if hits.is_empty() {
         println!("no results for {text:?}");
@@ -402,7 +407,7 @@ fn rusqlite_open(path: &Path) -> Result<rusqlite::Connection> {
 fn render_groups(
     groups: &[cs_core::Group],
     query: &str,
-    unapplied: &[String],
+    rejected: &[String],
     ms: f64,
     json: bool,
 ) -> Result<()> {
@@ -410,7 +415,7 @@ fn render_groups(
         println!("{:#}", serde_json::json!({
             "query": query, "ms": (ms * 100.0).round() / 100.0,
             "count": groups.len(), "grouped": true, "results": groups,
-            "unapplied_filters": unapplied,
+            "unapplied_filters": rejected,
         }));
         return Ok(());
     }

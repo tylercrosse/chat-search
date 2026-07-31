@@ -190,19 +190,46 @@ impl App {
     ///
     /// The height is only known at render time, so the caller passes it. Focus that does not
     /// drag the viewport with it is focus you cannot see.
-    pub fn follow_preview_focus(&mut self, viewport_rows: usize) {
+    pub fn follow_preview_focus(&mut self, width: usize, viewport_rows: usize) {
+        let theme = self.theme;
         if let Some(p) = self.preview.as_mut() {
-            p.follow_focus(viewport_rows);
+            p.follow_focus(&theme, width, viewport_rows);
         }
+    }
+
+    /// The terms the preview marks against — the same text the ranker was given, reduced the
+    /// same way.
+    ///
+    /// A held or blank query is not run at all (see [`App::search`]), so the list below is
+    /// recent conversations rather than matches; marking against a query nothing was ranked on
+    /// would put highlights on rows that never matched it.
+    fn preview_terms(&self) -> Vec<String> {
+        if self.holding() || self.is_blank() {
+            return Vec::new();
+        }
+        // `true` because the TUI is typeahead by definition and `search` below ranks with the
+        // final token open; the preview has to mark what that ranking actually matched.
+        cs_core::search::marking_terms(&self.query, true)
     }
 
     pub fn sync_preview(&mut self) {
         let wanted = self.selected_conv().map(str::to_owned);
-        let have = self.preview.as_ref().map(|p| p.conv_id.clone());
-        if wanted == have {
+        // The terms are half the key, not a detail of it. Keying on the conversation alone —
+        // which this did — left a still-selected row showing marks located against the previous
+        // query, so every keystroke after the first made the highlighting a little more wrong
+        // while looking entirely deliberate.
+        let terms = self.preview_terms();
+        let fresh = self
+            .preview
+            .as_ref()
+            .is_some_and(|p| Some(&p.conv_id) == wanted.as_ref() && p.terms == terms);
+        if fresh {
             return;
         }
-        self.preview = wanted.and_then(|id| Preview::load(&self.conn, &id).ok());
+        // Folds and scroll are dropped with the old preview, and that is the same rule
+        // `cycle_density` and the post-search reselect already follow: an edited query is a new
+        // question, so a fold decided against the old one is not evidence about this one.
+        self.preview = wanted.and_then(|id| Preview::load(&self.conn, &id, &terms).ok());
     }
 
     pub fn selected_group(&self) -> Option<&Group> {
@@ -214,13 +241,13 @@ impl App {
     }
 
     /// Scroll the preview without moving the list cursor. Wheel over the preview pane.
-    pub fn scroll_preview(&mut self, delta: isize) {
+    ///
+    /// Takes the pane's geometry because the stop at the bottom depends on how tall the
+    /// conversation renders, which with wrapping is a function of the width.
+    pub fn scroll_preview(&mut self, delta: isize, width: usize, viewport_rows: usize) {
+        let theme = self.theme;
         if let Some(p) = self.preview.as_mut() {
-            p.scroll = if delta < 0 {
-                p.scroll.saturating_sub(delta.unsigned_abs() as u16)
-            } else {
-                p.scroll.saturating_add(delta as u16)
-            };
+            p.scroll_by(&theme, width, viewport_rows, delta);
         }
     }
 

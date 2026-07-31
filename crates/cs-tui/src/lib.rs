@@ -93,7 +93,33 @@ pub fn run(db_path: PathBuf, log: LogSink<'_>, opts: Opts) -> anyhow::Result<Exi
     exit
 }
 
+/// Queued events one frame will absorb before redrawing.
+///
+/// This is a smoothness budget, not a throughput one. Every absorbed scroll report is motion the
+/// user never sees, because only the frame at the end of the burst is drawn — so the ceiling has
+/// to be low enough that a flick still reads as movement rather than as a jump.
+///
+/// It was 512 when a frame cost 43 ms and coalescing was damage control: redrawing per event left
+/// the pane crawling seconds behind the finger. Caching the layout took a frame to 3.5 ms (p50,
+/// measured on the corpus's longest conversation at 140x40), which removed the reason for a
+/// ceiling that high and left only its cost — 512 notches is 1,536 rows of motion in one frame.
+///
+/// Four is calibrated from that frame time rather than picked: at 3.5 ms the loop can absorb
+/// ~1,100 events a second, several times faster than a trackpad delivers them, so the backlog
+/// this exists to prevent still cannot build — while motion stays capped at 12 rows a frame.
+const BURST: usize = 4;
+
+/// Consecutive unreadable events tolerated before the loop gives up.
+///
+/// A garbled report in the middle of a fast scroll is a recoverable glitch, and it used to end
+/// the session: `event::read()?` sent the error straight out of the loop, so a transient parse
+/// or I/O failure threw away the user's query and left the terminal to the `Screen` guard
+/// mid-gesture. Skipping one is right; a stream that is *persistently* unreadable is a real
+/// failure and still stops.
+const MAX_MISREADS: u32 = 64;
+
 fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
+    let mut misreads = 0u32;
     loop {
         term.draw(|f| render::draw(f, app))?;
 
@@ -101,45 +127,80 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
         let area = term.size().ok().map(|s| ratatui::layout::Rect::new(0, 0, s.width, s.height));
         let panes = area.map(|a| layout::app(a, app.show_preview));
 
-        // Blocking read: with no background work there is nothing to poll for, and a timeout
-        // would just wake the process to redraw an unchanged screen.
-        let ev = event::read()?;
-        if let CEvent::Mouse(m) = ev {
-            let (Some(area), Some(panes)) = (area, panes) else { continue };
-            let target = layout::scroll_target(area, app.show_preview, m.column, m.row);
-            match m.kind {
-                // Routed by where the pointer is, not by focus. Three rows a notch is the
-                // usual terminal convention and keeps a wheel flick from overshooting.
-                MouseEventKind::ScrollDown => match target {
-                    Some(layout::ScrollTarget::Preview) => app.scroll_preview(3),
-                    Some(layout::ScrollTarget::Results) => app.move_selection(3),
-                    None => {}
-                },
-                MouseEventKind::ScrollUp => match target {
-                    Some(layout::ScrollTarget::Preview) => app.scroll_preview(-3),
-                    Some(layout::ScrollTarget::Results) => app.move_selection(-3),
-                    None => {}
-                },
-                MouseEventKind::Down(MouseButton::Left) => {
-                    click(app, &panes, m.column, m.row);
+        // The first read blocks — with no background work there is nothing to poll for, and a
+        // timeout would just wake the process to redraw an unchanged screen. Everything already
+        // queued behind it is then taken without blocking and folded into the same frame.
+        for absorbed in 0..BURST {
+            match event::read() {
+                Ok(ev) => {
+                    misreads = 0;
+                    if let Some(exit) = handle(app, ev, area, panes) {
+                        return Ok(exit);
+                    }
                 }
-                _ => {}
+                Err(e) => {
+                    misreads += 1;
+                    if misreads >= MAX_MISREADS {
+                        return Err(e).context("reading terminal input");
+                    }
+                }
             }
-            continue;
+            let _ = absorbed;
+            if !event::poll(std::time::Duration::ZERO).unwrap_or(false) {
+                break;
+            }
         }
-        let CEvent::Key(key) = ev else { continue };
+    }
+}
+
+/// Act on one event. `Some` ends the session.
+fn handle(
+    app: &mut state::App,
+    ev: CEvent,
+    area: Option<ratatui::layout::Rect>,
+    panes: Option<layout::AppLayout>,
+) -> Option<Exit> {
+    {
+        if let CEvent::Mouse(m) = ev {
+            let (Some(area), Some(panes)) = (area, panes) else { return None };
+            let target = layout::scroll_target(area, app.show_preview, m.column, m.row);
+            // Three rows a notch is the usual terminal convention and keeps a wheel flick from
+            // overshooting. Routed by where the pointer is, not by focus.
+            let scroll = match m.kind {
+                MouseEventKind::ScrollDown => Some(3isize),
+                MouseEventKind::ScrollUp => Some(-3),
+                _ => None,
+            };
+            match (scroll, target) {
+                (Some(delta), Some(layout::ScrollTarget::Preview)) => {
+                    // The pane's own geometry, because where the scroll stops depends on how
+                    // tall the conversation renders at this width.
+                    let pane = panes.main.preview();
+                    let width = pane.map_or(40, |r| render::preview_body_width(r.width));
+                    let rows = pane.map_or(10, |r| render::preview_body_rows(r.height));
+                    app.scroll_preview(delta, width, rows);
+                }
+                (Some(delta), Some(layout::ScrollTarget::Results)) => app.move_selection(delta),
+                _ => {
+                    if let MouseEventKind::Down(MouseButton::Left) = m.kind {
+                        click(app, &panes, m.column, m.row);
+                    }
+                }
+            }
+            return None;
+        }
+        let CEvent::Key(key) = ev else { return None };
         // Windows reports press and release; acting on both double-types every character.
         if key.kind != KeyEventKind::Press {
-            continue;
+            return None;
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         // Alt is the preview's modifier and Ctrl the application's, so the two cursors —
         // the result list and the message inside it — never fight over a key.
         if key.modifiers.contains(KeyModifiers::ALT) {
-            let rows = panes
-                .and_then(|p| p.main.preview())
-                // Minus the border and the two header lines the pane draws above the body.
-                .map_or(10, |r| r.height.saturating_sub(5) as usize);
+            let pane = panes.and_then(|p| p.main.preview());
+            let rows = pane.map_or(10, |r| render::preview_body_rows(r.height));
+            let width = pane.map_or(40, |r| render::preview_body_width(r.width));
             if let Some(p) = app.preview.as_mut() {
                 match key.code {
                     KeyCode::Up => p.move_focus(-1),
@@ -148,14 +209,14 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
                     _ => {}
                 }
             }
-            app.follow_preview_focus(rows);
-            continue;
+            app.follow_preview_focus(width, rows);
+            return None;
         }
         match (key.code, ctrl) {
-            (KeyCode::Esc, _) | (KeyCode::Char('c'), true) => return Ok(Exit::Quit),
+            (KeyCode::Esc, _) | (KeyCode::Char('c'), true) => return Some(Exit::Quit),
             (KeyCode::Enter, _) => {
-                let Some(g) = app.selected_group() else { continue };
-                return Ok(Exit::Open {
+                let g = app.selected_group()?;
+                return Some(Exit::Open {
                     conv_id: g.conv_id.clone(),
                     resume_cmd: g.resume_cmd.clone(),
                     cwd: g.cwd.clone(),
@@ -189,6 +250,7 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
             _ => {}
         }
     }
+    None
 }
 
 /// Drawn on **stderr**, deliberately.
@@ -212,6 +274,16 @@ fn click(app: &mut state::App, panes: &layout::AppLayout, col: u16, row: u16) {
         return;
     }
 
+    // Preview before results, because with the preview stacked underneath (below
+    // `SPLIT_MIN_WIDTH`) a row can satisfy the results pane's `row >= body_top` test while
+    // sitting in the preview.
+    if let Some(pane) = panes.main.preview() {
+        if pane.contains(ratatui::layout::Position::new(col, row)) {
+            preview_click(app, pane, row);
+            return;
+        }
+    }
+
     let results = panes.main.results();
     // +1 for the border, +1 for the column headings.
     let body_top = results.y + 2;
@@ -223,6 +295,33 @@ fn click(app: &mut state::App, panes: &layout::AppLayout, col: u16, row: u16) {
             app.select(index);
         }
     }
+}
+
+/// Focus the message under the pointer, and fold it if the pointer is on its header line.
+///
+/// Clicking the header — the collapsed one-liner, or the speaker line of an expanded block —
+/// toggles, so a collapsed message opens where you clicked it and its speaker line closes it
+/// again. Clicking body text only moves focus: a block that collapsed out from under the
+/// pointer would take the text being read with it.
+fn preview_click(app: &mut state::App, pane: ratatui::layout::Rect, row: u16) {
+    let rows = render::preview_body_rows(pane.height);
+    // The same width the renderer laid the text out at. Resolve a click against any other and
+    // the lines wrap differently, so the row counted is not the row clicked.
+    let width = render::preview_body_width(pane.width);
+    let theme = app.theme;
+    let Some(p) = app.preview.as_mut() else { return };
+    // The border and the header lines are above the body; the pane is scrolled under them.
+    let Some(offset) = row.checked_sub(pane.y + 1 + render::PREVIEW_HEADER_LINES) else { return };
+    let at = offset as usize + p.scroll as usize;
+    let Some((block, on_header)) = p.block_at_row(&theme, width, at) else { return };
+    if on_header {
+        p.toggle_at(block);
+    } else {
+        p.focus = block;
+    }
+    // A fold changes what is above the focused message, so the viewport has to be re-checked
+    // against the new heights rather than left where the click found it.
+    p.follow_focus(&theme, width, rows);
 }
 
 type Term = Terminal<CrosstermBackend<std::io::Stderr>>;

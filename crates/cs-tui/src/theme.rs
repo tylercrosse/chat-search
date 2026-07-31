@@ -77,7 +77,24 @@ impl Theme {
             // selected row inverts that row's fill instead of fighting it, and it cannot land
             // invisible the way a fixed pair can. BOLD is what keeps it distinct from the
             // selection fill, which is reverse video too once colour is gone.
-            match_hl: Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD),
+            //
+            // Reverse video makes the *foreground* the bar and the terminal's background the
+            // lettering, so a colour here reads as a highlighter rather than as coloured text.
+            // Blue (4) rather than bright blue (12) because 4 is the slot Solarized fills with
+            // #268BD2: asking for the palette entry gets exactly that colour on a Solarized
+            // terminal and the right idea everywhere else, which a hardcoded hex would not —
+            // and it keeps layer 3 inside the rule the other two layers already obey. The
+            // warning above about 4 landing near-black is about text drawn *in* it; reversed it
+            // is a fill, and the knocked-out lettering is the terminal's background either way.
+            //
+            // DIM is subtracted rather than merely left unset. Both the snippet cell and a
+            // fenced code block draw their text dim, and a match patched on top of either would
+            // inherit it — so the one thing on screen that must never recede would recede
+            // exactly where the eye is already working hardest.
+            match_hl: Style::new()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::REVERSED | Modifier::BOLD)
+                .remove_modifier(Modifier::DIM),
         }
     }
 
@@ -101,7 +118,11 @@ impl Theme {
             error: Style::new().add_modifier(Modifier::BOLD),
             selected: Style::new().add_modifier(Modifier::REVERSED),
             header: Style::new().add_modifier(Modifier::BOLD),
-            match_hl: Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD),
+            // Colourless, but DIM is still subtracted: a monochrome terminal renders DIM, so a
+            // match inside dim text would recede here too.
+            match_hl: Style::new()
+                .add_modifier(Modifier::REVERSED | Modifier::BOLD)
+                .remove_modifier(Modifier::DIM),
         }
     }
 
@@ -317,6 +338,19 @@ mod tests {
             assert!(theme.match_hl.add_modifier.contains(Modifier::REVERSED));
             assert_eq!(theme.match_hl.bg, None);
             assert_ne!(theme.match_hl, theme.selected, "a match inside the selection vanishes");
+        }
+    }
+
+    #[test]
+    fn the_match_highlight_refuses_to_be_dimmed_by_whatever_it_lands_on() {
+        // Snippet cells and fenced code blocks both draw their text DIM, and a mark is patched
+        // over the style underneath it. Merely not setting DIM here would let it be inherited,
+        // so the loudest thing on screen would recede in the two places it is needed most.
+        for theme in [Theme::indexed(), Theme::plain()] {
+            assert!(theme.match_hl.sub_modifier.contains(Modifier::DIM), "{:?}", theme.match_hl);
+            let on_dim = theme.dim.patch(theme.match_hl);
+            assert!(!on_dim.add_modifier.contains(Modifier::DIM), "dim survived: {on_dim:?}");
+            assert!(on_dim.add_modifier.contains(Modifier::REVERSED));
         }
     }
 

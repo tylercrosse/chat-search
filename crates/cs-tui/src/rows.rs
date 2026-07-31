@@ -112,6 +112,7 @@ mod tests {
             ts: None,
             score: 0.0,
             snippet: String::new(),
+            snippet_spans: Vec::new(),
             resume_cmd: None,
             on_head_path: true,
             is_sidechain: false,

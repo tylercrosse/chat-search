@@ -69,8 +69,23 @@ const TOKENIZER: &str = "porter unicode61 remove_diacritics 2";
 /// `codex` — the row was not ranked on those words.
 const FILTERS: [&str; 3] = ["agent:", "dir:", "date:"];
 
+/// An fts5 expression matching text that contains **any** of `terms`.
+///
+/// OR, where the ranker ANDs, for the reason [`spans`] gives: on the message that ranked, every
+/// term is present anyway, and OR is what keeps this honest for a caller holding a subset.
+fn any_expr(terms: &[String]) -> String {
+    terms
+        .iter()
+        .map(|t| match t.strip_suffix('*') {
+            Some(stem) => format!("\"{}\"*", stem.replace('"', "\"\"")),
+            None => format!("\"{}\"", t.replace('"', "\"\"")),
+        })
+        .collect::<Vec<_>>()
+        .join(" OR ")
+}
+
 /// A matched run of `text`, as byte offsets into it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct Span {
     pub start: usize,
     pub end: usize,
@@ -122,14 +137,7 @@ pub fn spans(text: &str, terms: &[String]) -> Vec<Span> {
     let Some((open, close)) = sentinels(text) else {
         return Vec::new();
     };
-    let expr = terms
-        .iter()
-        .map(|t| match t.strip_suffix('*') {
-            Some(stem) => format!("\"{}\"*", stem.replace('"', "\"\"")),
-            None => format!("\"{}\"", t.replace('"', "\"\"")),
-        })
-        .collect::<Vec<_>>()
-        .join(" OR ");
+    let expr = any_expr(terms);
 
     let marked = SCRATCH.with(|cell| -> rusqlite::Result<Option<String>> {
         let mut slot = cell.borrow_mut();

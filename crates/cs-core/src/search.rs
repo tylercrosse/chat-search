@@ -44,6 +44,15 @@ pub struct Hit {
     pub ts: Option<i64>,
     pub score: f64,
     pub snippet: String,
+    /// Byte offsets into `snippet` of the words that matched. Empty when the match could not
+    /// be located, which is the same fact [`UNLOCATED`] states in prose.
+    ///
+    /// Carried rather than left to the client because no client can recover it: locating a
+    /// stemmed match means asking the index's own tokenizer (see [`crate::highlight`]), and by
+    /// the time a `Hit` exists the text has been windowed and its whitespace flattened, so
+    /// even the offsets into the *message* would no longer fit. It costs nothing — every
+    /// snippet is built from these already.
+    pub snippet_spans: Vec<highlight::Span>,
     pub resume_cmd: Option<String>,
     /// False when the message sits on a branch that was edited away — still searchable,
     /// but not part of the conversation as currently displayed.
@@ -135,27 +144,56 @@ pub fn snippet(text: &str, query: &str, width: usize) -> String {
 /// message contains the term `lea` at all, so an exact-term highlighter finds nothing on the
 /// path that matters most (chat-search-me9.1: every keystroke is a prefix query).
 pub fn snippet_opts(text: &str, query: &str, prefix: bool, width: usize) -> String {
-    let mut terms = highlight::query_terms(query);
-    if prefix {
-        // Read back off the expression the ranker actually used rather than re-deriving the
-        // rule: MIN_PREFIX_LEN and "is the final token still open" live in one place and have
-        // already been got wrong once. The tail check also covers the case where filter
-        // stripping removed the query's last word, so the open token is not a snippet term.
-        let expr = to_match_expr_opts(&query.to_lowercase(), true);
-        if let Some(last) = terms.last_mut() {
-            if expr.ends_with(&format!("\"{last}\"*")) {
-                last.push('*');
-            }
-        }
-    }
+    snippet_marked(text, query, prefix, width).0
+}
+
+/// [`snippet_opts`], keeping the offsets it computes anyway.
+///
+/// The spans index the *returned string*, ellipsis included, so nothing downstream can
+/// re-derive them: the window has been cut out of the message and its whitespace flattened,
+/// and the term that matched need not appear in the query (`commits` marks `Commit`). A
+/// renderer that wants to bold the match therefore has to be handed them.
+///
+/// Empty and [`UNLOCATED`] are one statement made twice, for two audiences — the string says
+/// it to a client reading JSON, the list to a client drawing cells — and they never disagree.
+pub fn snippet_marked(text: &str, query: &str, prefix: bool, width: usize) -> (String, Vec<highlight::Span>) {
+    let terms = marking_terms(query, prefix);
     let (out, spans) = highlight::snippet(text, &terms, width);
     if !spans.is_empty() {
-        return out;
+        return (out, spans);
     }
     // Re-cut the head against the reduced budget so the label does not push the line over
     // `width`. No terms means no MATCH, so this is arithmetic, not a second query.
     let (head, _) = highlight::snippet(text, &[], width.saturating_sub(UNLOCATED.chars().count()));
-    format!("{UNLOCATED}{head}")
+    // Empty rather than `spans`, which is the same value today and would stop being one the
+    // moment this branch is entered for any other reason: these offsets were taken before the
+    // label was prepended, so each is short by its width and would mark the wrong word.
+    (format!("{UNLOCATED}{head}"), Vec::new())
+}
+
+/// The terms a highlighter should mark with, for a query the ranker saw with `prefix`.
+///
+/// Public because the TUI preview marks whole messages rather than snippets and so cannot go
+/// through [`snippet_marked`], and this rule may not be spelled twice: it decides whether the
+/// query's final token is still open, and a preview that answered that differently from the
+/// ranker would label every in-progress word unmatched on exactly the path where every
+/// keystroke is a prefix query.
+pub fn marking_terms(query: &str, prefix: bool) -> Vec<String> {
+    let mut terms = highlight::query_terms(query);
+    if !prefix {
+        return terms;
+    }
+    // Read back off the expression the ranker actually used rather than re-deriving the rule:
+    // MIN_PREFIX_LEN and "is the final token still open" live in one place and have already
+    // been got wrong once. The tail check also covers the case where filter stripping removed
+    // the query's last word, so the open token is not a marking term.
+    let expr = to_match_expr_opts(&query.to_lowercase(), true);
+    if let Some(last) = terms.last_mut() {
+        if expr.ends_with(&format!("\"{last}\"*")) {
+            last.push('*');
+        }
+    }
+    terms
 }
 
 pub struct Query<'a> {
@@ -225,13 +263,15 @@ pub fn search(conn: &Connection, q: &Query) -> rusqlite::Result<Vec<Hit>> {
         params![q.now_ms, to_match_expr_opts(q.text, q.prefix), q.include_off_path as i64, q.source, q.limit, q.decay],
         |r| {
             let text: String = r.get(5)?;
+            let (snippet, snippet_spans) = snippet_marked(&text, q.text, q.prefix, 160);
             Ok(Hit {
                 msg_id: r.get(0)?,
                 conv_id: r.get(1)?,
                 role: r.get(2)?,
                 kind: r.get(3)?,
                 ts: r.get(4)?,
-                snippet: snippet_opts(&text, q.text, q.prefix, 160),
+                snippet,
+                snippet_spans,
                 on_head_path: r.get::<_, i64>(6)? != 0,
                 is_sidechain: r.get::<_, i64>(7)? != 0,
                 thread_key: r.get(8)?,
@@ -470,6 +510,66 @@ mod tests {
         assert!(snippet_opts(text, "lea", false, 160).starts_with(UNLOCATED), "exact `lea`");
         // Below MIN_PREFIX_LEN the ranker does not open the token either, so neither does this.
         assert!(snippet_opts(text, "le", true, 160).starts_with(UNLOCATED));
+    }
+
+    #[test]
+    fn a_carried_span_points_at_the_word_of_the_snippet_that_ranked_the_row() {
+        // `commits` ranks this on the stem, and the word in the text is `Commit` — so a
+        // renderer holding only the string has nothing to search it for. These are the
+        // offsets it has to be given instead.
+        let (out, marks) = snippet_marked("Commit current changes", "commits", false, 160);
+        assert_eq!(marks.len(), 1, "{out:?} {marks:?}");
+        assert_eq!(&out[marks[0].start..marks[0].end], "Commit");
+
+        // And through a window, where the offsets stop being the message's own: the string
+        // starts with an ellipsis and the match sits hundreds of bytes into the text.
+        let text = "alpha ".repeat(100) + "café " + &"omega ".repeat(100);
+        let (out, marks) = snippet_marked(&text, "cafe", false, 40);
+        assert_eq!(marks.len(), 1, "{out:?}");
+        assert_eq!(&out[marks[0].start..marks[0].end], "café");
+    }
+
+    #[test]
+    fn an_unlocatable_match_carries_no_spans_beside_its_label() {
+        // Both channels have to say the same thing. Spans surviving here would be the offsets
+        // of the *unlabelled* window, so every one would be short by the label's width and
+        // would mark whatever now sits at those bytes — including the label itself.
+        let (out, marks) = snippet_marked("Commit current changes", "elephant", false, 160);
+        assert!(out.starts_with(UNLOCATED), "got: {out}");
+        assert!(marks.is_empty(), "{marks:?}");
+
+        let (out, marks) = snippet_marked("Commit current changes", "", false, 160);
+        assert!(out.starts_with(UNLOCATED) && marks.is_empty());
+    }
+
+    #[test]
+    fn a_hit_carries_the_offsets_its_own_snippet_was_marked_with() {
+        // The two fields are built from one call, so they cannot describe different windows.
+        let conn = indexed(&["Commit current changes before the rebase"]);
+        let hits = search(&conn, &Query::new("commits")).unwrap();
+        let h = hits.first().expect("`commits` ranks the row");
+        assert_eq!(h.snippet_spans.len(), 1, "{:?}", h.snippet);
+        let s = h.snippet_spans[0];
+        assert_eq!(&h.snippet[s.start..s.end], "Commit");
+    }
+
+    #[test]
+    fn every_field_the_json_contract_already_promised_still_serialises() {
+        // ADR 12: a Raycast extension and a GUI read this object verbatim, so a field may be
+        // added but never renamed or dropped. Spelled out rather than derived from the struct,
+        // because a rename would otherwise rename this list along with the contract.
+        let conn = indexed(&["Commit current changes before the rebase"]);
+        let hits = search(&conn, &Query::new("commits")).unwrap();
+        let json = serde_json::to_value(&hits[0]).unwrap();
+        for field in [
+            "conv_id", "msg_id", "source", "title", "role", "kind", "ts", "score", "snippet",
+            "resume_cmd", "on_head_path", "is_sidechain", "thread_key", "deleted_upstream",
+        ] {
+            assert!(json.get(field).is_some(), "{field} left the JSON contract");
+        }
+        assert!(json["snippet"].is_string(), "still the bare string it always was");
+        // The addition, in the shape a client would have to parse.
+        assert_eq!(json["snippet_spans"], serde_json::json!([{ "start": 0, "end": 6 }]));
     }
 
     #[test]
@@ -762,13 +862,15 @@ fn hydrate(conn: &Connection, q: &Query, ranked: Vec<Ranked>) -> rusqlite::Resul
         for id in shown {
             if let Ok(h) = msg.query_row(params![id], |r| {
                 let text: String = r.get(5)?;
+                let (snippet, snippet_spans) = snippet_marked(&text, q.text, q.prefix, 160);
                 Ok(Hit {
                     msg_id: r.get(0)?,
                     conv_id: r.get(1)?,
                     role: r.get(2)?,
                     kind: r.get(3)?,
                     ts: r.get(4)?,
-                    snippet: snippet_opts(&text, q.text, q.prefix, 160),
+                    snippet,
+                    snippet_spans,
                     on_head_path: r.get::<_, i64>(6)? != 0,
                     is_sidechain: r.get::<_, i64>(7)? != 0,
                     thread_key: r.get(8)?,

@@ -267,6 +267,30 @@ pub fn age(ms_ago: i64) -> String {
 /// the wrong string. The scan stops at the first over-budget prefix, which bounds the work by
 /// `w` rather than by the length of `s`.
 fn prefix_end(s: &str, w: usize) -> usize {
+    // Printable ASCII is one column per byte, cannot combine with what follows, and cannot put
+    // a char boundary anywhere but a byte boundary — so the answer is arithmetic and the scan
+    // below can be skipped entirely.
+    //
+    // Worth a special case because that scan is quadratic in `w`: it re-measures the whole
+    // prefix for every character, so a row costs about w²/2 width lookups. At a 94-column pane
+    // over the 9,261 rows of this corpus's longest conversation that is ~42M lookups, and it
+    // measured as essentially the entire cost of laying the pane out.
+    //
+    // Printable rather than merely ASCII: tab and the C0 controls measure zero columns, not one,
+    // and a line containing them has to take the general path.
+    //
+    // The byte just past the cut is checked too, and that is not belt and braces. Anything of
+    // zero width attaches to the character before it and so extends the prefix without widening
+    // it — `width("e\u{301}") == width("e")` — so stopping at `w` bytes would cut a combining
+    // mark off the letter it belongs to. Requiring the next byte to be printable ASCII means it
+    // is a standalone column that genuinely does not fit.
+    let n = w.min(s.len());
+    let printable = |b: &u8| b.is_ascii_graphic() || *b == b' ';
+    if s.as_bytes()[..n].iter().all(printable)
+        && s.as_bytes().get(n).map_or(true, |b| printable(b))
+    {
+        return n;
+    }
     let mut end = 0;
     for (i, ch) in s.char_indices() {
         let next = i + ch.len_utf8();

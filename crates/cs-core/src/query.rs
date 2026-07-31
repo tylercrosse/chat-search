@@ -387,11 +387,17 @@ mod tests {
 
     #[test]
     fn a_lone_short_term_is_held_but_a_bounded_one_is_not() {
+        // Lifted from cs-tui's `App::holds`, which re-derived this threshold as its logical
+        // complement in another crate. Same cases, asserted where the rule lives.
+        assert_eq!(Query::typeahead("").mode(), Mode::Empty, "blank browses, it is not held");
+        assert_eq!(Query::typeahead("e").mode(), Mode::TooShort);
         assert_eq!(Query::typeahead("le").mode(), Mode::TooShort);
+        assert_eq!(Query::typeahead("  e  ").mode(), Mode::TooShort, "padding is not typing");
+        assert_eq!(Query::typeahead("lea").mode(), Mode::Searchable, "the floor is where searching starts");
         // A preceding term bounds the posting list, which is the cost the floor guards
         // against, so `deep le` searches rather than holding.
+        assert_eq!(Query::typeahead("deep l").mode(), Mode::Searchable);
         assert_eq!(Query::typeahead("deep le").mode(), Mode::Searchable);
-        assert_eq!(Query::typeahead("lea").mode(), Mode::Searchable);
     }
 
     #[test]

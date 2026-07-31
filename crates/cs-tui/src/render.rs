@@ -81,6 +81,16 @@ fn search(frame: &mut Frame, area: Rect, app: &App) {
             app.theme.dim,
         ));
     }
+    // A filter that was understood but is not in force, said where it was typed. Without
+    // this the rows below look filtered and are not, which is a worse answer than none
+    // (`me9.15`; `6eb.11` is what makes these active).
+    let unapplied = app.parsed().unapplied();
+    if !unapplied.is_empty() {
+        spans.push(Span::styled(
+            format!("   {} not a filter yet", unapplied.join(" ")),
+            app.theme.dim,
+        ));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), inner);
 
     // The caret is the terminal's, not a drawn glyph, so it blinks like every other input.
@@ -122,7 +132,7 @@ fn results(frame: &mut Frame, area: Rect, app: &App) {
         .border_style(app.theme.border)
         // Named for what the list *is*: under a blank or still-too-short query these are the
         // most recent conversations, and calling them results would imply they matched.
-        .title(if app.is_blank() || app.holding() { " Recent " } else { " Matches " });
+        .title(if app.browsing() { " Recent " } else { " Matches " });
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {

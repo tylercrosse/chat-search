@@ -20,7 +20,8 @@ use crate::theme::Theme;
 ///
 /// Tied to `cs_core`'s prefix threshold rather than picked for feel: below it the final
 /// token is matched exactly instead of expanded, so a shorter query returns matches for a
-/// word nobody typed.
+/// word nobody typed. Only the ghost-text countdown reads this now — whether a query is
+/// held is [`cs_core::Mode`]'s answer, not a threshold this crate re-applies.
 pub const MIN_QUERY_CHARS: usize = cs_core::search::MIN_PREFIX_LEN;
 
 pub struct App {
@@ -101,17 +102,12 @@ impl App {
     /// truth is "the index could not be read".
     pub fn search(&mut self) {
         self.now = cs_core::now_ms();
-        // Held back below the prefix threshold, and the reason is correctness before cost:
-        // `to_match_expr` only expands the final token when it is at least
-        // `MIN_PREFIX_LEN` long, so `em` searches for the literal word "em" rather than for
-        // a prefix of "embedding". The handful of rows that come back are not an early view
-        // of the answer, they are a different question — and the corpus is scanned once per
-        // keystroke to produce them. Recent conversations are the honest thing to show
-        // while a query is still too short to mean anything.
-        let text = if self.holding() { String::new() } else { self.query.clone() };
         let t0 = std::time::Instant::now();
-        // The TUI is typeahead by definition, so the word being typed is always open-ended.
-        let query = cs_core::Query::typeahead(&text).with_source(self.source.as_deref());
+        // No blanking of the query text. `search_grouped` routes anything that is not
+        // `Searchable` to the recent list itself, so this used to hand it an empty string to
+        // force a branch it would have taken anyway — and that rewrite is what made
+        // `rows::build` see a different answer here than in `rebuild_rows`.
+        let query = self.parsed();
         let q = cs_core::SearchOptions { limit: self.limit, ..cs_core::SearchOptions::new(self.now) };
         // `nested = 0`: no snippets. Building them is 5-20x the cost of the ranking itself
         // — measured on the 172k-message index, `pro` goes 34 ms to 448 ms and `learning`
@@ -124,7 +120,7 @@ impl App {
                 self.last_ms = t0.elapsed().as_secs_f64() * 1000.0;
                 self.groups = groups;
                 self.status = None;
-                self.rows = rows::build(&self.groups, &self.expanded, query.mode() == cs_core::Mode::Empty);
+                self.rows = rows::build(&self.groups, &self.expanded, !query.is_searchable());
                 // A query edit is a new question, so the cursor belongs on the best answer to
                 // it. Following the previously-selected conversation here — which an earlier
                 // version did — drags the cursor down the ranking as the query narrows: type
@@ -141,16 +137,26 @@ impl App {
 
     /// Rebuild the row vector without re-querying, keeping the cursor on `previous`.
     fn rebuild_rows(&mut self, previous: Option<&str>) {
-        self.rows = rows::build(&self.groups, &self.expanded, self.is_blank());
+        self.rows = rows::build(&self.groups, &self.expanded, !self.parsed().is_searchable());
         self.selected = rows::reselect(&self.rows, &self.groups, previous, self.selected);
         self.sync_preview();
     }
 
-    /// True when the query carries no searchable term, so the results are the recent-
-    /// conversations fallback (`6eb.5`) rather than matches. Checked against the tokenised
-    /// form: `"-"` and `"??"` are non-empty input that still produce no terms.
-    pub fn is_blank(&self) -> bool {
-        cs_core::Query::typeahead(&self.query).mode() == cs_core::Mode::Empty
+    /// The query as `cs-core` reads it, with the facet selection folded in.
+    ///
+    /// Parsed on demand rather than cached beside `self.query`, because a cached copy is a
+    /// second thing to keep in step and this crate has just finished removing one. The parse
+    /// is string work on a few dozen characters against a search measured in milliseconds.
+    ///
+    /// Typeahead because the TUI is: every keystroke leaves a word half-typed, and the
+    /// ranking has to open the final token or the list widens as you type.
+    pub fn parsed(&self) -> cs_core::Query {
+        cs_core::Query::typeahead(&self.query).with_source(self.source.as_deref())
+    }
+
+    /// What the query can do, as `cs-core` sees it. The UI decides what to *show* for each.
+    pub fn mode(&self) -> cs_core::Mode {
+        self.parsed().mode()
     }
 
     /// Something has been typed, but not yet enough to search on.
@@ -159,20 +165,13 @@ impl App {
     /// say which it is showing — silently listing recent conversations under a half-typed
     /// query reads as "your query matched these".
     pub fn holding(&self) -> bool {
-        Self::holds(&self.query)
+        self.mode() == cs_core::Mode::TooShort
     }
 
-    /// [`App::holding`] as a pure function, so the threshold is testable without an index.
-    ///
-    /// Only a *lone* short term is held. With another term present the prefix is bounded by
-    /// the intersection, so it is both meaningful and cheap — and holding it would reproduce
-    /// the widening bug in the UI, since `deep le` would show recent conversations while
-    /// `deep lea` searched.
-    pub fn holds(query: &str) -> bool {
-        let trimmed = query.trim();
-        let typed = trimmed.chars().count();
-        let lone = !trimmed.contains(char::is_whitespace);
-        lone && typed > 0 && typed < MIN_QUERY_CHARS
+    /// True when the results are the recent-conversations fallback (`6eb.5`) rather than
+    /// matches, for either reason.
+    pub fn browsing(&self) -> bool {
+        self.mode() != cs_core::Mode::Searchable
     }
 
     /// Reload the preview if the cursor has moved to a different conversation.
@@ -198,7 +197,7 @@ impl App {
     /// recent conversations rather than matches; marking against a query nothing was ranked on
     /// would put highlights on rows that never matched it.
     fn preview_terms(&self) -> Vec<String> {
-        if self.holding() || self.is_blank() {
+        if self.browsing() {
             return Vec::new();
         }
         // `true` because the TUI is typeahead by definition and `search` below ranks with the
@@ -291,9 +290,8 @@ impl App {
     /// A failure leaves the existing groups alone: an expansion that cannot find its
     /// snippets should show the conversation without them, not empty the list.
     fn hydrate_hits(&mut self) {
-        let text = if self.holding() { String::new() } else { self.query.clone() };
-        let query = cs_core::Query::typeahead(&text).with_source(self.source.as_deref());
-        if query.mode() == cs_core::Mode::Empty {
+        let query = self.parsed();
+        if !query.is_searchable() {
             return;
         }
         let q = cs_core::SearchOptions {
@@ -360,7 +358,7 @@ impl App {
     /// behind it, and a session that ended in a pick already recorded what mattered. This is
     /// the only way the log ever says the ranking showed nothing worth opening.
     pub fn abandon_event(&self) -> Option<Event> {
-        if self.picked || self.is_blank() {
+        if self.picked || self.browsing() {
             return None;
         }
         let shown: Vec<String> = self.groups.iter().map(|g| g.conv_id.clone()).collect();
@@ -401,6 +399,32 @@ fn read_facets(conn: &Connection) -> Vec<(String, i64)> {
 mod tests {
     use super::*;
     use cs_core::model::{Conversation, Kind, Message, Role, Titles};
+
+    #[test]
+    fn one_query_decides_whether_the_list_is_matches_or_recent() {
+        // `search` and `rebuild_rows` used to answer this from different inputs: `search`
+        // blanked the query text before asking, so it saw "blank" while `rebuild_rows` asked
+        // the raw query and saw "not blank" for the same state on screen. Latent rather than
+        // visible — the browse path returns groups with no hits, so the two row vectors came
+        // out identical anyway — but it is two derivations of one fact, and the second one
+        // becomes wrong the moment the recent list carries hits.
+        let mut app = app_with(&[("a", "alpha beta"), ("b", "alpha gamma")]);
+
+        app.query = "al".into();
+        app.search();
+        assert_eq!(app.mode(), cs_core::Mode::TooShort, "a lone two-character term is held");
+        assert!(app.browsing(), "so the list is recent conversations, not matches");
+        let before = app.rows.clone();
+
+        // Tab, which rebuilds rows without re-querying — the path that used to disagree.
+        app.toggle_expand();
+        assert_eq!(app.rows, before, "expansion cannot change a list that is not matches");
+
+        app.query = "alpha".into();
+        app.search();
+        assert_eq!(app.mode(), cs_core::Mode::Searchable);
+        assert!(!app.browsing(), "now the rows are matches and expansion means something");
+    }
 
     /// Two conversations, both matching `alpha`, ordered so the ranking has a choice to make.
     fn app_with(convs: &[(&str, &str)]) -> App {
@@ -531,21 +555,5 @@ mod tests {
         assert_eq!(rank, Some(2), "1-based rank within the list actually shown");
         assert_eq!(n, 2);
         assert!(conv_id.ends_with("c1"));
-    }
-}
-
-#[cfg(test)]
-mod hold_tests {
-    use super::*;
-
-    #[test]
-    fn a_short_query_is_held_rather_than_run() {
-        assert!(!App::holds(""), "blank is not holding — it is the recent list");
-        assert!(App::holds("e"));
-        assert!(App::holds("em"));
-        assert!(!App::holds("emb"), "the prefix threshold is where searching starts");
-        assert!(App::holds("  e  "), "surrounding whitespace is not typing");
-        assert!(!App::holds("deep l"), "a second term bounds the prefix, so it is searchable");
-        assert!(!App::holds("deep le"));
     }
 }

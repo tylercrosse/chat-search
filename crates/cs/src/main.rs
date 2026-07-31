@@ -4,7 +4,7 @@ use cs_archive::{machine, CaptureKind, Change, Config, Event, Fingerprint, Layou
 use std::path::{Path, PathBuf};
 
 mod eval;
-mod query;
+mod commands;
 mod tui;
 
 #[derive(Parser)]
@@ -212,19 +212,19 @@ fn main() -> Result<()> {
         Command::Status { json } => status(&config_path, json),
         Command::Scan { source, json } => scan(&config_path, source.as_deref(), json),
         Command::Index { db, tool_text_limit, json } => {
-            query::index(&config_path, db, tool_text_limit, json)
+            commands::index(&config_path, db, tool_text_limit, json)
         }
         Command::Tui { db, source, limit } => {
             tui::run(&config_path, db, source.as_deref(), limit)
         }
         Command::Search { query: q, limit, db, source, tools, include_off_path, prefix, nested, flat, json } => {
-            query::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)
+            commands::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)
         }
         Command::Pick { conv_id, query: q, db, source, limit, quiet } => {
-            query::pick(&config_path, db, &conv_id, &q, source.as_deref(), limit, quiet)
+            commands::pick(&config_path, db, &conv_id, &q, source.as_deref(), limit, quiet)
         }
-        Command::Needs { limit, json } => query::needs(&config_path, limit, json),
-        Command::Explain { conv_id, query: q, db } => query::explain(&config_path, db, &conv_id, &q),
+        Command::Needs { limit, json } => commands::needs(&config_path, limit, json),
+        Command::Explain { conv_id, query: q, db } => commands::explain(&config_path, db, &conv_id, &q),
         Command::Eval { command } => match command {
             EvalCommand::Sheet { set, db, depth, only, force } => {
                 eval::sheet(&config_path, db, &set, depth, only.as_deref(), force)

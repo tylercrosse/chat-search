@@ -1,0 +1,228 @@
+#!/bin/bash
+#
+# Dispatch a burst of ready beads to background Claude sessions, then exit.
+#
+# Runs unattended under launchd every 5 hours (one LaunchAgent per repo).
+# Nothing in here makes a judgment call -- whether to dispatch is a set of
+# thresholds, so it stays in shell where it can be read, dry-run, and killed.
+# Judgment lives inside the bd-worker agent, one bead at a time.
+#
+# The guards matter more than the dispatch. Unattended, this generates branches
+# faster than they can be reviewed, and the failure is silent: workers branch
+# off an ever-staler base and the conflicts land on whoever merges. Refusing to
+# run is the normal, healthy outcome.
+#
+#   bd-autodispatch --dry-run    select and report, spawn nothing
+#   bd-autodispatch -n 3         override the worker count
+
+set -uo pipefail
+
+# launchd gives a bare environment with no useful PATH, so every binary is
+# resolved here rather than assumed. Nothing below is specific to one repo:
+# the script sits in <repo>/scripts/ and derives the rest, so it can be copied
+# or symlinked into any repo that uses bd.
+REPO=${BD_REPO:-$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)}
+BD=${BD_BIN:-$(command -v bd 2>/dev/null || echo /opt/homebrew/bin/bd)}
+CLAUDE=${CLAUDE_BIN:-$(command -v claude 2>/dev/null || echo "$HOME/.local/bin/claude")}
+PY=${PY_BIN:-/usr/bin/python3}
+
+WORKERS=${BD_WORKERS:-2}           # beads dispatched per window
+MAX_UNMERGED=${BD_MAX_UNMERGED:-5} # refuse to add to a review backlog this deep
+STALE_HOURS=${BD_STALE_HOURS:-4}   # never reap a claim younger than this
+
+# Credentials live outside the repo and outside the plist: scripts/ is tracked
+# by git, and a LaunchAgent plist is world-readable plaintext that gets backed
+# up. This file is 0600 and holds CLAUDE_CODE_OAUTH_TOKEN=...
+ENV_FILE=${BD_ENV_FILE:-$HOME/.config/bd-autodispatch/$(basename "$REPO").env}
+if [ -f "$ENV_FILE" ]; then
+  # Refuse a file anyone else can read rather than quietly using it.
+  perms=$(stat -f '%Lp' "$ENV_FILE" 2>/dev/null || echo 600)
+  case "$perms" in
+    *[1-7][0-7]|*[0-7][1-7]) echo "WARNING: $ENV_FILE is mode $perms; run chmod 600 on it" >&2 ;;
+  esac
+  set -a; . "$ENV_FILE"; set +a
+fi
+
+DRY_RUN=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1; shift ;;
+    -n) WORKERS="$2"; shift 2 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+log() { printf '%s  %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*"; }
+die() { log "ABORT: $*"; exit 1; }
+
+cd "$REPO" 2>/dev/null || die "repo not found at $REPO"
+[ -x "$BD" ]     || die "bd not executable at $BD"
+[ -x "$CLAUDE" ] || die "claude not executable at $CLAUDE"
+
+# `claude --agent <unknown>` does not fail -- it warns and spawns a default
+# agent instead. Unattended that is the worst outcome available: the bead gets
+# claimed and handed to something with no test gate, no commit rules and no
+# escalation path, and the row looks entirely normal. Refuse instead.
+# Project agents override personal ones, so either location is valid.
+[ -f "$REPO/.claude/agents/bd-worker.md" ] || [ -f "$HOME/.claude/agents/bd-worker.md" ] \
+  || die "no bd-worker.md in $REPO/.claude/agents or ~/.claude/agents -- refusing to dispatch to a default agent"
+
+log "=== autodispatch start (workers=$WORKERS dry_run=$DRY_RUN) ==="
+
+# Report presence, never the value -- this log is plaintext and long-lived.
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+  log "auth: token loaded from $ENV_FILE"
+else
+  log "auth: no CLAUDE_CODE_OAUTH_TOKEN (fine if run by hand; launchd has no login session)"
+fi
+
+# --- 1. Reap claims held by workers that are no longer running -------------
+#
+# A worker killed mid-bead -- rate limit, crash, reboot -- leaves its bead
+# in_progress forever, and bd ready will never offer it again. Releasing it is
+# safe even if a gate blocks it: the gate keeps it out of the ready queue.
+#
+# Only beads whose assignee starts with bd-worker/ are touched. A bead claimed
+# by a human shows their git user.name and is left completely alone.
+
+LIVE=$("$CLAUDE" agents --json 2>/dev/null | "$PY" -c '
+import json, sys
+try:
+    sessions = json.load(sys.stdin)
+except Exception:
+    sessions = []
+parts = []
+for s in sessions:
+    parts.append(str(s.get("name", "")))
+    parts.append(str(s.get("id", "")))
+print(" ".join(parts))
+' 2>/dev/null) || LIVE=""
+
+STALE=$("$BD" list --status=in_progress --json 2>/dev/null | "$PY" -c '
+import json, sys, datetime
+
+live = sys.argv[1] if len(sys.argv) > 1 else ""
+stale_hours = float(sys.argv[2]) if len(sys.argv) > 2 else 4.0
+now = datetime.datetime.utcnow()
+
+try:
+    issues = json.load(sys.stdin)
+except Exception:
+    issues = []
+
+for i in issues:
+    if not str(i.get("assignee") or "").startswith("bd-worker/"):
+        continue
+    bead = i["id"]
+    # Sessions get named with the short id ("6eb.30 fts5 highlight"), not the
+    # prefixed one, so matching only the full id declares every live worker
+    # dead. Check both forms.
+    if bead in live or bead.split("-")[-1] in live:
+        continue
+    # Age is the safety net under that match. A running worker whose name
+    # somehow misses still has a fresh timestamp, and reaping a live claim is
+    # far worse than leaving a dead one: two workers would edit one bead.
+    ts = str(i.get("updated_at") or "").replace("Z", "")
+    try:
+        age_hours = (now - datetime.datetime.fromisoformat(ts)).total_seconds() / 3600.0
+    except Exception:
+        continue
+    if age_hours >= stale_hours:
+        print(bead)
+' "$LIVE" "$STALE_HOURS" 2>/dev/null)
+
+if [ -n "$STALE" ]; then
+  for id in $STALE; do
+    if [ "$DRY_RUN" -eq 1 ]; then
+      log "would reap $id (worker gone)"
+    else
+      "$BD" update "$id" --status=open --assignee="" >/dev/null 2>&1 \
+        && log "reaped $id (worker gone, returned to queue)"
+    fi
+  done
+else
+  log "no stale worker claims"
+fi
+
+# --- 2. Guard: review backlog ----------------------------------------------
+#
+# The merge queue is the real bottleneck, so it is the thing that throttles.
+
+UNMERGED=$(git branch --no-merged 2>/dev/null | wc -l | tr -d ' ')
+log "unmerged branches: $UNMERGED (max $MAX_UNMERGED)"
+if [ "$UNMERGED" -ge "$MAX_UNMERGED" ]; then
+  log "STOP: review backlog at capacity. Run /bd-review and merge before more work is dispatched."
+  exit 0
+fi
+
+# --- 3. Select beads -------------------------------------------------------
+#
+# Epics are containers, not work. A bead with no acceptance criteria has no
+# definition of done, so unattended it would burn a whole session only to come
+# back as an ambiguous-bead gate -- cheaper to skip it and say so.
+
+CANDIDATES=$("$BD" ready --json --exclude-type=epic --limit 40 2>/dev/null | "$PY" -c '
+import json, sys
+want = int(sys.argv[1])
+try:
+    issues = json.load(sys.stdin)
+except Exception:
+    issues = []
+eligible = [i for i in issues if (i.get("acceptance_criteria") or "").strip()]
+print("FLOOR\t" + str(len(eligible)) + "\t" + str(len(issues) - len(eligible)))
+for i in eligible[:want]:
+    print("PICK\t" + i["id"] + "\t" + (i.get("title") or "")[:48])
+' "$WORKERS" 2>/dev/null)
+
+# Queue health belongs in the log. If eligible ever reaches zero this job goes
+# quiet forever, and a silent no-op every 5 hours looks identical to success.
+echo "$CANDIDATES" | grep '^FLOOR' | while IFS=$'\t' read -r _ ok bad; do
+  log "queue: $ok eligible, $bad ready but lacking acceptance criteria"
+done
+
+PICKS=$(echo "$CANDIDATES" | grep '^PICK' || true)
+if [ -z "$PICKS" ]; then
+  log "STOP: nothing ready that meets the quality floor."
+  exit 0
+fi
+
+# --- 4. Claim, then dispatch ----------------------------------------------
+#
+# Claim first so a later run cannot hand the same bead out twice. A claim that
+# fails means someone else holds it; skip and carry on.
+
+DISPATCHED=0
+while IFS=$'\t' read -r _ id title; do
+  [ -z "$id" ] && continue
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    log "would dispatch $id -- $title"
+    DISPATCHED=$((DISPATCHED + 1))
+    continue
+  fi
+
+  if ! BEADS_ACTOR="bd-worker/$id" "$BD" update "$id" --claim >/dev/null 2>&1; then
+    log "skip $id (claim failed, already held)"
+    continue
+  fi
+
+  # auto rather than acceptEdits: unattended, a static allowlist is guaranteed
+  # to be incomplete and every gap is a stalled session. The classifier clears
+  # unforeseen-but-safe commands and parks only on genuinely risky ones. It
+  # needs a live model, so when the classifier is down a worker parks too --
+  # same shape as an allowlist miss, strictly less often.
+  if "$CLAUDE" --bg --agent bd-worker --permission-mode auto \
+       -n "$id $title" "Work bead $id." >/dev/null 2>&1; then
+    log "dispatched $id -- $title"
+    DISPATCHED=$((DISPATCHED + 1))
+  else
+    # A failed spawn is the closest thing to a usage-limit signal available;
+    # there is no quota API. Release the claim and stop the window rather than
+    # burn the rest of the burst on spawns that will fail the same way.
+    "$BD" update "$id" --status=open --assignee="" >/dev/null 2>&1
+    log "STOP: spawn failed for $id (usage limit or auth). Claim released."
+    break
+  fi
+done <<< "$PICKS"
+
+log "=== autodispatch done: $DISPATCHED dispatched ==="

@@ -1,4 +1,5 @@
 use crate::highlight;
+use crate::model::Kind;
 use crate::query::{Facet, Query};
 use rusqlite::{params, params_from_iter, types::Value, Connection};
 use serde::Serialize;
@@ -373,9 +374,10 @@ fn mark(conn: &Connection, query: &Query, field: Field, pending: Vec<Unmarked>) 
 
 /// Why a conversation did *not* come back for a query.
 ///
-/// A false negative has three very different causes — a filter excluded it, the text was never
-/// indexed, or it was indexed and ranked too low — and they need opposite fixes. Guessing
-/// between them is the slowest part of tuning ranking, so the index answers it directly.
+/// A false negative has four very different causes — a filter excluded it, the words are only
+/// in a kind nobody indexes, the text was never indexed at all, or it was indexed and ranked
+/// too low — and they need opposite fixes. Guessing between them is the slowest part of tuning
+/// ranking, so the index answers it directly.
 #[derive(Debug, Serialize)]
 pub struct Explain {
     pub conv_id: String,
@@ -383,6 +385,12 @@ pub struct Explain {
     pub messages: i64,
     pub prose_messages: i64,
     pub indexed_prose: i64,
+    /// Messages here whose [`Kind`] carries no postings at all — reasoning, today.
+    ///
+    /// Reported even when it explains nothing, because "8% of this conversation was never
+    /// looked at" is a fact about the answer that a reader cannot recover from the other
+    /// counts: `messages` minus `prose_messages` is mostly tool traffic, which *is* indexed.
+    pub unindexed_messages: i64,
     pub off_path_messages: i64,
     pub deleted_upstream: bool,
     /// Per query term: how many prose messages in this conversation contain it at all.
@@ -391,6 +399,15 @@ pub struct Explain {
     /// find in the text, and reporting `agent:codex` as a term present in zero messages reads
     /// as a recall problem when it is the filter doing exactly its job.
     pub term_hits: Vec<(String, i64)>,
+    /// The same count over the kinds that carry no postings, so a zero above can be told from
+    /// a zero that only means "nobody indexed the place this word lives".
+    ///
+    /// This is the distinction chat-search-8mb was filed for. `gbdt` appears once in
+    /// `chatgpt-export:68c2e851`, in a reasoning message, and nowhere else in that
+    /// conversation; `term_hits` reported 0 and the verdict read "no message contains any
+    /// query term", which is true of the index and false of the conversation the user is
+    /// asking about.
+    pub unindexed_term_hits: Vec<(String, i64)>,
     /// Whether this conversation is one the query's filters drop, independent of any text.
     ///
     /// The cause `chat-search-6eb.11` introduced and this tool could not see: with a filter in
@@ -458,7 +475,22 @@ pub fn explain(
     //
     // Over the parsed terms, so `agent:codex` is not looked for in the prose. It never was
     // prose — it is why the conversation is absent, not a word that failed to appear in it.
+    // Which kinds carry no postings, derived from the rule rather than named here — see
+    // `Kind::is_indexed`. Interpolated because they are `&'static str` off an enum, like
+    // `Field::table`; nothing a caller supplies goes near this string.
+    let unindexed_kinds: Vec<&str> =
+        Kind::ALL.iter().filter(|k| !k.is_indexed()).map(|k| k.as_str()).collect();
+    let unindexed_list =
+        unindexed_kinds.iter().map(|k| format!("'{k}'")).collect::<Vec<_>>().join(",");
+
+    let unindexed_messages: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM message WHERE conv_id=?1 AND kind IN ({unindexed_list})"),
+        params![conv_id],
+        |r| r.get(0),
+    )?;
+
     let mut term_hits = Vec::new();
+    let mut unindexed_term_hits = Vec::new();
     for term in parsed.terms() {
         let n: i64 = conn.query_row(
             "SELECT COUNT(*) FROM message WHERE conv_id=?1 AND kind='prose'
@@ -467,6 +499,20 @@ pub fn explain(
             |r| r.get(0),
         )?;
         term_hits.push((term.clone(), n));
+
+        // Same LIKE, deliberately: this answers "is the word *there*", and the whole point of
+        // asking is that no tokenizer ever looked at these messages. Over-reporting a
+        // substring is the safe direction for a diagnostic — `rust` inside `trustworthy` sends
+        // a reader to look, where a miss would let them conclude the word does not exist.
+        let u: i64 = conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM message WHERE conv_id=?1 AND kind IN ({unindexed_list})
+                   AND lower(text) LIKE '%' || lower(?2) || '%'"
+            ),
+            params![conv_id, term],
+            |r| r.get(0),
+        )?;
+        unindexed_term_hits.push((term.clone(), u));
     }
 
     // Asked of the filters alone, with no MATCH in the way, so the answer holds even for a
@@ -503,6 +549,19 @@ pub fn explain(
         // Filters that all match, and no terms to rank on. Not a recall problem: there was
         // never a word to fail to find.
         "the query is only filters, and this conversation passes them — nothing was ranked".into()
+    } else if term_hits.iter().all(|(_, n)| *n == 0)
+        && unindexed_term_hits.iter().any(|(_, n)| *n > 0)
+    {
+        // Ahead of the recall branch below, which would otherwise say "no message contains any
+        // query term" about a conversation where a message plainly does (chat-search-8mb).
+        // That sentence was true of the index and false of the thing the user asked about, and
+        // it is the more misleading of the two answers: it sends someone to fix ranking or
+        // stemming for a word the ranker was never shown.
+        let kinds = unindexed_kinds.join(", ");
+        format!(
+            "the term is only in messages of kind {kinds}, which carry no postings — \
+             search cannot find this however it is ranked"
+        )
     } else if term_hits.iter().all(|(_, n)| *n == 0) {
         "no message contains any query term — this is a recall problem, not ranking".into()
     } else if best_rank.is_none() {
@@ -519,9 +578,11 @@ pub fn explain(
         messages,
         prose_messages,
         indexed_prose,
+        unindexed_messages,
         off_path_messages: off_path,
         deleted_upstream,
         term_hits,
+        unindexed_term_hits,
         excluded_by_filter,
         best_score,
         best_rank: best_rank.map(|i| i + 1),
@@ -1697,6 +1758,111 @@ mod filter_tests {
         assert_eq!(e.messages, 3);
         assert_eq!(e.prose_messages, 1);
         assert_eq!(e.indexed_prose, 1, "the other two are tool traffic and are not in fts_prose");
+    }
+
+    /// A conversation whose only mention of `gbdt` is in a reasoning message — the shape of
+    /// `chatgpt-export:68c2e851`, which is what chat-search-8mb was filed about.
+    fn only_in_reasoning() -> Connection {
+        let conn = crate::open(":memory:").unwrap();
+        conn.execute(
+            "INSERT INTO conversation(id, source, native_id) VALUES ('c', 'chatgpt-export', 'c')",
+            [],
+        )
+        .unwrap();
+        for (i, (kind, text)) in [
+            ("prose", "comparing the tree models on this dataset"),
+            ("reasoning", "gbdt will beat the linear baseline here"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            conn.execute(
+                "INSERT INTO message(id, conv_id, thread_key, seq, role, kind, ts, text)
+                 VALUES (?1, 'c', 'main', ?2, 'assistant', ?3, 1700000000000, ?4)",
+                params![format!("m{i}"), i as i64, kind, text],
+            )
+            .unwrap();
+            // Postings only for the kinds the indexer writes them for — the point of the
+            // fixture is a message that is in `message` and in no fts table.
+            if *kind == "prose" {
+                let rowid = conn.last_insert_rowid();
+                conn.execute(
+                    "INSERT INTO fts_prose(rowid, text) VALUES (?1, ?2)",
+                    params![rowid, text],
+                )
+                .unwrap();
+            }
+        }
+        conn
+    }
+
+    #[test]
+    fn explain_tells_a_word_that_is_absent_from_one_that_is_merely_unindexed() {
+        // The bug: `term_hits` counted prose alone, so a word living only in reasoning came
+        // back 0 and the verdict read "no message contains any query term". True of the index,
+        // false of the conversation — and it sends the reader to fix stemming or ranking for a
+        // word the ranker was never shown.
+        let conn = only_in_reasoning();
+        let e = explain(&conn, "c", "gbdt", NOW).unwrap();
+
+        assert_eq!(e.term_hits, vec![("gbdt".to_string(), 0)], "no *indexed* message has it");
+        assert_eq!(
+            e.unindexed_term_hits,
+            vec![("gbdt".to_string(), 1)],
+            "but the conversation plainly does"
+        );
+        assert!(
+            e.verdict.contains("reasoning") && e.verdict.contains("no postings"),
+            "the verdict has to name the cause: {:?}",
+            e.verdict
+        );
+        assert!(
+            !e.verdict.contains("no message contains"),
+            "and must not still claim the word is absent: {:?}",
+            e.verdict
+        );
+    }
+
+    #[test]
+    fn a_word_that_is_in_no_message_at_all_still_reports_a_recall_problem() {
+        // The guard on the branch order. The new cause sits ahead of the recall verdict, so it
+        // must not swallow the case that verdict is actually for.
+        let conn = only_in_reasoning();
+        let e = explain(&conn, "c", "kubernetes", NOW).unwrap();
+        assert_eq!(e.unindexed_term_hits, vec![("kubernetes".to_string(), 0)]);
+        assert!(e.verdict.contains("recall problem"), "got {:?}", e.verdict);
+    }
+
+    #[test]
+    fn a_word_the_ranker_did_see_is_not_blamed_on_the_unindexed_kinds() {
+        // `comparing` is in the prose. The reasoning branch must not fire just because the
+        // conversation happens to contain reasoning at all.
+        let conn = only_in_reasoning();
+        let e = explain(&conn, "c", "comparing", NOW).unwrap();
+        assert_eq!(e.term_hits, vec![("comparing".to_string(), 1)]);
+        assert!(!e.verdict.contains("no postings"), "got {:?}", e.verdict);
+    }
+
+    #[test]
+    fn unindexed_messages_are_counted_because_no_other_number_reveals_them() {
+        // `messages - prose_messages` is mostly tool traffic, which *is* indexed, so a reader
+        // cannot subtract their way to "how much of this was never looked at".
+        let conn = only_in_reasoning();
+        let e = explain(&conn, "c", "gbdt", NOW).unwrap();
+        assert_eq!(e.messages, 2);
+        assert_eq!(e.prose_messages, 1);
+        assert_eq!(e.unindexed_messages, 1);
+    }
+
+    #[test]
+    fn the_kinds_explain_calls_unindexed_are_the_ones_the_indexer_skips() {
+        // Two statements of one rule is the failure this codebase names explicitly. `explain`
+        // derives its list from `Kind::is_indexed`; this is the assertion that the derivation
+        // is the same rule `index::write_one` applies, not a lookalike.
+        let unindexed: Vec<&str> =
+            Kind::ALL.iter().filter(|k| !k.is_indexed()).map(|k| k.as_str()).collect();
+        assert_eq!(unindexed, vec!["reasoning"], "if this changes, chat-search-8mb changes");
+        assert!(Kind::Prose.is_indexed() && Kind::ToolCall.is_indexed());
     }
 }
 

@@ -272,7 +272,17 @@ fn write_one(
             k if k.is_tool() && !stored_text.is_empty() => {
                 ins_tools.execute(params![rowid, stored_text])?;
             }
-            _ => {}
+            // Reasoning reaches here and gets no posting *on purpose* — the reason is on
+            // [`Kind::is_indexed`], which is the one place that rule is written down.
+            // `cs explain` reads the same predicate, so a conversation whose only match is in
+            // reasoning is told that is why, rather than being told its word does not exist.
+            //
+            // The remaining arrivals are tool messages with empty stored text, which have no
+            // postings because they have no words, not because of their kind.
+            k => debug_assert!(
+                !k.is_indexed() || stored_text.is_empty(),
+                "{k:?} says it is indexed but write_one gave it no posting",
+            ),
         }
         stats.messages += 1;
         stats.text_bytes += stored_text.len() as u64;
@@ -369,6 +379,52 @@ mod tests {
             ts: Some(1_700_000_000_000 + seq),
             text: text.into(),
         }
+    }
+
+    #[test]
+    fn reasoning_is_stored_in_full_and_indexed_nowhere() {
+        // The two halves of chat-search-8mb's decision, which are easy to confuse: reasoning is
+        // *kept* — the preview draws it and 47% of its vocabulary appears nowhere else in its
+        // conversation — and it is *not searchable*, because indexing it surfaced no
+        // conversation prose does not already surface. A change that dropped the text would
+        // pass a test that only checked the postings.
+        let mut conn = crate::open(":memory:").unwrap();
+        let mut think = m("t", None, 1, "main", false, "gbdt beats the linear baseline");
+        think.kind = Kind::Reasoning;
+        let c = conv(vec![m("a", None, 0, "main", false, "comparing tree models"), think]);
+        write_conversations(&mut conn, [&c].into_iter()).unwrap();
+
+        let stored: String = conn
+            .query_row("SELECT text FROM message WHERE kind='reasoning'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(stored, "gbdt beats the linear baseline", "the text is kept in full");
+
+        // Asked of fts5 rather than of `Kind`, so this catches the indexer disagreeing with
+        // the rule rather than restating the rule back to itself.
+        let postings: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_prose_docsize d JOIN message m ON m.rowid = d.id
+                   WHERE m.kind = 'reasoning'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(postings, 0, "reasoning must reach no fts table");
+        let tool_postings: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM fts_tools_docsize d JOIN message m ON m.rowid = d.id
+                   WHERE m.kind = 'reasoning'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(tool_postings, 0);
+
+        // And the searchable half still is.
+        let prose: i64 = conn
+            .query_row("SELECT COUNT(*) FROM fts_prose_docsize", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(prose, 1, "the prose beside it is indexed as usual");
     }
 
     #[test]

@@ -37,6 +37,11 @@ pub enum Kind {
 }
 
 impl Kind {
+    /// Every variant, so a rule expressed over kinds can be *derived* by a caller rather than
+    /// restated. `cs explain` builds its list of unindexed kinds this way, which is what keeps
+    /// its answer true if [`Kind::is_indexed`] ever changes its mind.
+    pub const ALL: [Kind; 4] = [Kind::Prose, Kind::Reasoning, Kind::ToolCall, Kind::ToolResult];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Kind::Prose => "prose",
@@ -47,6 +52,30 @@ impl Kind {
     }
     pub fn is_tool(self) -> bool {
         matches!(self, Kind::ToolCall | Kind::ToolResult)
+    }
+
+    /// Whether the indexer writes postings for this kind, and so whether search can find it.
+    ///
+    /// `Reasoning` is the one kind that answers `false`, and it is a decision rather than an
+    /// oversight (chat-search-8mb). Measured through fts5 with the real tokenizer, indexing it
+    /// would have surfaced no conversation that prose and tool traffic do not already surface:
+    /// reasoning is *about* work that also appears in prose, so it is redundant for finding.
+    /// What it is not redundant for is reading — 47% of its vocabulary never appears elsewhere
+    /// in its own conversation — which is why the preview draws it and this does not index it.
+    /// The head of that unique vocabulary is also why it would cost something to index:
+    /// `preparing`, `summarizing`, `verifying` in their hundreds, which is exactly the noise
+    /// ADR 5 keeps out of prose BM25.
+    ///
+    /// Matched exhaustively rather than with `matches!`, so a new [`Kind`] cannot default into
+    /// either answer — whoever adds one has to say which it is.
+    ///
+    /// This is about the *kind*. A message of an indexed kind whose stored text is empty still
+    /// gets no posting; see `crate::index::write_one`.
+    pub fn is_indexed(self) -> bool {
+        match self {
+            Kind::Prose | Kind::ToolCall | Kind::ToolResult => true,
+            Kind::Reasoning => false,
+        }
     }
 }
 

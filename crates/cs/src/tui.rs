@@ -71,9 +71,9 @@ pub fn run(
 /// fails to build its event source when fd 0 is anything other than the terminal it was
 /// started on, and a freshly-opened `/dev/tty` counts as *other*: registering that fd with
 /// kqueue fails on macOS, which surfaces as "reader source not set" and, in Claude Code, as
-/// a session that draws but never accepts a keystroke. `scripts/cs-fzf --run` adds
-/// `< /dev/tty` believing it fixes this; measured under a pty it is the cause, and plain
-/// inheritance is what works.
+/// a session that draws but never accepts a keystroke. The obvious-looking fix — `< /dev/tty`
+/// on the exec, which the fzf script this replaced did — is measurably the cause rather than
+/// the cure; plain inheritance is what works.
 ///
 /// No shell is involved either. `$SHELL -lc` re-sources the whole rc chain first, and
 /// anything in there that touches the terminal lands between us and the agent.

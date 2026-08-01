@@ -777,8 +777,8 @@ pub struct Group {
     ///
     /// Redundant with `ended_at` on purpose: every client wants the day, and each one that
     /// computes it from the epoch value gets its own chance to compute it in UTC and name
-    /// tomorrow for an evening conversation — which is precisely how cs-fzf's jq and the
-    /// binary's formatter came to disagree.
+    /// tomorrow for an evening conversation — which is precisely how a shell client's jq and
+    /// the binary's formatter came to disagree.
     pub ended_date: Option<String>,
     /// What a human would call a turn: user prose, not raw message count.
     pub user_turns: i64,

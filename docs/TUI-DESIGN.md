@@ -333,9 +333,9 @@ any other way. Without it the log only ever records successes.
 On a hit row, the `Pick` carries its parent conversation's `conv_id`; `rank` is the conversation's
 rank, not the hit's.
 
-**This matters more than it looks.** Once the TUI replaces `scripts/cs-fzf` it becomes the primary
-source of harvested queries, so a TUI that does not log makes `6eb.21` go blind at exactly the
-moment the tool becomes good enough to use.
+**This matters more than it looks.** The TUI has replaced the fzf script it was written against,
+so it is now the only interactive source of harvested queries — a TUI that does not log makes
+`6eb.21` go blind at exactly the moment the tool became good enough to use.
 
 **The modal is destination × action, not one modal per verb.** `PendingAction` is already an
 enum over `{Resume, Copy}` and the modal carries it through, so the same dialog serves both.

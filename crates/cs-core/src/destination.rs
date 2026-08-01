@@ -62,9 +62,9 @@ impl Destination {
     /// A shell line that reopens this, first `cd`-ing when a directory is given.
     ///
     /// Composed here, once, because it is written to be `eval`ed and the quoting rule has to
-    /// live in exactly one place — `cs pick`, the TUI's print path and `scripts/cs-fzf` each
-    /// built their own version of this line, and a rule spread across three renderers is the
-    /// shape the local-date bug already took.
+    /// live in exactly one place — `cs pick`, the TUI's print path and the fzf script that
+    /// preceded them each built their own version of this line, and a rule spread across three
+    /// renderers is the shape the local-date bug already took.
     pub fn shell_line(&self, cwd: Option<&str>) -> String {
         let cmd = self.argv().iter().map(|a| quoted(a)).collect::<Vec<_>>().join(" ");
         match cwd.filter(|d| !d.is_empty()) {

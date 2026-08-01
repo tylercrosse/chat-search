@@ -100,11 +100,13 @@ Truncation is marked in the stored text with the dropped byte count. A silently 
 
 `accepted` · 2026-07-28
 
-**Decision.** One SQLite file, FTS5 contentless indexes, BM25 with a time-decay multiplier. `sqlite-vec` in the same file when embeddings arrive. Every UI surface is a thin reader.
+**Decision.** One SQLite file, FTS5 external-content indexes (`content='message'`), BM25 with a time-decay multiplier. `sqlite-vec` in the same file when embeddings arrive. Every UI surface is a thin reader.
 
 **Why.** BM25 is built in, there is no server, and Rust/TS/Swift/Python can all read it — which is what makes "open it anywhere" tractable. Measured: query is 1–3 ms regardless of runtime, so the storage layer is not the bottleneck for any surface.
 
-**Revisit when.** Corpus exceeds ~50 GB, or hybrid ranking needs something FTS5 can't do.
+The indexes were `content=''` until 2026-08-01. External content stores no more — the postings are the same and the text is read back from `message`, which every ranking query already joins by rowid — but it makes fts5's auxiliary functions usable against the index, and `highlight()` is how a snippet marks the word that actually matched (chat-search-6eb.30). Two consequences to know: an unconstrained scan of an fts table now returns every row of `message` rather than only the indexed ones, so anything counting postings must go through `MATCH` or the `_docsize` shadow table; and `message.text` is now *the* content, so the indexer's postings and that column must never drift.
+
+**Revisit when.** Corpus exceeds ~50 GB, or hybrid ranking needs something FTS5 can't do. A prefix index (`prefix='2 3 4'`) is the open question: fts5 answers every prefix term by walking its vocabulary, which is most of what a broad typeahead keystroke costs, and the trade is index size.
 
 ---
 

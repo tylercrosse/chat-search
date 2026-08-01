@@ -24,7 +24,9 @@ pub enum Field {
 }
 
 impl Field {
-    fn table(self) -> &'static str {
+    /// The fts5 table this field ranks against, for interpolation into SQL — `MATCH` and the
+    /// auxiliary functions both refuse an alias, so the literal name has to appear.
+    pub(crate) fn table(self) -> &'static str {
         match self {
             Field::Prose => "fts_prose",
             Field::Tools => "fts_tools",
@@ -115,14 +117,26 @@ pub const UNLOCATED: &str = "⟨no match⟩ ";
 /// Empty and [`UNLOCATED`] are one statement made twice, for two audiences — the string says
 /// it to a client reading JSON, the list to a client drawing cells — and they never disagree.
 pub fn snippet_marked(text: &str, q: &Query, width: usize) -> (String, Vec<highlight::Span>) {
-    let terms = q.marking_terms();
-    let (out, spans) = highlight::snippet(text, &terms, width);
+    snippet_marked_at(text, &highlight::spans(text, &q.marking_terms()), width)
+}
+
+/// [`snippet_marked`] for a caller that has already located the matches.
+///
+/// The ranking path takes this one, with `marks` from [`highlight::spans_for`] — which decides
+/// how to locate a whole result set at once, and so cannot be called from inside the loop that
+/// builds one snippet at a time.
+pub fn snippet_marked_at(
+    text: &str,
+    marks: &[highlight::Span],
+    width: usize,
+) -> (String, Vec<highlight::Span>) {
+    let (out, spans) = highlight::snippet_at(text, marks, width);
     if !spans.is_empty() {
         return (out, spans);
     }
     // Re-cut the head against the reduced budget so the label does not push the line over
-    // `width`. No terms means no MATCH, so this is arithmetic, not a second query.
-    let (head, _) = highlight::snippet(text, &[], width.saturating_sub(UNLOCATED.chars().count()));
+    // `width`. No marks means no MATCH, so this is arithmetic, not a second query.
+    let (head, _) = highlight::snippet_at(text, &[], width.saturating_sub(UNLOCATED.chars().count()));
     // Empty rather than `spans`, which is the same value today and would stop being one the
     // moment this branch is entered for any other reason: these offsets were taken before the
     // label was prepended, so each is short by its width and would mark the wrong word.
@@ -286,7 +300,8 @@ pub fn search(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::
         "SELECT m.id, m.conv_id, m.role, m.kind, m.ts, m.text, m.on_head_path,
                 m.is_sidechain, m.thread_key,
                 c.source, c.title, c.native_id, c.deleted_upstream_at,
-                bm25({table}) / (1.0 + ?5 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
+                bm25({table}) / (1.0 + ?5 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score,
+                m.rowid
          FROM {table}
          JOIN message m      ON m.rowid = {table}.rowid
          JOIN conversation c ON c.id = m.conv_id
@@ -298,16 +313,17 @@ pub fn search(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::
 
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(binds.iter()), |r| {
-            let text: String = r.get(5)?;
-            let (snippet, snippet_spans) = snippet_marked(&text, query, 160);
-            Ok(Hit {
+        Ok(Unmarked {
+            rowid: r.get(14)?,
+            text: r.get(5)?,
+            hit: Hit {
                 msg_id: r.get(0)?,
                 conv_id: r.get(1)?,
                 role: r.get(2)?,
                 kind: r.get(3)?,
                 ts: r.get(4)?,
-                snippet,
-                snippet_spans,
+                snippet: String::new(),
+                snippet_spans: Vec::new(),
                 on_head_path: r.get::<_, i64>(6)? != 0,
                 is_sidechain: r.get::<_, i64>(7)? != 0,
                 thread_key: r.get(8)?,
@@ -317,9 +333,42 @@ pub fn search(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::
                 destinations: crate::destinations(&r.get::<_, String>(9)?, &r.get::<_, String>(11)?),
                 deleted_upstream: r.get::<_, Option<i64>>(12)?.is_some(),
                 score: r.get(13)?,
+            },
         })
     })?;
-    rows.collect()
+    let pending = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(mark(conn, query, q.field, pending))
+}
+
+/// A hit whose snippet has not been built yet.
+///
+/// Marking is decided for a result set as a whole rather than a row at a time
+/// ([`highlight::spans_for`]), so every row has to be in hand before any of them can be
+/// marked — which means the text and its rowid outlive the query that fetched them.
+/// `hit.snippet` is empty in the meantime, and [`mark`] is the only way out of this state, so
+/// no caller ever sees one.
+struct Unmarked {
+    hit: Hit,
+    /// Which row of the fts table this is, for the route that asks the index directly.
+    rowid: i64,
+    text: String,
+}
+
+/// Build every pending hit's snippet, locating the whole set's matches in one decision.
+fn mark(conn: &Connection, query: &Query, field: Field, pending: Vec<Unmarked>) -> Vec<Hit> {
+    let terms = query.marking_terms();
+    let marks = {
+        let rows: Vec<(i64, &str)> = pending.iter().map(|p| (p.rowid, p.text.as_str())).collect();
+        highlight::spans_for(conn, field, &rows, &terms)
+    };
+    pending
+        .into_iter()
+        .zip(marks)
+        .map(|(mut p, found)| {
+            (p.hit.snippet, p.hit.snippet_spans) = snippet_marked_at(&p.text, &found, 160);
+            p.hit
+        })
+        .collect()
 }
 
 /// Why a conversation did *not* come back for a query.
@@ -377,8 +426,19 @@ pub fn explain(
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
 
+    // Counted out of fts5's `_docsize` shadow table, which holds one row per document the
+    // index actually has postings for. The obvious query — joining `message` to `fts_prose`
+    // itself — stopped meaning this when the fts tables became external content: an
+    // unconstrained scan of `fts_prose` now returns every row of `message`, so it counted tool
+    // traffic as indexed prose and could never report zero. Only a `MATCH` consults the index,
+    // and there is no term to match on here.
+    //
+    // Asking fts5 rather than deriving it from `message.kind` is the point of the number: the
+    // indexer's rule is "every prose message gets a posting", so a count that applied that rule
+    // a second time would agree with it by construction and catch nothing.
     let indexed_prose: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM fts_prose f JOIN message m ON m.rowid=f.rowid WHERE m.conv_id=?1",
+        "SELECT COUNT(*) FROM fts_prose_docsize d JOIN message m ON m.rowid = d.id
+         WHERE m.conv_id = ?1",
         params![conv_id],
         |r| r.get(0),
     )?;
@@ -914,7 +974,7 @@ pub fn search_grouped(
     });
     ranked.truncate(q.limit as usize);
 
-    hydrate(conn, query, ranked)
+    hydrate(conn, query, q.field, ranked)
 }
 
 /// One conversation that survived ranking, before its display columns are fetched.
@@ -967,7 +1027,12 @@ pub fn match_density(seqs: &[i64], msg_count: i64) -> String {
 /// it — are touched only for rows that survived. One prepared statement reused across the
 /// survivors beats an `IN (...)` list, which would need rebuilding per query and lose the
 /// statement cache.
-fn hydrate(conn: &Connection, query: &Query, ranked: Vec<Ranked>) -> rusqlite::Result<Vec<Group>> {
+fn hydrate(
+    conn: &Connection,
+    query: &Query,
+    field: Field,
+    ranked: Vec<Ranked>,
+) -> rusqlite::Result<Vec<Group>> {
     let mut meta = conn.prepare_cached(
         "SELECT source, title, native_id, deleted_upstream_at, ended_at, user_turns,
                 msg_count, prose_count, cwd
@@ -976,12 +1041,15 @@ fn hydrate(conn: &Connection, query: &Query, ranked: Vec<Ranked>) -> rusqlite::R
     let mut msg = conn.prepare_cached(
         "SELECT m.id, m.conv_id, m.role, m.kind, m.ts, m.text, m.on_head_path,
                 m.is_sidechain, m.thread_key,
-                c.source, c.title, c.native_id, c.deleted_upstream_at
+                c.source, c.title, c.native_id, c.deleted_upstream_at, m.rowid
          FROM message m JOIN conversation c ON c.id = m.conv_id
          WHERE m.id = ?1",
     )?;
-
-    let mut groups = Vec::with_capacity(ranked.len());
+    let mut groups: Vec<Group> = Vec::with_capacity(ranked.len());
+    // Every hit on the page, with the group it belongs to. Held back rather than marked in
+    // place because the route taken to locate a match is chosen for the set as a whole
+    // ([`highlight::spans_for`]), and at `limit 50 × nested 3` that set is 150 messages.
+    let mut pending: Vec<(usize, Unmarked)> = Vec::new();
     for Ranked { conv_id, score, match_count, seqs, shown } in ranked {
         let m = meta
             .query_row(params![conv_id], |r| {
@@ -999,31 +1067,37 @@ fn hydrate(conn: &Connection, query: &Query, ranked: Vec<Ranked>) -> rusqlite::R
             })
             .ok();
 
-        let mut hits = Vec::with_capacity(shown.len());
         for id in shown {
-            if let Ok(h) = msg.query_row(params![id], |r| {
-                let text: String = r.get(5)?;
-                let (snippet, snippet_spans) = snippet_marked(&text, query, 160);
-                Ok(Hit {
-                    msg_id: r.get(0)?,
-                    conv_id: r.get(1)?,
-                    role: r.get(2)?,
-                    kind: r.get(3)?,
-                    ts: r.get(4)?,
-                    snippet,
-                    snippet_spans,
-                    on_head_path: r.get::<_, i64>(6)? != 0,
-                    is_sidechain: r.get::<_, i64>(7)? != 0,
-                    thread_key: r.get(8)?,
-                    source: r.get(9)?,
-                    title: r.get(10)?,
-                    native_id: r.get(11)?,
-                    destinations: crate::destinations(&r.get::<_, String>(9)?, &r.get::<_, String>(11)?),
-                    deleted_upstream: r.get::<_, Option<i64>>(12)?.is_some(),
-                    score,
+            if let Ok(u) = msg.query_row(params![id], |r| {
+                Ok(Unmarked {
+                    rowid: r.get(13)?,
+                    text: r.get(5)?,
+                    hit: Hit {
+                        msg_id: r.get(0)?,
+                        conv_id: r.get(1)?,
+                        role: r.get(2)?,
+                        kind: r.get(3)?,
+                        ts: r.get(4)?,
+                        snippet: String::new(),
+                        snippet_spans: Vec::new(),
+                        on_head_path: r.get::<_, i64>(6)? != 0,
+                        is_sidechain: r.get::<_, i64>(7)? != 0,
+                        thread_key: r.get(8)?,
+                        source: r.get(9)?,
+                        title: r.get(10)?,
+                        native_id: r.get(11)?,
+                        destinations: crate::destinations(
+                            &r.get::<_, String>(9)?,
+                            &r.get::<_, String>(11)?,
+                        ),
+                        deleted_upstream: r.get::<_, Option<i64>>(12)?.is_some(),
+                        score,
+                    },
                 })
             }) {
-                hits.push(h);
+                // The index this group is about to take, so the hits can find their way home
+                // after the whole page is marked at once.
+                pending.push((groups.len(), u));
             }
         }
 
@@ -1047,8 +1121,22 @@ fn hydrate(conn: &Connection, query: &Query, ranked: Vec<Ranked>) -> rusqlite::R
             score,
             match_count,
             match_seqs: seqs,
-            hits,
+            hits: Vec::new(),
         });
+    }
+
+    // Released before marking, which reaches for the statement cache itself. Nothing below
+    // needs them, and leaving two statements checked out across that call is a trap for
+    // whoever adds the third.
+    drop(msg);
+    drop(meta);
+
+    // Order within a group survives because `pending` was built in `shown` order and this
+    // walks it in the same order — and that order is load-bearing, since the first hit is the
+    // message that won the ranking and clients truncate rather than sample.
+    let (whose, unmarked): (Vec<usize>, Vec<Unmarked>) = pending.into_iter().unzip();
+    for (g, hit) in whose.into_iter().zip(mark(conn, query, field, unmarked)) {
+        groups[g].hits.push(hit);
     }
     Ok(groups)
 }
@@ -1152,7 +1240,7 @@ mod group_tests {
             params![ended],
         )
         .unwrap();
-        // fts5 here is contentless, so postings are written explicitly rather than by trigger.
+        // The indexer owns the postings rather than a trigger, so a fixture writes them too.
         let rowid = conn.last_insert_rowid();
         conn.execute(
             "INSERT INTO fts_prose(rowid, text) VALUES (?1, 'the borrow checker again')",
@@ -1312,7 +1400,7 @@ mod filter_tests {
             params![format!("{id}:m"), id, ended, text],
         )
         .unwrap();
-        // fts5 here is contentless, so postings are written explicitly rather than by trigger.
+        // The indexer owns the postings rather than a trigger, so a fixture writes them too.
         let rowid = conn.last_insert_rowid();
         conn.execute("INSERT INTO fts_prose(rowid, text) VALUES (?1, ?2)", params![rowid, text])
             .unwrap();
@@ -1564,6 +1652,51 @@ mod filter_tests {
         let e = explain(&conn, "claude-api", "date:nope borrow", NOW).unwrap();
         assert!(!e.excluded_by_filter);
         assert!(e.verdict.contains("rank"), "got {:?}", e.verdict);
+    }
+
+    #[test]
+    fn indexed_prose_counts_the_postings_fts5_holds_not_the_rows_it_can_read() {
+        // Since `fts_prose` became external content, an unconstrained scan of it returns every
+        // row of `message` — so the obvious `fts_prose JOIN message ON rowid` counted tool
+        // traffic as indexed prose and could never report zero. On the real corpus that turned
+        // a 175 into a 937.
+        //
+        // The number is worth having only while it can disagree with `message.kind`: it exists
+        // to catch an index that does not hold what the indexer thinks it wrote. So it is asked
+        // of fts5 rather than re-derived from the rule the indexer already applied.
+        let conn = crate::open(":memory:").unwrap();
+        conn.execute(
+            "INSERT INTO conversation(id, source, native_id) VALUES ('c', 'codex', 'c')",
+            [],
+        )
+        .unwrap();
+        for (i, (kind, text)) in [
+            ("prose", "the borrow checker again"),
+            ("tool_call", "Bash(cargo build)"),
+            ("tool_result", "error: cannot borrow as mutable"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            conn.execute(
+                "INSERT INTO message(id, conv_id, thread_key, seq, role, kind, ts, text)
+                 VALUES (?1, 'c', 'main', ?2, 'user', ?3, 1700000000000, ?4)",
+                params![format!("m{i}"), i as i64, kind, text],
+            )
+            .unwrap();
+            let rowid = conn.last_insert_rowid();
+            let table = if *kind == "prose" { "fts_prose" } else { "fts_tools" };
+            conn.execute(
+                &format!("INSERT INTO {table}(rowid, text) VALUES (?1, ?2)"),
+                params![rowid, text],
+            )
+            .unwrap();
+        }
+
+        let e = explain(&conn, "c", "borrow", NOW).unwrap();
+        assert_eq!(e.messages, 3);
+        assert_eq!(e.prose_messages, 1);
+        assert_eq!(e.indexed_prose, 1, "the other two are tool traffic and are not in fts_prose");
     }
 }
 

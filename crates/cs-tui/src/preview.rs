@@ -52,12 +52,12 @@ pub struct Block {
     /// Byte offsets into `text` of the terms this message matched, from the same matcher that
     /// ranked it (`cs_core::highlight`).
     ///
-    /// Held on the block rather than recomputed at render time because locating them costs an
-    /// fts5 insert — ~25 µs fixed per message plus ~60 ns per byte — and `lines` runs on every
-    /// frame, so marking there would pay that on every wheel notch and every keystroke.
-    /// Computed once per `(conversation, query)` in [`Preview::load`], which is §8's "build
-    /// once, not per frame" with the cache key made structural: the whole `Preview` is thrown
-    /// away when either half of the key changes.
+    /// Held on the block rather than recomputed at render time because locating them means
+    /// tokenizing the message — ~25 µs fixed plus ~60 ns per byte through the scratch table —
+    /// and `lines` runs on every frame, so marking there would pay that on every wheel notch
+    /// and every keystroke. Computed once per `(conversation, query)` in [`Preview::load`],
+    /// which is §8's "build once, not per frame" with the cache key made structural: the whole
+    /// `Preview` is thrown away when either half of the key changes.
     marks: Vec<Mark>,
 }
 
@@ -157,15 +157,18 @@ impl Preview {
         // Only what is drawn: a successful `tool_result` is never rendered, so locating its
         // matches would buy nothing, and this corpus is a third such messages by count.
         //
-        // Deliberately *not* pre-filtered through the index first. Asking `fts_prose` which
-        // messages match before marking them looks like the obvious saving and measures as a
-        // pessimisation, because the TUI's final token is always a prefix (`the*`, `commits*`)
-        // and fts5 cannot restrict a MATCH by `conv_id` — it walks the whole posting list for
-        // the term across all 176k messages and filters afterwards. Measured on the corpus's
-        // longest conversation (1,479 drawn blocks, 942 KB): marking everything is a flat
-        // 110–126 ms whatever the query, while filter-then-mark is 64 ms for `borrow checker`,
-        // 242 ms for `commits` and 17.9 *seconds* for `the`. Predictable beats occasionally
-        // faster. The structural fix is chat-search-6eb.30, which removes the insert entirely.
+        // Deliberately *not* asked of the corpus index, even though `fts_prose` now holds
+        // postings for every one of these rows and could mark them without an insert
+        // (chat-search-6eb.30). The TUI's final token is always a prefix (`the*`, `commits*`),
+        // and fts5 answers a prefix by walking its vocabulary for every term that starts that
+        // way — per query, across all 180k messages. Against a scratch table holding this one
+        // conversation that expansion is free, which is why `spans_many` stays the right call
+        // here and why `cs_core::highlight::spans_for` routes a prefix the same way.
+        //
+        // Measured on the corpus's longest conversation (1,479 drawn blocks, 942 KB): marking
+        // everything through the scratch table is a flat 110–126 ms whatever the query, while
+        // asking the index which messages match first is 64 ms for `borrow checker`, 242 ms for
+        // `commits` and 17.9 *seconds* for `the`. Predictable beats occasionally faster.
         let mut blocks = blocks;
         if !terms.is_empty() {
             // One trip through the highlighter for the whole conversation. Marking cost is per

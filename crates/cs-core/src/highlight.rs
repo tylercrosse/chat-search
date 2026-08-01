@@ -31,30 +31,30 @@
 //! with the stemmer, the diacritic folding, prefix terms, and whatever the tokenizer string
 //! becomes next.
 //!
-//! # What it costs, and what would make it free
+//! # Two tables that can answer, and how the cost splits between them
 //!
-//! A delete, an insert and a match per call, on a connection reused per thread (the scratch
-//! table costs ~86 µs to build, so per-call construction would dominate; it does not grow —
-//! `page_count` is flat at 63 after 40,000 calls). Release build, real prose messages pulled
-//! from the 172k-message index: ~25 µs fixed plus ~60 ns per byte of message, so 57 µs for
-//! the `commit` result set (mean 536 B), 139 µs for `learning` (mean 2.2 KB) and 417 µs for
-//! `borrow` (mean 11.6 KB, max 104 KB). A 50-message preview is 3–7 ms and a 100-row result
-//! list 6–14 ms, both inside the 30 ms keystroke budget (chat-search-me9.1).
+//! [`spans_for`] is the entry point. Underneath it are [`spans_indexed`], which asks the corpus
+//! index — whose postings for this row already exist — and [`spans_many`], which re-indexes the
+//! result set into a per-thread scratch table and asks that. Being able to ask the corpus index
+//! at all is new: it needs `fts_prose` and `fts_tools` declared `content='message'` rather than
+//! contentless, because an fts5 auxiliary function has to reconstruct the text it is marking
+//! and a contentless table has nothing to reconstruct it from (chat-search-6eb.30).
 //!
-//! The TUI is the pressure point, because `limit 50 × MAX_HITS 3` means 150 snippets per
-//! keystroke. `search_grouped` on the real index, nested=0 against nested=3: `borrow`
-//! 0.3 → 11 ms, `learning` 6.4 → 36 ms, `deep learning` 1.9 → 29 ms, `pro` 30 → 46 ms,
-//! `the` 61 → 84 ms. The substring scan this replaces did the same 150 in 0.3–1.9 ms, so this
-//! is a real 10–25 ms addition, and `learning` crosses the budget on it.
+//! Neither route wins outright. Which is cheaper turns on whether the query carries a prefix
+//! term, and [`spans_for`] holds that rule together with the measurements behind it. In short:
+//! a prefix costs the corpus index a fresh vocabulary walk *per row* and costs a 150-message
+//! scratch table nothing, while without one the index answers from postings it already has and
+//! the scratch table is paying to build them a second time.
 //!
-//! It is paid for the insert, not the matching: on a row already in the table, `highlight()`
-//! is 8 µs for a small message and 373 µs for the 104 KB one, against 1.5 ms to insert that
-//! same message. Which says where the fix is — declaring `fts_prose` as external content
-//! (`content='message', content_rowid='rowid'`) instead of contentless would let `highlight()`
-//! run against the index that already holds the postings, with no insert at all, and the
-//! ranking query already joins `message` by rowid. That is a schema change and a reindex, so
-//! it is chat-search-6eb.30 rather than part of this fix. Correctness first: every one of the
-//! 789 rows across those six queries located its match, where the substring scan could not.
+//! The scratch table costs ~86 µs to create, so it is built once per thread and reused; it does
+//! not grow (`page_count` is flat at 63 after 40,000 calls). Its marginal cost is ~25 µs fixed
+//! plus ~60 ns per byte inserted.
+//!
+//! What neither route escapes is the text. Saying which words of a message matched means
+//! tokenizing that message, and at ~28 ns/byte a candidate set of 60–680 KB costs 2–18 ms
+//! however it is asked. So marking is no longer why a keystroke is slow — at `limit 50 ×
+//! MAX_HITS 3` it went from 10.7–29.1 ms to 2.4–17.7 ms — but it is not free, and it will not
+//! become free while a snippet has to be anchored on a real match.
 
 use rusqlite::{params, OptionalExtension};
 use std::cell::RefCell;
@@ -130,6 +130,119 @@ pub fn spans(text: &str, terms: &[String]) -> Vec<Span> {
         // The only realistic error is a MATCH expression fts5 will not parse, and "cannot
         // locate the match" is exactly what that is. It surfaces as an empty span list, which
         // callers already have to render as such — it does not become a silent head-of-text.
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Locate the matches for a whole result set, by whichever of the two routes fts5 answers
+/// faster.
+///
+/// One answer, two ways of getting it. [`spans_indexed`] asks the corpus index, which already
+/// holds every one of these rows; [`spans_many`] re-indexes them into a scratch table and asks
+/// that. Same tokenizer, same expression, same `highlight()`, so they agree by construction —
+/// `either_route_gives_the_answer_the_scratch_table_gives` is the standing check.
+///
+/// **A prefix term is what decides it**, and it decides it by two orders of magnitude. fts5
+/// answers `"the"*` by walking its vocabulary for every term beginning with `the` and merging
+/// their doclists, and it redoes that on every query — so against the 180k-message corpus index
+/// it costs 5.4 ms *per row*, while against a scratch table holding only this result set the
+/// vocabulary is 150 messages and the same expansion is free. With no prefix term there is
+/// nothing to expand, and the position reverses: the index answers from postings it already
+/// has, where the batch is paying to re-index text fts5 indexed at `cs index` time.
+///
+/// Measured over the candidate sets `search_grouped` really builds at `limit 50 × nested 3`,
+/// against the 180k-message index (release):
+///
+/// | query | rows | KB | indexed | batched | per row, as now |
+/// | --- | ---: | ---: | ---: | ---: | ---: |
+/// | `borrow` typeahead | 69 | 678 | 7.7 ms | **17.7 ms** | 24.6 ms |
+/// | `learning` typeahead | 150 | 377 | 17.2 ms | **14.6 ms** | 23.0 ms |
+/// | `deep learning` typeahead | 132 | 371 | 17.3 ms | **11.8 ms** | 28.2 ms |
+/// | `pro` typeahead | 150 | 192 | 361.8 ms | **6.3 ms** | 19.0 ms |
+/// | `the` typeahead | 150 | 219 | 753.0 ms | **11.7 ms** | 23.2 ms |
+/// | `commit` typeahead | 150 | 62 | 10.3 ms | **2.4 ms** | 12.6 ms |
+/// | `borrow` exact | 69 | 678 | **7.3 ms** | 17.5 ms | 27.3 ms |
+/// | `learning` exact | 150 | 389 | **6.9 ms** | 12.1 ms | 27.5 ms |
+/// | `deep learning` exact | 132 | 374 | **7.8 ms** | 13.6 ms | 26.7 ms |
+/// | `pro` exact | 133 | 432 | **5.3 ms** | 13.1 ms | 29.0 ms |
+/// | `the` exact | 150 | 185 | **4.2 ms** | 9.5 ms | 19.4 ms |
+/// | `commit` exact | 150 | 62 | **2.8 ms** | 3.0 ms | 10.7 ms |
+///
+/// Bold is what this picks, and `borrow` typeahead is the one it gets wrong — 678 KB over 69
+/// messages, where the batch's insert costs more than the expansion it avoids. Deciding on the
+/// bytes as well would need the texts measured before the route is chosen, and the rule is not
+/// worth a second input for one query out of six.
+///
+/// What is left after this is the text itself. Every route has to tokenize each candidate to
+/// say which of its words matched, and that floor is ~28 ns/byte — so a result set of 678 KB
+/// cannot be marked in much under 18 ms by any of them (chat-search-6eb.30).
+pub fn spans_for(
+    conn: &rusqlite::Connection,
+    field: crate::Field,
+    rows: &[(i64, &str)],
+    terms: &[String],
+) -> Vec<Vec<Span>> {
+    if rows.iter().all(|(_, t)| t.is_empty()) || terms.is_empty() {
+        return rows.iter().map(|_| Vec::new()).collect();
+    }
+    if terms.iter().any(|t| t.ends_with('*')) {
+        let texts: Vec<&str> = rows.iter().map(|&(_, text)| text).collect();
+        return spans_many(&texts, terms);
+    }
+    rows.iter().map(|&(rowid, text)| spans_indexed(conn, field, rowid, text, terms)).collect()
+}
+
+/// [`spans`] for a row the index already holds, asked of the index itself.
+///
+/// Identical answer to [`spans`] — same tokenizer, same expression, same `highlight()` — for a
+/// fraction of the cost, because the postings are already written. The scratch table has to
+/// re-index the message before it can say anything about it; here fts5 walks a doclist it
+/// built at `cs index` time.
+///
+/// Reach for [`spans_for`] rather than this: a prefix term makes this route the *slow* one, for
+/// the reason set out there.
+///
+/// `text` is what `rowid` holds, and is needed for two things that are not the matching:
+/// choosing delimiters that do not occur in it, and being the string the returned offsets
+/// point into. It is not checked against the index — external content makes `message.text`
+/// literally the content fts5 reads, so they are the same string unless the index is stale,
+/// which is [`crate::index::ensure_current`]'s job rather than this one's.
+///
+/// An empty list means this row does not match, which is a real answer and not a failure to
+/// look; the caller renders it the same way it renders [`spans`] finding nothing.
+pub fn spans_indexed(
+    conn: &rusqlite::Connection,
+    field: crate::Field,
+    rowid: i64,
+    text: &str,
+    terms: &[String],
+) -> Vec<Span> {
+    if terms.is_empty() || text.is_empty() {
+        return Vec::new();
+    }
+    let Some((open, close)) = sentinels(text) else {
+        return Vec::new();
+    };
+    // The table name is interpolated because fts5 will not take an alias for `MATCH` or for an
+    // auxiliary function's first argument. It comes from an enum, so there is nothing to
+    // escape; everything a caller supplies is bound.
+    let table = field.table();
+    let sql = format!(
+        "SELECT highlight({table}, 0, char(?1), char(?2)) FROM {table}
+          WHERE rowid = ?3 AND {table} MATCH ?4"
+    );
+    let marked = conn.prepare_cached(&sql).and_then(|mut q| {
+        q.query_row(params![open, close, rowid, any_expr(terms)], |r| r.get::<_, String>(0))
+            .optional()
+    });
+
+    match marked {
+        Ok(Some(m)) => marked_spans(&m, open, close),
+        // No row means the row does not match the expression, which is the honest answer.
+        Ok(None) => Vec::new(),
+        // As in [`spans`]: the realistic error is a MATCH expression fts5 will not parse, and
+        // "cannot locate the match" is exactly what that is. Empty is what callers already
+        // render for it, and it never becomes a silent head-of-text.
         Err(_) => Vec::new(),
     }
 }
@@ -234,10 +347,18 @@ pub fn spans_many(texts: &[&str], terms: &[String]) -> Vec<Vec<Span>> {
 /// without checking is showing a preview, not a match, and [`crate::search::snippet`] labels
 /// it as one.
 pub fn snippet(text: &str, terms: &[String], width: usize) -> (String, Vec<Span>) {
-    // A snippet is one line, so the newlines go first — and everything below indexes the
-    // flattened text, since that is what the offsets have to point into.
-    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let hits = spans(&flat, terms);
+    snippet_at(text, &spans(text, terms), width)
+}
+
+/// [`snippet`] for a caller that has already located the matches.
+///
+/// `marks` are byte offsets into `text` — one row of [`spans_for`]'s answer, in practice, which
+/// is the point: locating a match and windowing around it are separate jobs, and only the first
+/// of them needs a database.
+pub fn snippet_at(text: &str, marks: &[Span], width: usize) -> (String, Vec<Span>) {
+    // A snippet is one line, so the whitespace is collapsed first — and everything below
+    // indexes the flattened text, since that is what the offsets have to point into.
+    let (flat, hits) = flatten(text, marks);
 
     // Char-index form of the matches, which is what the window arithmetic works in. Walked
     // rather than tabulated: a byte-offset-per-char table is 8 bytes per char of the message,
@@ -299,6 +420,60 @@ pub fn snippet(text: &str, terms: &[String], width: usize) -> (String, Vec<Span>
     (out, shown)
 }
 
+/// `text` with each run of whitespace collapsed to one space, and `marks` — byte offsets into
+/// `text` — re-expressed as offsets into the collapsed string.
+///
+/// Translated rather than re-located, because the marks come from the index and the index
+/// holds the message as it was written, newlines and all. Re-running the match against the
+/// flattened copy would be a second opinion about what matched, and the point of this module
+/// is that there is only one.
+///
+/// An endpoint that lands inside a collapsed run maps to the end of the word before it — the
+/// only place it can go once the run it pointed into is gone.
+fn flatten(text: &str, marks: &[Span]) -> (String, Vec<Span>) {
+    let mut flat = String::with_capacity(text.len());
+    let mut moved: Vec<usize> = Vec::with_capacity(marks.len() * 2);
+    // Endpoints ascend, so one walk of the text resolves all of them. `<=` rather than `==`
+    // so an endpoint that somehow fell inside a character is still consumed here, where the
+    // `debug_assert` below can see it, rather than silently pairing with the next span's.
+    let mut ends = marks.iter().flat_map(|s| [s.start, s.end]).peekable();
+    let mut pending_space = false;
+    for (i, ch) in text.char_indices() {
+        if ch.is_whitespace() {
+            while ends.next_if(|&e| e <= i).is_some() {
+                moved.push(flat.len());
+            }
+            // Nothing is emitted for leading whitespace, which is what `split_whitespace`
+            // does and what the offsets below therefore have to agree with.
+            pending_space = !flat.is_empty();
+            continue;
+        }
+        // The separator goes in *before* the endpoints are resolved, so a mark that opens a
+        // word points at the word and not at the space in front of it.
+        if pending_space {
+            flat.push(' ');
+            pending_space = false;
+        }
+        while ends.next_if(|&e| e <= i).is_some() {
+            moved.push(flat.len());
+        }
+        flat.push(ch);
+    }
+    for _ in ends {
+        moved.push(flat.len()); // an endpoint at the very end of the text
+    }
+
+    debug_assert_eq!(moved.len(), marks.len() * 2, "a mark endpoint fell inside a character");
+    let hits = moved
+        .chunks_exact(2)
+        .map(|p| Span { start: p[0], end: p[1] })
+        // A mark covering only whitespace cannot survive the collapse, and an empty span would
+        // read downstream as a match at that position.
+        .filter(|s| s.start < s.end)
+        .collect();
+    (flat, hits)
+}
+
 /// Where to cut, in chars: the `inner`-wide window holding the most matches.
 ///
 /// Ties go to the earliest window, so a message that says the same thing twice reads from the
@@ -337,8 +512,9 @@ thread_local! {
 
 fn scratch_table() -> rusqlite::Result<rusqlite::Connection> {
     let conn = rusqlite::Connection::open_in_memory()?;
-    // Content-carrying, unlike `fts_prose`: `highlight()` reconstructs from stored content, and
-    // that requirement is why the index's own contentless tables cannot answer this (ADR 5).
+    // Content-carrying, where `fts_prose` reads its content back out of `message`. Either
+    // satisfies `highlight()`, which needs *some* content to reconstruct from; what this one
+    // has that the index does not is any text at all, which is the whole reason it exists.
     conn.execute_batch(&format!(
         "PRAGMA journal_mode=OFF;
          CREATE VIRTUAL TABLE hl USING fts5(text, tokenize=\"{TOKENIZER}\");"
@@ -421,6 +597,115 @@ mod tests {
 
     fn terms(q: &str) -> Vec<String> {
         crate::Query::exact(q).marking_terms()
+    }
+
+    /// The terms a query still being typed sends, whose final token is a prefix — which is what
+    /// routes [`spans_for`] to the scratch table.
+    fn typed(q: &str) -> Vec<String> {
+        crate::Query::typeahead(q).marking_terms()
+    }
+
+    /// One prose message per text, in the real schema, with postings written the way the
+    /// indexer writes them. Rowids come out 1..n in order.
+    fn indexed(texts: &[&str]) -> rusqlite::Connection {
+        let conn = crate::open(":memory:").unwrap();
+        conn.execute("INSERT INTO conversation(id, source, native_id) VALUES ('c','codex','c')", [])
+            .unwrap();
+        for (i, text) in texts.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO message(id, conv_id, thread_key, seq, role, kind, ts, text)
+                 VALUES (?1, 'c', 'main', ?2, 'user', 'prose', 1700000000000, ?3)",
+                params![format!("m{i}"), i as i64, text],
+            )
+            .unwrap();
+            let rowid = conn.last_insert_rowid();
+            conn.execute("INSERT INTO fts_prose(rowid, text) VALUES (?1, ?2)", params![rowid, text])
+                .unwrap();
+        }
+        conn
+    }
+
+    #[test]
+    fn either_route_gives_the_answer_the_scratch_table_gives() {
+        // `spans_for` picks between the corpus index and a scratch table on cost alone, so a
+        // mark that depended on which was asked would make the same query mark different words
+        // depending on how it was typed. Both ask fts5 with the same tokenizer and the same
+        // expression, and this is what holds them to it.
+        let texts = [
+            "Commit current changes",
+            "nothing of interest here",
+            "the café was closed",
+            "commit, commits and committing",
+            "I learned something about\nthe borrow checker",
+        ];
+        let conn = indexed(&texts);
+        let rows: Vec<(i64, &str)> =
+            texts.iter().enumerate().map(|(i, t)| (i as i64 + 1, *t)).collect();
+
+        for t in ["commits", "cafe", "learning", "elephant", "commit café", "borrow checker"]
+            .into_iter()
+            .map(terms)
+            // A prefix term sends `spans_for` down the other branch, and has to arrive at the
+            // same place.
+            .chain(["comm", "lea", "caf", "borrow check"].into_iter().map(typed))
+        {
+            let alone: Vec<Vec<Span>> = texts.iter().map(|x| spans(x, &t)).collect();
+            let via_index: Vec<Vec<Span>> = rows
+                .iter()
+                .map(|&(rowid, x)| spans_indexed(&conn, crate::Field::Prose, rowid, x, &t))
+                .collect();
+            assert_eq!(via_index, alone, "{t:?} through the index");
+            assert_eq!(
+                spans_for(&conn, crate::Field::Prose, &rows, &t),
+                alone,
+                "{t:?} through spans_for"
+            );
+        }
+    }
+
+    #[test]
+    fn a_row_the_expression_does_not_match_is_marked_nothing_rather_than_guessed_at() {
+        // The index route can only be asked about a row that is in the index, so the failure
+        // mode it has to avoid is inventing a span for a row that did not match — which would
+        // put a mark on a word the ranker never counted.
+        let conn = indexed(&["the borrow checker", "nothing of interest"]);
+        assert!(!spans_indexed(&conn, crate::Field::Prose, 1, "the borrow checker", &terms("borrow"))
+            .is_empty());
+        assert!(spans_indexed(&conn, crate::Field::Prose, 2, "nothing of interest", &terms("borrow"))
+            .is_empty());
+        // A rowid the table does not hold is the same answer, not a panic.
+        assert!(spans_indexed(&conn, crate::Field::Prose, 99, "the borrow checker", &terms("borrow"))
+            .is_empty());
+        // Asked of the wrong index, where these rows have no postings at all.
+        assert!(spans_indexed(&conn, crate::Field::Tools, 1, "the borrow checker", &terms("borrow"))
+            .is_empty());
+    }
+
+    #[test]
+    fn a_mark_taken_before_the_whitespace_collapse_still_points_at_its_word_after_it() {
+        // The offsets come from an index holding the message as it was written; a snippet is one
+        // line. Nothing else would notice if the translation between the two were short by the
+        // bytes a collapsed run used to occupy.
+        let text = "first line\n\n  second   café  line";
+        let marks = spans(text, &terms("cafe"));
+        assert_eq!(&text[marks[0].start..marks[0].end], "café");
+        let (flat, moved) = flatten(text, &marks);
+        assert_eq!(flat, "first line second café line");
+        assert_eq!(&flat[moved[0].start..moved[0].end], "café");
+
+        // A mark can straddle whitespace, because `highlight()` returns adjacent matching
+        // tokens as one run — so an endpoint has to survive the run under it disappearing.
+        let text = "commit\n\n\ncommits";
+        let (flat, moved) = flatten(text, &spans(text, &terms("commit")));
+        assert_eq!(flat, "commit commits");
+        assert_eq!(moved.first().unwrap().start, 0, "the run still opens at the first word");
+        assert_eq!(moved.last().unwrap().end, flat.len(), "and still closes at the last");
+
+        // Leading and trailing whitespace is dropped entirely, which shifts everything left.
+        let text = "\n\n  the café  \n";
+        let (flat, moved) = flatten(text, &spans(text, &terms("cafe")));
+        assert_eq!(flat, "the café");
+        assert_eq!(&flat[moved[0].start..moved[0].end], "café");
     }
 
     #[test]

@@ -111,9 +111,10 @@ pub fn open(path: &str) -> rusqlite::Result<Connection> {
 /// Open an index from scratch, discarding whatever was there.
 ///
 /// The file is *deleted* rather than emptied. Two reasons, both learned the hard way:
-/// `DELETE FROM` a contentless fts5 table fails once it holds rows (it silently succeeds
-/// while empty, so the bug hides until the second run), and `CREATE TABLE IF NOT EXISTS`
-/// will not add a column that a newer schema introduced.
+/// `DELETE FROM` an fts5 table that stores no content of its own fails once it holds rows (it
+/// silently succeeds while empty, so the bug hides until the second run — hence the
+/// `delete-all` command in [`reset`]), and `CREATE TABLE IF NOT EXISTS` will not add a column
+/// that a newer schema introduced.
 ///
 /// Deleting is also simply the correct move under ADR 1 — the index is a pure function of
 /// the archive, so there is no state worth preserving and no migration to write. If this
@@ -258,6 +259,10 @@ fn write_one(
             stats.duplicates += 1;
             continue;
         }
+        // The same `stored_text`, at the same rowid, in both places. The fts tables are
+        // external content over `message`, so that column is what `highlight()` reads back
+        // when it marks a match — a posting written from anything else would mark the wrong
+        // bytes of a message that is otherwise perfectly indexed.
         let rowid = tx.last_insert_rowid();
         match m.kind {
             Kind::Prose => {

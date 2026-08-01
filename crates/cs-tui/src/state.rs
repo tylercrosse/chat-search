@@ -118,12 +118,12 @@ impl App {
         // `rows::build` see a different answer here than in `rebuild_rows`.
         let query = self.parsed();
         let q = cs_core::SearchOptions { limit: self.limit, ..cs_core::SearchOptions::new(self.now) };
-        // `nested = 0`: no snippets. Building them is 5-20x the cost of the ranking itself
-        // — measured on the 172k-message index, `pro` goes 34 ms to 448 ms and `learning`
-        // 8 ms to 164 ms — because each one inserts its message into a scratch fts5 table so
-        // the highlighter can agree with the ranker (chat-search-6eb.20, and 6eb.30 for the
-        // schema change that would remove the insert). The row model draws hits only for an
-        // expanded conversation, so per keystroke this pays for 150 snippets and draws none.
+        // `nested = 0`: no snippets. Building one means tokenizing the whole message, because
+        // the highlighter has to agree with the ranker about which words matched
+        // (chat-search-6eb.20) — and the row model draws hits only for an expanded
+        // conversation, so per keystroke this would pay for 150 snippets and draw none.
+        // Measured at limit 50 on the 180k-message index, that is a further 4–21 ms on top of
+        // the ranking; it was 11–35 ms before chat-search-6eb.30 batched the marking.
         match cs_core::search_grouped(&self.conn, &query, &q) {
             Ok(groups) => {
                 self.last_ms = t0.elapsed().as_secs_f64() * 1000.0;

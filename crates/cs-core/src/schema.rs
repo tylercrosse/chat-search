@@ -51,13 +51,30 @@ CREATE INDEX IF NOT EXISTS idx_message_conv    ON message(conv_id, seq);
 CREATE INDEX IF NOT EXISTS idx_message_parent  ON message(parent_id);
 CREATE INDEX IF NOT EXISTS idx_message_thread  ON message(conv_id, thread_key, seq);
 
--- Contentless: the index stores postings only and joins back to message by rowid.
+-- External content. The index stores postings only, exactly as `content=''` did, and reads
+-- the text back out of `message` by rowid on the rare occasion it needs it — so this is the
+-- same bytes on disk, not a second copy. What it buys is that fts5's auxiliary functions
+-- become usable against the index: `highlight()` can mark a match in a row that is already
+-- there, where a contentless table forced `crate::highlight` to re-insert every message it
+-- wanted to mark into a scratch table first (chat-search-6eb.30).
+--
+-- The fts column name has to match the content table's column, and both are `text`. Postings
+-- stay explicitly written by the indexer rather than by trigger, which is what external
+-- content expects of a writer that owns its content table — and the two must not drift, since
+-- `highlight()` now believes `message.text` is what was indexed.
+--
+-- A consequence worth knowing when writing queries: an unconstrained scan of `fts_prose`
+-- returns every row of `message`, not just the ones with postings. Only a `MATCH` consults the
+-- index. See `search::explain`, which counts postings out of the `_docsize` shadow table.
+--
 -- Prose and tool traffic are separate tables rather than one with field weights, because
 -- tool text is 91% of the corpus and would otherwise dominate BM25 (ADR 5).
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_prose USING fts5(
-  text, content='', tokenize="porter unicode61 remove_diacritics 2");
+  text, content='message', content_rowid='rowid',
+  tokenize="porter unicode61 remove_diacritics 2");
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_tools USING fts5(
-  text, content='', tokenize="porter unicode61 remove_diacritics 2");
+  text, content='message', content_rowid='rowid',
+  tokenize="porter unicode61 remove_diacritics 2");
 
 -- Provenance for the rebuild: which importer version produced the current contents.
 CREATE TABLE IF NOT EXISTS build_info(
@@ -68,4 +85,4 @@ CREATE TABLE IF NOT EXISTS build_info(
 
 /// Bumped when importer output changes in a way that requires a rebuild. Recorded in
 /// `build_info` so a stale index is detectable rather than silently wrong.
-pub const IMPORTER_VERSION: u32 = 3;
+pub const IMPORTER_VERSION: u32 = 4;

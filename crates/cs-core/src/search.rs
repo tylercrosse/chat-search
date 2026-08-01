@@ -324,9 +324,9 @@ pub fn search(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::
 
 /// Why a conversation did *not* come back for a query.
 ///
-/// A false negative has two very different causes — the text was never indexed, or it was
-/// indexed and ranked too low — and they need opposite fixes. Guessing between them is the
-/// slowest part of tuning ranking, so the index answers it directly.
+/// A false negative has three very different causes — a filter excluded it, the text was never
+/// indexed, or it was indexed and ranked too low — and they need opposite fixes. Guessing
+/// between them is the slowest part of tuning ranking, so the index answers it directly.
 #[derive(Debug, Serialize)]
 pub struct Explain {
     pub conv_id: String,
@@ -337,7 +337,17 @@ pub struct Explain {
     pub off_path_messages: i64,
     pub deleted_upstream: bool,
     /// Per query term: how many prose messages in this conversation contain it at all.
+    ///
+    /// Keyed on [`Query::terms`], not on the raw words. A filter token is not something to
+    /// find in the text, and reporting `agent:codex` as a term present in zero messages reads
+    /// as a recall problem when it is the filter doing exactly its job.
     pub term_hits: Vec<(String, i64)>,
+    /// Whether this conversation is one the query's filters drop, independent of any text.
+    ///
+    /// The cause `chat-search-6eb.11` introduced and this tool could not see: with a filter in
+    /// force the conversation can be excluded before ranking ever looks at it, and every
+    /// text-shaped verdict below is then an answer to a question nobody asked.
+    pub excluded_by_filter: bool,
     /// Best score this conversation achieves for the query, if any message matches.
     pub best_score: Option<f64>,
     pub best_rank: Option<usize>,
@@ -379,24 +389,42 @@ pub fn explain(
         |r| r.get(0),
     ).unwrap_or(false);
 
+    // Exact rather than typeahead: `cs explain` is asked about a query someone finished
+    // typing, and the prefix reading would answer about a different expression.
+    let parsed = Query::exact(text);
+
     // Per-term presence via LIKE rather than MATCH: this deliberately bypasses the
     // tokenizer, so a term the stemmer mangled still shows up as present in the text.
+    //
+    // Over the parsed terms, so `agent:codex` is not looked for in the prose. It never was
+    // prose — it is why the conversation is absent, not a word that failed to appear in it.
     let mut term_hits = Vec::new();
-    for term in text.split_whitespace() {
+    for term in parsed.terms() {
         let n: i64 = conn.query_row(
             "SELECT COUNT(*) FROM message WHERE conv_id=?1 AND kind='prose'
                AND lower(text) LIKE '%' || lower(?2) || '%'",
             params![conv_id, term],
             |r| r.get(0),
         )?;
-        term_hits.push((term.to_string(), n));
+        term_hits.push((term.clone(), n));
     }
 
-    // Exact rather than typeahead: `cs explain` is asked about a query someone finished
-    // typing, and the prefix reading would answer about a different expression.
+    // Asked of the filters alone, with no MATCH in the way, so the answer holds even for a
+    // query with no searchable terms — which is precisely when the text-shaped verdicts have
+    // nothing to say and the filter is the whole story.
+    let mut binds = vec![Value::Text(conv_id.to_string())];
+    let filters = filter_sql(&parsed, now_ms, &mut binds);
+    let excluded_by_filter = exists
+        && !filters.is_empty()
+        && !conn.query_row(
+            &format!("SELECT EXISTS(SELECT 1 FROM conversation c WHERE c.id = ?1{filters})"),
+            params_from_iter(binds.iter()),
+            |r| r.get::<_, i64>(0).map(|n| n > 0),
+        )?;
+
     let ranked = search(
         conn,
-        &Query::exact(text),
+        &parsed,
         &SearchOptions { limit: 500, include_off_path: true, ..SearchOptions::new(now_ms) },
     )?;
     let best_rank = ranked.iter().position(|h| h.conv_id == conv_id);
@@ -404,8 +432,17 @@ pub fn explain(
 
     let verdict = if !exists {
         "not in the index — the importer never produced this conversation".into()
+    } else if excluded_by_filter {
+        // Ahead of every text-shaped branch. A filtered-out conversation is never ranked, so
+        // those branches would report on text that was never consulted — and this tool exists
+        // to stop exactly that guess (chat-search-6eb.36).
+        "excluded by a filter in the query — nothing here is about the text".into()
     } else if indexed_prose == 0 {
         "conversation exists but has no indexed prose — all of it is tool traffic".into()
+    } else if term_hits.is_empty() {
+        // Filters that all match, and no terms to rank on. Not a recall problem: there was
+        // never a word to fail to find.
+        "the query is only filters, and this conversation passes them — nothing was ranked".into()
     } else if term_hits.iter().all(|(_, n)| *n == 0) {
         "no message contains any query term — this is a recall problem, not ranking".into()
     } else if best_rank.is_none() {
@@ -425,6 +462,7 @@ pub fn explain(
         off_path_messages: off_path,
         deleted_upstream,
         term_hits,
+        excluded_by_filter,
         best_score,
         best_rank: best_rank.map(|i| i + 1),
         verdict,
@@ -1461,6 +1499,71 @@ mod filter_tests {
         // A source named in the text wins: it was typed more recently than the flag was passed.
         let both = Query::exact("agent:gemini-cli borrow").with_source(Some("codex"));
         assert_eq!(run(&both), ["gemini-web"]);
+    }
+
+    // ---- chat-search-6eb.36: the diagnostic tool must know filters exist ----
+
+    #[test]
+    fn a_filter_token_is_never_reported_as_a_word_missing_from_the_text() {
+        // It was, by splitting the raw query on whitespace: `agent:codex` came back as a term
+        // present in zero messages, which is the signature of a recall problem and is nothing
+        // like what happened.
+        let conn = corpus();
+        let e = explain(&conn, "claude-api", "agent:codex borrow", NOW).unwrap();
+        let terms: Vec<&str> = e.term_hits.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(terms, ["borrow"], "only real terms are looked for in the prose");
+    }
+
+    #[test]
+    fn a_conversation_a_filter_dropped_is_told_so_rather_than_blamed_on_the_stemmer() {
+        // `claude-api` contains the text and is excluded by `agent:codex`. Ranking never saw
+        // it, so every text-shaped verdict below is an answer about text nobody consulted —
+        // and the one it used to give named the tokenizer, which is a different bug entirely.
+        let conn = corpus();
+        let e = explain(&conn, "claude-api", "agent:codex borrow", NOW).unwrap();
+        assert!(e.excluded_by_filter);
+        assert!(e.verdict.contains("excluded by a filter"), "got {:?}", e.verdict);
+        assert!(!e.verdict.contains("tokenizer"), "the stemmer is not what dropped it");
+        assert_eq!(e.term_hits[0].1, 1, "and the text was there all along");
+    }
+
+    #[test]
+    fn a_query_of_filters_alone_is_not_a_recall_problem() {
+        // No terms at all, so the all-terms-missing branch was vacuously true and reported a
+        // recall failure for a query that never asked for a word.
+        let conn = corpus();
+        let passes = explain(&conn, "codex-web", "agent:codex", NOW).unwrap();
+        assert!(!passes.excluded_by_filter, "codex-web is a codex conversation");
+        assert!(passes.verdict.contains("only filters"), "got {:?}", passes.verdict);
+
+        let dropped = explain(&conn, "claude-api", "agent:codex", NOW).unwrap();
+        assert!(dropped.excluded_by_filter);
+        assert!(dropped.verdict.contains("excluded by a filter"), "got {:?}", dropped.verdict);
+    }
+
+    #[test]
+    fn an_unfiltered_query_still_reports_on_text_and_ranking() {
+        // The regression guard on the branch order: adding a cause ahead of the others must
+        // not capture the queries that have no filter at all.
+        let conn = corpus();
+        let e = explain(&conn, "claude-api", "borrow", NOW).unwrap();
+        assert!(!e.excluded_by_filter, "no filter in the query, so nothing to be excluded by");
+        assert!(e.verdict.contains("rank"), "got {:?}", e.verdict);
+
+        let absent = explain(&conn, "claude-api", "kubernetes", NOW).unwrap();
+        assert!(!absent.excluded_by_filter);
+        assert!(absent.verdict.contains("recall problem"), "got {:?}", absent.verdict);
+    }
+
+    #[test]
+    fn a_filter_that_selects_nothing_at_all_is_not_charged_to_this_conversation() {
+        // `date:nope` is rejected by the parser and never reaches the SQL, so it cannot be
+        // the reason anything is missing. Reporting it as an exclusion would send someone
+        // looking for a filter that was never in force.
+        let conn = corpus();
+        let e = explain(&conn, "claude-api", "date:nope borrow", NOW).unwrap();
+        assert!(!e.excluded_by_filter);
+        assert!(e.verdict.contains("rank"), "got {:?}", e.verdict);
     }
 }
 

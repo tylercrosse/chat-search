@@ -113,11 +113,17 @@ Parsed exactly once, by `cs_core::query`. Everything downstream reads the parsed
 
 **Marking terms** The same terms rendered for a highlighter rather than for FTS5 — deduplicated, since marking a word twice paints it twice. Both renderings come from one term list, which is what keeps "what ranked" and "what is highlighted" the same answer.
 
-**Filter** A token naming a facet rather than text to find: `agent:codex`, `dir:web-app`, `date:<3d`, and the negated `-agent:codex`. Lifted out of the query text because a TUI has one input box and a `--source` flag does not survive the move off the CLI.
+**Filter** A token naming a facet rather than text to find: `agent:codex`, `dir:web-app`, `date:<3d`. Lifted out of the query text because a TUI has one input box and a `--source` flag does not survive the move off the CLI.
+
+Negation has two spellings, `-agent:codex` and `agent:!codex`, folded together at parse time so the SQL never learns which arrived. A leading `-` distributes over a whole comma list while an inline `!` flips its own value, so `-agent:claude,!codex` excludes claude and includes codex.
 
 **Facet** Which column a filter selects on — `agent` → `conversation.source`, `dir` → `conversation.cwd` (case-insensitive substring; enums want equality, paths want substring), `date` → `conversation.ended_at`.
 
-**Active** vs **unapplied** A filter is _active_ when it reaches the SQL and _unapplied_ when it is understood but has no clause yet. Unapplied filters are reported, never dropped: returning unfiltered results for a query that names a filter looks like it worked.
+Repeated tokens of one facet **union** — `agent:codex agent:claude-code` selects both, which is what lets the facet bar add a chip rather than replace one. Repeated `date:` tokens **intersect**, which is the only reading under which two bounds describe a range.
+
+**Active** vs **rejected** A filter is _active_ when it reaches the SQL and _rejected_ when its value names nothing that can be selected on — `date:nope`, a half-typed `agent:`. Every filter the parser accepts is now applied, so those are the only two states; before `chat-search-6eb.11` there was a third, "understood but not wired yet," and `rejected()` is what `unapplied()` narrowed to when it went away. Rejected filters are reported, never dropped: returning unfiltered results for a query that names a filter looks like it worked. The published `unapplied_filters` JSON key keeps its name (ADR 12).
+
+**Date arithmetic** Civil, not fixed-width. `d`/`w`/`mo`/`y` are calendar steps and `m`/`h` are durations, because across a DST boundary a day really is 23 or 25 hours — a fixed 86,400,000 ms step makes yesterday's last hour vanish from a filter claiming to include it, twice a year. A wall clock that never happened resolves forward into its own day rather than failing.
 
 **Mode** Whether a query can be run — `Empty` (nothing searchable typed), `TooShort` (a lone term below the prefix floor), or `Searchable`. `cs-core` owns the fact, a client owns what to show for it. The distinction is a measured ranking cost rather than a matter of taste: `h*` is 2510 ms against `hov*` at 16 ms, because BM25 scores every matching row before it can sort.
 

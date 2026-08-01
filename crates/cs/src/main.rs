@@ -87,11 +87,14 @@ enum Command {
         /// What to search for, filters included: `agent:claude,codex`, `-agent:codex`,
         /// `dir:!web-app`, `date:<3h`, `date:today`.
         ///
-        /// `allow_hyphen_values` because `-agent:codex` is one of the DSL's two negation
-        /// spellings (`chat-search-6eb.11`) and clap would otherwise read it as a bundle of
-        /// short flags and refuse the query. The filters have to live in the query text so
-        /// they survive the move to a TUI, which has one input box and no flags at all — so
-        /// a query that works there and fails here would defeat the point of one parser.
+        /// A filter value that names nothing selectable is reported rather than applied, and
+        /// a half-typed one is searched as text — never an error.
+        // clap renders the doc comment above as `--help`, so the reason lives down here
+        // instead: `allow_hyphen_values` is what stops `-agent:codex` — one of the DSL's two
+        // negation spellings — being read as a bundle of short flags and refused outright.
+        // The filters have to live in the query text so they survive the move to a TUI, which
+        // has one input box and no flags at all; a query that works there and fails here
+        // would defeat the point of one parser (`chat-search-6eb.11`).
         #[arg(allow_hyphen_values = true)]
         query: String,
         #[arg(long, default_value = "10")]

@@ -38,6 +38,10 @@ cs status    # show config, machine identity and source health
 cs archive   # capture changed files; --dry-run to preview
 ```
 
+`cs archive` is quiet: it prints only when it captured something, because it is meant to
+run on a schedule and almost every run has nothing to say. Errors and source-drift
+warnings still print; `--verbose` brings the table back.
+
 The archive lands in `~/.chat-archive/`. On APFS it is stored with copy-on-write clones, so
 capturing 2.2 GB cost about 2 MB of disk.
 

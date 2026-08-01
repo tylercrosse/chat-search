@@ -171,6 +171,8 @@ enum Command {
         command: EvalCommand,
     },
     /// Capture changed files into the archive and record what was observed.
+    ///
+    /// Quiet: a run that observed nothing prints nothing. Problems still print.
     Archive {
         /// Limit to one source id.
         #[arg(long)]
@@ -178,6 +180,9 @@ enum Command {
         /// Report what would happen without writing anything.
         #[arg(long)]
         dry_run: bool,
+        /// Print the table even on a run that observed nothing.
+        #[arg(long)]
+        verbose: bool,
         #[arg(long)]
         json: bool,
     },
@@ -264,8 +269,8 @@ fn main() -> Result<()> {
                 eval::run(&config_path, db, &set, depth, repeat_weight, decay, json)
             }
         },
-        Command::Archive { source, dry_run, json } => {
-            archive(&config_path, source.as_deref(), dry_run, json)
+        Command::Archive { source, dry_run, verbose, json } => {
+            archive(&config_path, source.as_deref(), dry_run, verbose, json)
         }
     }
 }
@@ -302,7 +307,25 @@ fn mb(bytes: u64) -> f64 {
     bytes as f64 / 1_048_576.0
 }
 
-fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool) -> Result<()> {
+/// Capture, then say as little as possible about it.
+///
+/// This is the launchd job: it runs every 300 s, and on the overwhelming majority of those
+/// runs every file is unchanged. Printing the table anyway cost ~150 KB of log a day saying
+/// "nothing happened", which is how the one line that mattered would have gone unread
+/// (chat-search-a7k.5). So the table is printed only when the run recorded something, and
+/// `--verbose` brings it back for debugging.
+///
+/// Suppression stops at the table. Errors propagate to stderr as they always did, the
+/// source-drift report prints on its own throttle (chat-search-a7k.12), and the
+/// export-staleness nag will do the same (chat-search-a7k.10) — a warning quiet mode can
+/// swallow is worse than the noise quiet mode removes.
+fn archive(
+    config_path: &PathBuf,
+    only: Option<&str>,
+    dry_run: bool,
+    verbose: bool,
+    json: bool,
+) -> Result<()> {
     let cfg = Config::load(config_path)
         .with_context(|| format!("reading {}", config_path.display()))?;
     let m = machine::load_or_create(&cfg.archive_root, cfg.machine_alias.as_deref())?;
@@ -331,6 +354,11 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
     let mut reports = Vec::new();
     let (mut tot_cloned, mut tot_copied) = (0u64, 0u64);
     let mut tot = Bytes::default();
+    // Whether the run has anything to say. Read off the events it recorded rather than
+    // recounted from the table, so "the log stayed silent" and "the manifest gained nothing"
+    // can never disagree — a second rule for the same question is how a vanished file would
+    // end up unreported.
+    let mut recorded_anything = false;
 
     for source in &cfg.sources {
         if only.is_some_and(|o| o != source.id) || source.layout == Layout::Bundle {
@@ -397,6 +425,7 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
             });
         }
 
+        recorded_anything |= !events.is_empty();
         if let Some(w) = &writer {
             w.append(&events).context("appending manifest events")?;
         }
@@ -441,27 +470,41 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
             "ms": started.elapsed().as_millis() as u64,
         }));
     } else {
-        if dry_run {
-            println!("dry run — nothing written\n");
-        }
-        println!("  {:<13} {:>5} {:>9} {:>10} {:>9} {:>10} {:>8} {:>7} {:>7}",
-                 "source", "new", "appended", "rewritten", "vanished", "unchanged",
-                 "cloned", "copied", "ms");
-        for r in &reports {
-            let g = |k: &str| r[k].as_u64().unwrap_or(0);
+        // A dry run is somebody asking a question, so it answers even when the answer is
+        // "nothing" — the same reason the drift report skips its throttle for one. An empty
+        // reply to a command typed by hand reads as a broken binary, not as good news.
+        let show_table = recorded_anything || verbose || dry_run;
+        if show_table {
+            if dry_run {
+                println!("dry run — nothing written\n");
+            }
             println!("  {:<13} {:>5} {:>9} {:>10} {:>9} {:>10} {:>8} {:>7} {:>7}",
-                     r["source"].as_str().unwrap_or("?"),
-                     g("new"), g("appended"), g("rewritten"), g("vanished"),
-                     g("unchanged"), g("cloned"), g("copied"), g("ms"));
+                     "source", "new", "appended", "rewritten", "vanished", "unchanged",
+                     "cloned", "copied", "ms");
+            for r in &reports {
+                let g = |k: &str| r[k].as_u64().unwrap_or(0);
+                println!("  {:<13} {:>5} {:>9} {:>10} {:>9} {:>10} {:>8} {:>7} {:>7}",
+                         r["source"].as_str().unwrap_or("?"),
+                         g("new"), g("appended"), g("rewritten"), g("vanished"),
+                         g("unchanged"), g("cloned"), g("copied"), g("ms"));
+            }
+            println!("\n  {:.1} MB apparent size · {:.1} MB allocated blocks · {} ms",
+                     mb(tot.apparent), mb(tot.allocated), started.elapsed().as_millis());
+            if !dry_run {
+                println!("  {} cloned ({:.1} MB, shares blocks with the source) · {} copied ({:.1} MB new on disk)",
+                         tot_cloned, mb(tot.cloned), tot_copied, mb(tot.copied));
+            }
+            println!("  archive: {}", machine_dir.display());
         }
-        println!("\n  {:.1} MB apparent size · {:.1} MB allocated blocks · {} ms",
-                 mb(tot.apparent), mb(tot.allocated), started.elapsed().as_millis());
-        if !dry_run {
-            println!("  {} cloned ({:.1} MB, shares blocks with the source) · {} copied ({:.1} MB new on disk)",
-                     tot_cloned, mb(tot.cloned), tot_copied, mb(tot.copied));
-        }
-        println!("  archive: {}", machine_dir.display());
         if show_drift {
+            // The blank line separates the report from the table, so it belongs to the table
+            // and not to the report: on a quiet run the report is the entire output and must
+            // not open with a stray newline. `--verbose` is deliberately not wired into the
+            // drift throttle — restoring the old table is all it claims to do, and `--dry-run`
+            // is already the unthrottled view of drift.
+            if show_table {
+                println!();
+            }
             print_drift(&drift, config_path);
         }
     }
@@ -471,10 +514,11 @@ fn archive(config_path: &PathBuf, only: Option<&str>, dry_run: bool, json: bool)
 /// The two ways a config stops describing the machine it runs on (chat-search-a7k.12).
 ///
 /// Printed last, and separately from the table, because that is where it has to survive:
-/// once quiet mode lands (chat-search-a7k.5) the table is gone on an idle run and these are
-/// the only lines left. Nothing above them is required for them to make sense.
+/// under quiet mode (chat-search-a7k.5) the table is gone on an idle run and these are the
+/// only lines left. Nothing above them is required for them to make sense, and the blank line
+/// that separates them from the table is the caller's — there is nothing to separate from
+/// when they are the whole output.
 fn print_drift(drift: &cs_archive::Drift, config_path: &Path) {
-    println!();
     for s in &drift.unconfigured {
         println!("  unconfigured  {:<14} {}", s.id, s.path.display());
     }

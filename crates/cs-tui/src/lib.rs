@@ -39,8 +39,10 @@ pub type LogSink<'a> = &'a mut dyn FnMut(Event);
 pub struct Opts {
     /// Prefills the search box. Empty means the blank-query recent fallback.
     pub query: String,
-    /// Restricts to one source id, as `--source` does on the CLI. Desugared into query state
-    /// at startup so there is exactly one source of truth for filters (§5).
+    /// Restricts to one source id, as `--source` does on the CLI. Desugared into the query
+    /// *text* at startup — `Query::with_source` — so the flag is visible in the search box and
+    /// there is exactly one source of truth for filters (§5). Read once by `App::new`; nothing
+    /// in this crate keeps it.
     pub source: Option<String>,
     /// Conversations per search. The header reports this against the corpus total.
     pub limit: i64,
@@ -266,12 +268,13 @@ fn handle(
 /// there is no controlling terminal to open.
 /// Act on a left click, by where it landed.
 fn click(app: &mut state::App, panes: &layout::AppLayout, col: u16, row: u16) {
-    // Facet bar: pick a source, or clear the filter. Clicking the active one clears it, so
-    // the bar needs no separate "all" gesture beyond the chip that already says All.
+    // Facet bar: add a source to the selection, or take it back out by clicking it again. The
+    // click lands in the search box as `agent:` text, so the filter is visible where it was
+    // applied and a second chip widens rather than replaces (§5).
     if row == panes.filters.y {
         for (source, x, w) in render::facet_boxes(app) {
             if col >= panes.filters.x + x && col < panes.filters.x + x + w {
-                app.set_source(source);
+                app.toggle_source(source);
                 return;
             }
         }

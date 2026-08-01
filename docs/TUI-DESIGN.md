@@ -244,6 +244,18 @@ flag. The cost is six reconciliation methods (`active_agent_filter`, `active_age
 `clear_explicit_filter_if_query_has_agent`). **Desugar CLI flags into the query string at
 startup and keep exactly one state.**
 
+**Done, 2026-08-01 (`me9.16`).** `App` has no source field: a chip click calls
+`Query::toggling`, which returns the query *text* with the `agent:` token added or taken back
+out, and the bar draws itself from `Query::selection`. So a source chosen from the bar is
+visible in the input box, editable there, and survives being copied out of it — none of which
+was true while the selection lived beside the query. `--source` is desugared once by
+`Query::with_source`, which rewrites the text rather than pushing a filter in beside it, so
+what the flag produces is indistinguishable from what a click or a keystroke produces and
+there is nothing left to reconcile. Clicking a second chip widens the selection
+(`agent:codex,claude-code`) because repeated values union; the All chip clears the facet,
+exclusions included. Rewriting rules live in `cs_core::query` with the grammar, not in the
+bar — a client assembling `agent:` tokens itself would be a second, partial parser.
+
 **Graceful degradation is a formal ladder, and it is where the tests go.** fast-resume tries
 four stages of `(counts, icons, labels)` in order, then falls back to a window anchored on the
 *active* facet so your current filter never scrolls off (`render.rs:243-311`). Five unit tests

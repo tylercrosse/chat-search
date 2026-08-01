@@ -101,19 +101,33 @@ fn search(frame: &mut Frame, area: Rect, app: &App) {
 
 /// Source facets, doubling as a corpus census.
 ///
+/// Drawn from the query rather than from a field beside it (§5): a chip is lit because the
+/// text says `agent:`, which is the same fact the SQL filters on. Equality, not a
+/// case-insensitive match, for exactly that reason — `filter_sql` compares `c.source` to the
+/// lowercased value, so a chip whose id the filter would miss must not claim to be on.
+///
 /// Index-derived for now, so a configured source holding zero rows is still invisible here —
 /// that is `me9.14`, and it needs config the TUI deliberately does not have (§1).
 fn filters(frame: &mut Frame, area: Rect, app: &App) {
+    let selected = app.selected_sources();
     let mut spans = Vec::new();
     for (source, _, _) in facet_boxes(app) {
         match source {
             None => spans.push(Span::styled(
                 " All ",
-                if app.source.is_none() { app.theme.selected } else { app.theme.dim },
+                if selected.is_empty() { app.theme.selected } else { app.theme.dim },
             )),
             Some(s) => {
-                let active = app.source.as_deref() == Some(s.as_str());
-                let style = if active { app.theme.selected } else { theme::source_style(&s) };
+                // Three states, because the query has three things to say about a source. An
+                // excluded one drawn like an untouched one would be the same lie this bead
+                // removed: filtering that is invisible where it applies.
+                let style = if selected.include.contains(&s) {
+                    app.theme.selected
+                } else if selected.exclude.contains(&s) {
+                    app.theme.dim
+                } else {
+                    theme::source_style(&s)
+                };
                 let count = app.facets.iter().find(|(f, _)| *f == s).map_or(0, |(_, c)| *c);
                 spans.push(Span::raw(" "));
                 spans.push(Span::styled(format!(" {} ", theme::source_badge(&s)), style));

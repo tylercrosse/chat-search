@@ -299,6 +299,109 @@ fn parse_selection(value: &str, prefix_negated: bool) -> Option<Selection> {
     (!selection.is_empty()).then_some(selection)
 }
 
+// ---- rewriting the query text -------------------------------------------------------------
+//
+// The parser reads text; these write it, and they are here rather than in a client because the
+// grammar is here. A facet bar that assembled `agent:` tokens itself would be a second, partial
+// implementation of this module's rules, which is the shape of every bug it was built to end.
+//
+// All of them work on whitespace-separated words of the *original* text, not on the parsed
+// filters, because a rewrite has to give back everything it did not mean to change — case,
+// order, and tokens it does not understand.
+
+fn words(text: &str) -> Vec<String> {
+    text.split_whitespace().map(str::to_string).collect()
+}
+
+/// Words back into text, deciding the one thing splitting on whitespace threw away: whether
+/// the text ends open.
+///
+/// [`Query::parse`] reads "the last word is still being typed" off the final character of the
+/// whole string, so a rewrite that dropped a trailing space would reopen a word the user had
+/// finished and start prefix-expanding it — clicking a chip would change the ranking. Hence
+/// `original`: the text ends closed if it started closed.
+///
+/// A text left holding nothing but filters gains a space it did not have, because that is where
+/// the caret lands after a rewrite and without one the next character typed would extend the
+/// filter token instead of starting a word.
+fn join(words: Vec<String>, original: &str) -> String {
+    let closed = original.chars().last().is_some_and(char::is_whitespace);
+    let only_filters = words.iter().all(|w| is_filter(w));
+    let mut text = words.join(" ");
+    if !text.is_empty() && (closed || only_filters) {
+        text.push(' ');
+    }
+    text
+}
+
+fn is_filter(word: &str) -> bool {
+    [Facet::Agent, Facet::Dir, Facet::Date].iter().any(|f| facet_token(word, *f).is_some())
+}
+
+/// The word read as a token of `facet`: whether it carries a leading `-`, and its raw value.
+///
+/// Case-insensitive on the keyword because [`Query::parse`] lowercases before matching one, so
+/// `Agent:Codex` is a filter there and has to be a filter here too.
+fn facet_token(word: &str, facet: Facet) -> Option<(bool, &str)> {
+    let (negated, bare) = match word.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, word),
+    };
+    let keyword = facet.keyword();
+    let head = bare.get(..keyword.len())?;
+    head.eq_ignore_ascii_case(keyword).then(|| (negated, &bare[keyword.len()..]))
+}
+
+/// Every word, with `value` gone from each token of `facet` — from the include and the exclude
+/// side both. A token left with no values at all goes with it.
+///
+/// Untouched tokens are returned verbatim rather than re-rendered, so a rewrite of one facet
+/// cannot quietly normalise the spelling of another.
+fn strip_value(text: &str, facet: Facet, value: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for word in text.split_whitespace() {
+        let Some((negated, raw)) = facet_token(word, facet) else {
+            out.push(word.to_string());
+            continue;
+        };
+        // One `!`, because `parse_selection` strips one: to it `!!codex` is the value
+        // `!codex`, and a rewriter that read further would delete a token nothing selected.
+        let names = || raw.split(',').map(|p| p.strip_prefix('!').unwrap_or(p));
+        let kept: Vec<&str> = raw
+            .split(',')
+            .zip(names())
+            .filter(|(_, name)| !name.eq_ignore_ascii_case(value))
+            .map(|(piece, _)| piece)
+            .collect();
+        if kept.len() == names().count() {
+            out.push(word.to_string());
+        } else if kept.iter().any(|p| !p.is_empty()) {
+            let dash = if negated { "-" } else { "" };
+            out.push(format!("{dash}{}{}", facet.keyword(), kept.join(",")));
+        }
+    }
+    out
+}
+
+/// Add `value` to the selection, widening an existing token where there is one to widen.
+///
+/// A negated token is not a candidate — appending to `-agent:gemini` would exclude the value it
+/// was asked to include. A new token goes at the *front*, which is what makes the caret at the
+/// end of the text still sit at the end of the free text, so clicking a chip mid-query does not
+/// interrupt typing.
+fn add_value(words: &mut Vec<String>, facet: Facet, value: &str) {
+    let widenable = words
+        .iter_mut()
+        .find(|w| matches!(facet_token(w, facet), Some((false, raw)) if !raw.is_empty()));
+    match widenable {
+        Some(word) => {
+            word.push(',');
+            word.push_str(value);
+        }
+        None => words.insert(0, format!("{}{value}", facet.keyword())),
+    }
+}
+
 /// A parsed query: what was asked, as distinct from [`crate::SearchOptions`], which is how to
 /// run it.
 ///
@@ -315,6 +418,11 @@ pub struct Query {
     /// `learn deep learn` must still put its star on the final `learn`.
     terms: Vec<String>,
     filters: Vec<Filter>,
+    /// Which of the two readings produced this query. Kept rather than recovered from
+    /// `expand_last`, which is a different fact — that is already false for
+    /// `typeahead("borrow ")`. The rewriting methods below reparse text they just changed, and
+    /// have to reparse it as the same kind of query they were handed.
+    prefix: bool,
     /// The final term is still being typed and is long enough to expand.
     expand_last: bool,
     mode: Mode,
@@ -381,27 +489,61 @@ impl Query {
             Mode::Searchable
         };
 
-        Self { raw: text.to_string(), terms, filters, expand_last, mode }
+        Self { raw: text.to_string(), terms, filters, prefix, expand_last, mode }
     }
 
-    /// Fold a structured source selection — a `--source` flag, a facet click — into the
-    /// query's own filters.
+    /// Fold a structured source selection — a `--source` flag — into the query's own filters.
     ///
     /// This is the one desugaring point. Keeping a selection beside the query as a second
     /// piece of state is what `TUI-DESIGN.md` §5 records fast-resume paying six reconciliation
     /// methods for; a filter has exactly one home, and this is how a flag reaches it. A source
     /// already named in the text wins, since the user typed it more recently than they passed
     /// a flag.
-    pub fn with_source(mut self, source: Option<&str>) -> Self {
-        if let Some(source) = source {
-            let already_named = self.filters.iter().any(|f| f.facet == Facet::Agent && f.is_active());
-            if !already_named {
-                let value = source.to_lowercase();
-                let as_typed = format!("{}{value}", Facet::Agent.keyword());
-                self.filters.push(Filter::new(Facet::Agent, &value, false, as_typed));
-            }
+    ///
+    /// Desugaring means *rewriting the text*, not pushing a filter in beside it: the result is
+    /// indistinguishable from the same query typed by hand, down to [`Query::raw`]. That is
+    /// what lets a client with an input box — the TUI — desugar its flag once at startup and
+    /// then own nothing but the string, rather than carrying the flag alongside it forever.
+    pub fn with_source(self, source: Option<&str>) -> Self {
+        let Some(source) = source else { return self };
+        if self.filters.iter().any(|f| f.facet == Facet::Agent && f.is_active()) {
+            return self;
         }
-        self
+        let mut words = words(&self.raw);
+        words.insert(0, format!("{}{}", Facet::Agent.keyword(), source.to_lowercase()));
+        Self::parse(&join(words, &self.raw), self.prefix)
+    }
+
+    /// The query text with one value of a name-valued facet added, or removed if it is already
+    /// selected.
+    ///
+    /// Returns *text*, because the text is the state. A facet bar that filtered by any other
+    /// means would be the second source of truth `TUI-DESIGN.md` §5 costs out, and a filter the
+    /// user cannot see in the box is one they cannot edit, copy or keep.
+    ///
+    /// Toggling on merges into an existing token of that facet, so a second chip widens the
+    /// selection — `agent:codex` becomes `agent:codex,claude` — which is the reading
+    /// [`Query::selection`] already gives repeated tokens. Toggling either way first strips the
+    /// value from every token of the facet, including a negated one: a chip that is off is
+    /// neither included nor excluded, and `agent:codex -agent:codex` is a query that can match
+    /// nothing.
+    pub fn toggling(&self, facet: Facet, value: &str) -> String {
+        let value = value.to_lowercase();
+        let selected = self.selection(facet).include.contains(&value);
+        let mut words = strip_value(&self.raw, facet, &value);
+        if !selected {
+            add_value(&mut words, facet, &value);
+        }
+        join(words, &self.raw)
+    }
+
+    /// The query text with every token of one facet removed — the "All" chip.
+    ///
+    /// Exclusions go too. "All agents" is a claim about the whole facet, so leaving a
+    /// `-agent:` behind would light a chip that is still filtering.
+    pub fn without(&self, facet: Facet) -> String {
+        let kept = words(&self.raw).into_iter().filter(|w| facet_token(w, facet).is_none());
+        join(kept.collect(), &self.raw)
     }
 
     /// The text as typed, for redisplay. Not what gets searched — see [`Query::match_expr`].
@@ -849,5 +991,149 @@ mod tests {
     fn the_raw_text_survives_parsing() {
         // The input box redisplays what was typed, not what was matched.
         assert_eq!(Query::typeahead("Agent:Codex  borrow").raw(), "Agent:Codex  borrow");
+    }
+
+    // ---- chat-search-me9.16: the text is the whole of the filter state ----
+
+    /// What a client's input box would hold after the rewrite.
+    fn toggled(text: &str, value: &str) -> String {
+        Query::typeahead(text).toggling(Facet::Agent, value)
+    }
+
+    #[test]
+    fn a_source_flag_desugars_into_text_a_user_could_have_typed() {
+        // The point of desugaring into the *text*: a client can hand its input box the result
+        // and then own nothing else. Carrying the flag beside the string instead is what
+        // `TUI-DESIGN.md` §5 prices at six reconciliation methods.
+        let q = Query::typeahead("borrow").with_source(Some("Codex"));
+        assert_eq!(q.raw(), "agent:codex borrow");
+        assert_eq!(q.selection(Facet::Agent).include, ["codex"]);
+        // And it is the same query the same text parses to, which is the whole claim.
+        assert_eq!(q.match_expr(), Query::typeahead("agent:codex borrow").match_expr());
+        assert_eq!(q.mode(), Query::typeahead("agent:codex borrow").mode());
+    }
+
+    #[test]
+    fn desugaring_keeps_the_reading_the_query_was_parsed_with() {
+        // `with_source` reparses, so it has to reparse as the same kind of query: an exact
+        // query that came back typeahead would start expanding the CLI's final word.
+        assert_eq!(Query::exact("borrow").with_source(Some("codex")).match_expr(), "\"borrow\"");
+        assert_eq!(Query::typeahead("borrow").with_source(Some("codex")).match_expr(), "\"borrow\"*");
+    }
+
+    #[test]
+    fn clicking_a_second_chip_widens_the_selection_rather_than_replacing_it() {
+        let one = toggled("borrow", "codex");
+        assert_eq!(one, "agent:codex borrow");
+        let two = toggled(&one, "claude-code");
+        assert_eq!(two, "agent:codex,claude-code borrow");
+        assert_eq!(
+            Query::typeahead(&two).selection(Facet::Agent).include,
+            ["codex", "claude-code"]
+        );
+    }
+
+    #[test]
+    fn clicking_a_chip_that_is_already_on_turns_it_off() {
+        // The chip that is on is the chip you press to turn it off, so the bar needs no
+        // separate gesture beyond the chip already labelled All.
+        assert_eq!(toggled("agent:codex,claude-code borrow", "codex"), "agent:claude-code borrow");
+        assert_eq!(toggled("agent:codex borrow", "codex"), "borrow");
+        assert_eq!(toggled("agent:codex", "codex"), "");
+    }
+
+    #[test]
+    fn turning_a_chip_on_clears_a_standing_exclusion_of_the_same_source() {
+        // Otherwise the bar could assemble `agent:codex -agent:codex`, which matches nothing
+        // while looking like a filter that selects something.
+        for text in ["-agent:codex", "agent:!codex"] {
+            let after = toggled(text, "codex");
+            let selection = Query::typeahead(&after).selection(Facet::Agent);
+            assert_eq!(selection.include, ["codex"], "{text}");
+            assert!(selection.exclude.is_empty(), "{text}");
+        }
+        // Turning it off again leaves it neither included nor excluded: off is off.
+        assert!(Query::typeahead(&toggled(&toggled("-agent:codex", "codex"), "codex"))
+            .selection(Facet::Agent)
+            .is_empty());
+    }
+
+    #[test]
+    fn the_rewriter_reads_a_value_exactly_as_the_parser_does() {
+        // `parse_selection` strips one `!`, so to it `agent:!!codex` names the value `!codex`
+        // and selects nothing called codex. A rewriter that trimmed every leading `!` would
+        // delete that token when the codex chip was clicked, silently editing a filter the
+        // click had nothing to do with.
+        assert_eq!(Query::typeahead("agent:!!codex").selection(Facet::Agent).exclude, ["!codex"]);
+        let on = toggled("agent:!!codex borrow", "codex");
+        assert_eq!(on, "agent:!!codex,codex borrow");
+        let selection = Query::typeahead(&on).selection(Facet::Agent);
+        assert_eq!(selection.include, ["codex"], "the chip clicked is the value that moved");
+        assert_eq!(selection.exclude, ["!codex"], "and the one nobody clicked did not");
+        assert_eq!(toggled(&on, "codex"), "agent:!!codex borrow", "and it comes straight back out");
+    }
+
+    #[test]
+    fn a_new_token_goes_in_front_so_the_free_text_still_ends_the_line() {
+        // The caret sits at the end of the box after a rewrite. With the filter appended
+        // instead, the next character typed would land inside `agent:codex` — and a filter
+        // token after an unfinished word also closes it, so clicking a chip would silently
+        // stop the ranking expanding the word being typed.
+        assert_eq!(toggled("borro", "codex"), "agent:codex borro");
+        assert_eq!(Query::typeahead(&toggled("borro", "codex")).match_expr(), "\"borro\"*");
+    }
+
+    #[test]
+    fn a_rewrite_changes_the_filter_and_nothing_else_about_the_query() {
+        // The structural invariant behind clicking a chip: the ranking of what was typed is
+        // not the facet bar's business, so no toggle may move it.
+        for text in ["", "borrow", "borrow ", "le", "deep learn", "dir:web date:today rust"] {
+            let before = Query::typeahead(text);
+            let after = Query::typeahead(&before.toggling(Facet::Agent, "codex"));
+            assert_eq!(after.match_expr(), before.match_expr(), "{text:?}");
+            assert_eq!(after.mode(), before.mode(), "{text:?}");
+            assert_eq!(after.terms(), before.terms(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_text_left_holding_only_filters_ends_in_a_space_to_type_after() {
+        assert_eq!(toggled("", "codex"), "agent:codex ");
+        assert_eq!(Query::typeahead("").with_source(Some("codex")).raw(), "agent:codex ");
+        // But a query with free text does not, or the trailing space would close the word.
+        assert_eq!(toggled("borro", "codex"), "agent:codex borro");
+        // And a word the user had already closed stays closed — the space splitting threw
+        // away is the one thing `join` has to put back.
+        assert_eq!(toggled("borrow ", "codex"), "agent:codex borrow ");
+    }
+
+    #[test]
+    fn the_all_chip_clears_the_facet_and_leaves_the_rest_of_the_query() {
+        let q = Query::typeahead("agent:codex -agent:claude dir:web date:today rust");
+        let after = q.without(Facet::Agent);
+        assert_eq!(after, "dir:web date:today rust");
+        let reparsed = Query::typeahead(&after);
+        assert!(reparsed.selection(Facet::Agent).is_empty(), "exclusions go too — All means all");
+        assert_eq!(reparsed.selection(Facet::Dir).include, ["web"]);
+        assert_eq!(reparsed.terms(), ["rust"]);
+    }
+
+    #[test]
+    fn a_rewrite_does_not_renormalise_tokens_it_was_not_asked_about() {
+        // Only the tokens that lost a value are re-rendered. A bar that rewrote the whole
+        // string would quietly restyle filters the user typed by hand, and the box is the
+        // one place they can see what they wrote.
+        assert_eq!(
+            toggled("Dir:Web-App agent:codex,claude rust", "claude"),
+            "Dir:Web-App agent:codex rust"
+        );
+    }
+
+    #[test]
+    fn a_filter_typed_in_any_case_is_still_the_filter_the_bar_rewrites() {
+        // `parse` lowercases before matching a keyword, so `Agent:Codex` filters; the rewriter
+        // has to see the same token or the bar would add a duplicate beside it.
+        assert_eq!(toggled("Agent:Codex borrow", "codex"), "borrow");
+        assert_eq!(Query::typeahead("Agent:Codex borrow").without(Facet::Agent), "borrow");
     }
 }

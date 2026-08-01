@@ -38,10 +38,15 @@ pub struct App {
     /// same instant and the column cannot renumber itself mid-scroll.
     pub now: i64,
 
+    /// The whole of the filter state, and the whole of what is searched for.
+    ///
+    /// There is deliberately no `source` field beside this. `TUI-DESIGN.md` §5 records what
+    /// that shape cost fast-resume — six methods reconciling a facet field against the query
+    /// text — and the visible half of the same bug here was a facet click that filtered the
+    /// list without appearing in the box, so it could not be seen, edited or copied out.
     pub query: String,
     /// Caret position as a *char* index, not a byte offset — the query holds arbitrary text.
     pub cursor: usize,
-    pub source: Option<String>,
     pub limit: i64,
 
     pub groups: Vec<Group>,
@@ -71,14 +76,18 @@ impl App {
         let indexed =
             conn.query_row("SELECT COUNT(*) FROM conversation", [], |r| r.get(0)).unwrap_or(0);
         let facets = read_facets(&conn);
+        // `--source` is desugared here, once, and never again: `with_source` rewrites the
+        // query *text*, so what lands in the box is a query the user could have typed and the
+        // flag has nowhere left to live. This is the whole of the flag's life in this crate.
+        let query =
+            cs_core::Query::typeahead(&opts.query).with_source(opts.source.as_deref()).raw().to_string();
         let mut app = App {
             conn,
             indexed,
             facets,
             now: cs_core::now_ms(),
-            cursor: opts.query.chars().count(),
-            query: opts.query.clone(),
-            source: opts.source.clone(),
+            cursor: query.chars().count(),
+            query,
             limit: if opts.limit > 0 { opts.limit } else { 100 },
             groups: Vec::new(),
             rows: Vec::new(),
@@ -142,7 +151,7 @@ impl App {
         self.sync_preview();
     }
 
-    /// The query as `cs-core` reads it, with the facet selection folded in.
+    /// The query as `cs-core` reads it. Filters included — they are in the text.
     ///
     /// Parsed on demand rather than cached beside `self.query`, because a cached copy is a
     /// second thing to keep in step and this crate has just finished removing one. The parse
@@ -151,7 +160,12 @@ impl App {
     /// Typeahead because the TUI is: every keystroke leaves a word half-typed, and the
     /// ranking has to open the final token or the list widens as you type.
     pub fn parsed(&self) -> cs_core::Query {
-        cs_core::Query::typeahead(&self.query).with_source(self.source.as_deref())
+        cs_core::Query::typeahead(&self.query)
+    }
+
+    /// Which sources the query selects, for the facet bar to draw itself from.
+    pub fn selected_sources(&self) -> cs_core::Selection {
+        self.parsed().selection(cs_core::Facet::Agent)
     }
 
     /// What the query can do, as `cs-core` sees it. The UI decides what to *show* for each.
@@ -253,9 +267,23 @@ impl App {
         self.sync_preview();
     }
 
-    /// Filter to one source, or clear the filter by choosing the active one again.
-    pub fn set_source(&mut self, source: Option<String>) {
-        self.source = if source.is_some() && source == self.source { None } else { source };
+    /// Act on a facet chip: `Some` toggles one source, `None` is the All chip and clears them.
+    ///
+    /// The bar filters by *rewriting the query text*, which is what makes it a projection of
+    /// the query rather than a filter beside it (`TUI-DESIGN.md` §5). Everything about which
+    /// tokens that means — widen an existing `agent:`, drop a standing exclusion, keep the
+    /// last word open or closed — is `cs_core::Query`'s, because the grammar is.
+    pub fn toggle_source(&mut self, source: Option<String>) {
+        let parsed = self.parsed();
+        self.query = match source {
+            Some(s) => parsed.toggling(cs_core::Facet::Agent, &s),
+            None => parsed.without(cs_core::Facet::Agent),
+        };
+        // The caret goes to the end because a rewrite can move or remove a token anywhere in
+        // the string, so the old offset names a different word than it did. The end is the one
+        // position that still means what it meant — and new filter tokens are inserted in
+        // front of the free text, so it is also where typing continues.
+        self.cursor = self.query.chars().count();
         self.search();
     }
 
@@ -344,7 +372,11 @@ impl App {
         Some(Event::Pick {
             ts: cs_core::now_ms(),
             q: self.query.clone(),
-            source: self.source.clone(),
+            // `source` is for a client whose filter arrives beside the query, as `--source`
+            // does on the CLI. This one has no such filter left: `q` carries the `agent:`
+            // token verbatim, so replaying it reproduces the result set exactly, which a
+            // separate field could only ever promise.
+            source: None,
             conv_id,
             rank,
             shown: querylog::truncate_shown(shown),
@@ -366,7 +398,8 @@ impl App {
         Some(Event::Search {
             ts: cs_core::now_ms(),
             q: self.query.clone(),
-            source: self.source.clone(),
+            // See `pick_event`: the filter is in `q`.
+            source: None,
             shown: querylog::truncate_shown(shown),
             n,
             ms: self.last_ms,
@@ -521,14 +554,63 @@ mod tests {
     }
 
     #[test]
-    fn clicking_the_active_facet_clears_it() {
+    fn choosing_a_facet_puts_the_filter_in_the_box_the_user_is_looking_at() {
+        // The bead: a source chosen from the bar used to live in an `App.source` field, so it
+        // filtered the list while being invisible in the input — nothing to see, edit, or copy
+        // out. The click is now an edit to the query text like any other.
+        let mut app = app_with(&[("c0", "alpha")]);
+        app.toggle_source(Some("codex".into()));
+        assert_eq!(app.query, "agent:codex ");
+        assert_eq!(app.selected_sources().include, ["codex"]);
+        assert_eq!(app.cursor, app.query.chars().count(), "and the caret is ready to type after it");
+
         // The chip that is on is the chip you press to turn it off, so the bar needs no
         // separate gesture for "all" beyond the chip already labelled All.
+        app.toggle_source(Some("codex".into()));
+        assert_eq!(app.query, "", "pressing it again takes the token back out");
+        assert!(app.selected_sources().is_empty());
+    }
+
+    #[test]
+    fn a_second_chip_adds_to_the_selection_rather_than_replacing_it() {
         let mut app = app_with(&[("c0", "alpha")]);
-        app.set_source(Some("codex".into()));
-        assert_eq!(app.source.as_deref(), Some("codex"));
-        app.set_source(Some("codex".into()));
-        assert_eq!(app.source, None, "pressing it again clears the filter");
+        app.toggle_source(Some("codex".into()));
+        app.toggle_source(Some("claude-code".into()));
+        assert_eq!(app.selected_sources().include, ["codex", "claude-code"]);
+        // And the All chip is the one gesture that clears the facet outright.
+        app.toggle_source(None);
+        assert!(app.selected_sources().is_empty());
+        assert_eq!(app.query, "");
+    }
+
+    #[test]
+    fn clicking_a_facet_mid_query_does_not_disturb_what_is_being_typed() {
+        // The filter token goes in front of the free text, so the caret parked at the end of
+        // the box is still at the end of the *word*, and the ranking of that word is unmoved.
+        let mut app = app_with(&[("c0", "alpha beta")]);
+        for ch in "alph".chars() {
+            app.insert_char(ch);
+        }
+        let before = app.parsed().match_expr();
+        app.toggle_source(Some("codex".into()));
+        assert_eq!(app.query, "agent:codex alph");
+        assert_eq!(app.parsed().match_expr(), before, "the facet bar does not rank anything");
+        app.insert_char('a');
+        assert_eq!(app.query, "agent:codex alpha", "typing carries on where it left off");
+    }
+
+    #[test]
+    fn the_source_flag_arrives_as_query_text_and_is_then_just_a_query() {
+        // `--source` is desugared once, at startup, into the same token a click writes. After
+        // that the TUI has no notion of a source flag at all — which is the whole point.
+        let conn = cs_core::open(":memory:").unwrap();
+        let opts = crate::Opts { query: "alpha".into(), source: Some("Codex".into()), limit: 50 };
+        let mut app = App::new(conn, &opts, Theme::plain()).unwrap();
+        assert_eq!(app.query, "agent:codex alpha");
+        assert_eq!(app.selected_sources().include, ["codex"]);
+        // So the chip it lit is the chip that turns it off.
+        app.toggle_source(Some("codex".into()));
+        assert_eq!(app.query, "alpha");
     }
 
     #[test]

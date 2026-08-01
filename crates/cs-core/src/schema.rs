@@ -67,6 +67,11 @@ CREATE INDEX IF NOT EXISTS idx_message_thread  ON message(conv_id, thread_key, s
 -- returns every row of `message`, not just the ones with postings. Only a `MATCH` consults the
 -- index. See `search::explain`, which counts postings out of the `_docsize` shadow table.
 --
+-- No `prefix='...'`, deliberately. It would turn a prefix term's vocabulary walk into a doclist
+-- lookup, which is real — but the walk is 11 ms of a 60 ms `the`* keystroke and the other 49 is
+-- BM25 scoring the whole match set, so the queries it was wanted for stay over budget while the
+-- index grows 26% and the rebuild 48%. Priced and rejected in ADR 6 (chat-search-6eb.38).
+--
 -- Prose and tool traffic are separate tables rather than one with field weights, because
 -- tool text is 91% of the corpus and would otherwise dominate BM25 (ADR 5).
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_prose USING fts5(

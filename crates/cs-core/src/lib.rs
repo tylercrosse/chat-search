@@ -29,8 +29,8 @@ pub use model::{Conversation, Kind, Message, Role, Titles};
 pub use query::{Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection, Window};
 pub use schema::IMPORTER_VERSION;
 pub use search::{
-    explain, match_density, recent, search, search_grouped, snippet_marked, Explain, Field, Group, Hit,
-    SearchOptions, DECAY, REPEAT_WEIGHT,
+    explain, match_density, recent, search, search_grouped, search_grouped_counted, snippet_marked,
+    Counted, Explain, Field, Group, Hit, SearchOptions, DECAY, REPEAT_WEIGHT,
 };
 pub use time::{
     day_start_in, local_day_start, local_ymd, now_ms, shift_days_in, shift_months_in, ymd_in,

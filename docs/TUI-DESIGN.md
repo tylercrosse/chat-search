@@ -60,12 +60,29 @@ Five bands, one flexible. fast-resume's skeleton (`tui/layout.rs:39-58`) is the 
 we adopt it unchanged:
 
 ```
-Length(1)   header      corpus scale, result-set scale, latency
+Length(1)   header      result-set scale, corpus scale, latency
 Length(3)   search      bordered, always focused
 Length(1)   filters     source facets + coverage state
 Min(3)      main        results, optionally split with preview
 Length(1)   footer      key hints, or status when there is one
 ```
+
+**The header's middle number is the result set's real size**, not the drawn one:
+`50 of 655 matched / 3019 indexed`. `limit` caps what is drawn at a screenful and a half, so
+without it a list that is the whole answer and a list that is the first page of a long one are
+the same screen — and "keep typing" and "you have seen everything" are opposite conclusions
+drawn from the same rows. `50 of 50 matched` states the complete case rather than going quiet,
+because a form that appears only sometimes makes the reader infer meaning from an absence.
+
+It is usually free: `search_grouped_counted` reads it off the ranking pass, which already
+visits every matching message unless it stops at its own `limit * 50` scan ceiling. Only a
+query broad enough to blow through that ceiling pays for a second pass — measured against the
+3,019-conversation corpus at `limit 50`, nothing at all for a real query (`borrow checker`
+0.2 ms either way) and +5 to +36 ms for a two-or-three letter prefix of a common word, which
+`chat-search-6eb.29` already puts over budget on its own. `search::count_cost` is the guard.
+
+The corpus total sheds first when the line will not fit. It is the only one of the three that
+does not move as you type, and it is also the sum the facet bar is already showing.
 
 **Two independent levels of responsiveness.** This is the part worth copying deliberately,
 because the naive approach — hide the preview when it gets tight — is worse than both levels.

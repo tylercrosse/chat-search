@@ -881,9 +881,7 @@ pub fn recent(
 /// Conversations matching `q`, best-first, each carrying up to [`SearchOptions::nested`]
 /// messages.
 ///
-/// Scores are pulled ungrouped and folded here rather than in SQL: FTS5 auxiliary functions
-/// like bm25() cannot be used through a CTE or subquery, so the grouping has to happen after
-/// the rows come back.
+/// [`search_grouped_counted`] when how many were left out matters too.
 pub fn search_grouped(
     conn: &Connection,
     query: &Query,
@@ -895,6 +893,114 @@ pub fn search_grouped(
     if !query.is_searchable() {
         return recent(conn, query, q.now_ms, q.limit);
     }
+    let (ranked, _) = rank(conn, query, q)?;
+    best_of(conn, query, q, ranked)
+}
+
+/// A result set and how large it would have been without [`SearchOptions::limit`].
+pub struct Counted {
+    /// The conversations `limit` left room for, best-first.
+    pub groups: Vec<Group>,
+    /// How many conversations the query selects in all. Never below `groups.len()`, and equal
+    /// to it whenever nothing was left out.
+    pub matched: usize,
+}
+
+/// [`search_grouped`], and how many conversations it had to leave behind.
+///
+/// The count is the one thing `limit` hides that the rows cannot recover: a hundred results out
+/// of a hundred and a hundred out of two thousand are the same hundred rows on screen, and only
+/// a number taken against the unlimited set says which one is being read.
+///
+/// Usually free. The ranking pass already visits every matching message unless it stops at its
+/// own scan ceiling, so the count is a `len()` on what it returned; the extra query runs only
+/// when that ceiling truncated the scan and the answer is therefore genuinely unknown.
+pub fn search_grouped_counted(
+    conn: &Connection,
+    query: &Query,
+    q: &SearchOptions,
+) -> rusqlite::Result<Counted> {
+    if !query.is_searchable() {
+        let groups = recent(conn, query, q.now_ms, q.limit)?;
+        // Same rule as the ranked branch below: a short list is its own total, because
+        // `recent` stops for nothing but `limit`.
+        let matched = if (groups.len() as i64) < q.limit {
+            groups.len()
+        } else {
+            count_filtered(conn, query, q.now_ms)?
+        };
+        return Ok(Counted { groups, matched });
+    }
+    let (ranked, truncated) = rank(conn, query, q)?;
+    let matched = if truncated { count_matching(conn, query, q)? } else { ranked.len() };
+    Ok(Counted { groups: best_of(conn, query, q, ranked)?, matched })
+}
+
+/// The `limit` best of a ranking, with their display columns fetched.
+fn best_of(
+    conn: &Connection,
+    query: &Query,
+    q: &SearchOptions,
+    mut ranked: Vec<Ranked>,
+) -> rusqlite::Result<Vec<Group>> {
+    ranked.truncate(q.limit as usize);
+    hydrate(conn, query, q.field, ranked)
+}
+
+/// How many conversations hold a message this query matches, `limit` ignored.
+///
+/// The predicate is [`rank`]'s minus the scoring and the ceiling, and it has to stay that way:
+/// a count over any other set would describe a result list nobody is looking at. Nothing here
+/// touches `message.text`, so the cost is the posting list and the rowid lookups, not the
+/// widest column in the schema.
+fn count_matching(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::Result<usize> {
+    let table = q.field.table();
+    let mut binds =
+        vec![Value::Text(query.match_expr()), Value::Integer(q.include_off_path as i64)];
+    let filters = filter_sql(query, q.now_ms, &mut binds);
+    let sql = format!(
+        "SELECT COUNT(DISTINCT m.conv_id)
+         FROM {table}
+         JOIN message m      ON m.rowid = {table}.rowid
+         JOIN conversation c ON c.id = m.conv_id
+         WHERE {table} MATCH ?1
+           AND (?2 = 1 OR m.on_head_path = 1){filters}"
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let n: i64 = stmt.query_row(params_from_iter(binds.iter()), |r| r.get(0))?;
+    Ok(n as usize)
+}
+
+/// How many conversations survive the query's filters, for the branch that ranks nothing.
+///
+/// `date:today` with no terms is a real question with a real total, and that total is not the
+/// corpus size — which is the only number a client could otherwise put beside the list.
+fn count_filtered(conn: &Connection, query: &Query, now_ms: i64) -> rusqlite::Result<usize> {
+    let mut binds = Vec::new();
+    let filters = filter_sql(query, now_ms, &mut binds);
+    // `1 = 1` for the same reason as in `recent`: the fragment's leading `AND` needs something
+    // to attach to, and here there are often no filters at all.
+    let sql = format!("SELECT COUNT(*) FROM conversation c WHERE 1 = 1{filters}");
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let n: i64 = stmt.query_row(params_from_iter(binds.iter()), |r| r.get(0))?;
+    Ok(n as usize)
+}
+
+/// Every matching message, scored and folded into conversations, best-first.
+///
+/// Scores are pulled ungrouped and folded here rather than in SQL: FTS5 auxiliary functions
+/// like bm25() cannot be used through a CTE or subquery, so the grouping has to happen after
+/// the rows come back.
+///
+/// The flag reports that the scan stopped at its ceiling rather than at the end of the
+/// matches. That is the difference between "these are the conversations that matched" and
+/// "these are the ones the best few thousand messages came from", and only the caller counting
+/// them can tell whether it matters.
+fn rank(
+    conn: &Connection,
+    query: &Query,
+    q: &SearchOptions,
+) -> rusqlite::Result<(Vec<Ranked>, bool)> {
     // Pull well beyond `limit` conversations' worth of messages, since one conversation can
     // account for many hits and would otherwise crowd out the tail.
     let ceiling = (q.limit * 50).clamp(500, 5_000);
@@ -940,8 +1046,10 @@ pub fn search_grouped(
 
     let mut order: Vec<String> = Vec::new();
     let mut by_conv: std::collections::HashMap<String, Vec<(String, i64, f64)>> = Default::default();
+    let mut scanned = 0i64;
     for row in rows {
         let (msg_id, conv_id, seq, score) = row?;
+        scanned += 1;
         if !by_conv.contains_key(&conv_id) {
             order.push(conv_id.clone());
         }
@@ -972,9 +1080,11 @@ pub fn search_grouped(
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.conv_id.cmp(&b.conv_id))
     });
-    ranked.truncate(q.limit as usize);
 
-    hydrate(conn, query, q.field, ranked)
+    // A full scan is indistinguishable from one that stopped exactly on the boundary, so this
+    // errs towards "truncated" — which costs a count query that returns the number already in
+    // hand, rather than reporting a total that is quietly short.
+    Ok((ranked, scanned >= ceiling))
 }
 
 /// One conversation that survived ranking, before its display columns are fetched.
@@ -1360,6 +1470,62 @@ mod group_tests {
         assert!(decayed(3.0) > decayed(0.0), "older must rank lower, not higher");
         assert!((decayed(0.0) - bm25).abs() < f64::EPSILON);
     }
+
+    #[test]
+    fn the_total_says_how_many_conversations_the_limit_left_out() {
+        let conn = crate::open(":memory:").unwrap();
+        for i in 0..5 {
+            seed(&conn, &format!("c:{i}"), 1_000, &["widget"]);
+        }
+        let q = SearchOptions { limit: 2, ..SearchOptions::new(NO_DECAY) };
+        let counted = search_grouped_counted(&conn, &Query::exact("widget"), &q).unwrap();
+        assert_eq!(counted.groups.len(), 2, "the page is what limit allows");
+        assert_eq!(counted.matched, 5, "the total is what the query selects");
+    }
+
+    #[test]
+    fn a_result_set_the_limit_did_not_touch_is_its_own_total() {
+        // The case that must not cost a second query: the ranking pass already saw every
+        // matching message, so the conversations it returned are all of them.
+        let conn = crate::open(":memory:").unwrap();
+        for i in 0..5 {
+            seed(&conn, &format!("c:{i}"), 1_000, &["widget"]);
+        }
+        let q = SearchOptions { limit: 50, ..SearchOptions::new(NO_DECAY) };
+        let counted = search_grouped_counted(&conn, &Query::exact("widget"), &q).unwrap();
+        assert_eq!(counted.matched, counted.groups.len());
+        assert_eq!(counted.matched, 5);
+    }
+
+    #[test]
+    fn the_total_outlives_the_ceiling_the_ranking_scan_stops_at() {
+        // The ranking pulls a bounded number of messages, so on a broad query the
+        // conversations it saw are not the conversations that matched: 500 of these 600 are
+        // all it ever looks at. Counting what came back would publish the ceiling as though
+        // it were a fact about the corpus.
+        let conn = crate::open(":memory:").unwrap();
+        for i in 0..600 {
+            seed(&conn, &format!("c:{i:03}"), 1_000, &["widget"]);
+        }
+        let q = SearchOptions { limit: 10, ..SearchOptions::new(NO_DECAY) };
+        let counted = search_grouped_counted(&conn, &Query::exact("widget"), &q).unwrap();
+        assert_eq!(counted.groups.len(), 10);
+        assert_eq!(counted.matched, 600, "every conversation that matched, not the 500 scanned");
+    }
+
+    #[test]
+    fn a_blank_query_is_counted_against_the_corpus_it_is_listing() {
+        // Nothing is ranked here, so the total cannot come from the ranking pass. It still
+        // has to be the size of the list being drawn from rather than the size of the page.
+        let conn = crate::open(":memory:").unwrap();
+        for i in 0..5 {
+            seed(&conn, &format!("c:{i}"), 1_000 + i, &["widget"]);
+        }
+        let q = SearchOptions { limit: 2, ..SearchOptions::new(NO_DECAY) };
+        let counted = search_grouped_counted(&conn, &Query::typeahead(""), &q).unwrap();
+        assert_eq!(counted.groups.len(), 2);
+        assert_eq!(counted.matched, 5);
+    }
 }
 
 /// The DSL, against SQL rather than against the parser.
@@ -1530,6 +1696,18 @@ mod filter_tests {
             assert!(!Query::exact(text).rejected().is_empty(), "{text} must say so");
         }
         assert_eq!(Query::exact("date:nope borrow").rejected(), ["date:nope"]);
+    }
+
+    #[test]
+    fn a_filtered_browse_is_counted_against_the_filter_and_not_the_corpus() {
+        // Nothing ranks here, so the total cannot come from the ranking pass — and the number
+        // nearest to hand is the corpus size, which would be the same silent no-op this module
+        // exists to catch: it would say four while the list is drawn from two.
+        let conn = corpus();
+        let q = SearchOptions { limit: 1, ..opts() };
+        let counted = search_grouped_counted(&conn, &Query::exact("agent:codex"), &q).unwrap();
+        assert_eq!(counted.groups.len(), 1, "the page is what limit allows");
+        assert_eq!(counted.matched, 2, "the codex half of a four-conversation corpus");
     }
 
     #[test]
@@ -1760,5 +1938,77 @@ mod filter_cost {
         // candidate and nothing that scales with the corpus. A regression into a per-message
         // subquery or a lost index would land far outside this.
         assert!(worst < 25.0, "a filter added {worst:.1} ms to a keystroke");
+    }
+}
+
+/// What the header's match total costs a keystroke, measured the same way and for the same
+/// reason as [`filter_cost`].
+///
+/// The count is free whenever the ranking pass saw every matching message, so the terms below
+/// are chosen to straddle that line: a real query stays inside the scan ceiling and pays
+/// nothing, while a two-or-three letter prefix of a common word blows through it and pays for
+/// a second pass over the postings.
+#[cfg(test)]
+mod count_cost {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a real index; set CS_INDEX to an index.db"]
+    fn counting_the_whole_result_set_does_not_cost_a_keystroke_its_budget() {
+        let Ok(path) = std::env::var("CS_INDEX") else { return };
+        let conn = Connection::open(path).expect("readable index");
+        // The TUI's own shape, which is the only caller that asks for a count: `limit` 50 as
+        // `cs tui` defaults it, and `nested: 0` because per keystroke it draws no snippets.
+        // The limit is load-bearing here — it sets the scan ceiling, and therefore how often
+        // the count is free.
+        let opts =
+            || SearchOptions { limit: 50, nested: 0, ..SearchOptions::new(crate::time::now_ms()) };
+
+        // Best of seven, floor taken, exactly as `filter_cost` does — see its note on why the
+        // minimum is the honest number.
+        let cost = |text: &str, counting: bool| {
+            let query = Query::typeahead(text);
+            (0..7)
+                .map(|_| {
+                    let t0 = std::time::Instant::now();
+                    if counting {
+                        std::hint::black_box(
+                            search_grouped_counted(&conn, &query, &opts()).unwrap().matched,
+                        );
+                    } else {
+                        std::hint::black_box(search_grouped(&conn, &query, &opts()).unwrap().len());
+                    }
+                    t0.elapsed().as_secs_f64() * 1000.0
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+
+        let (mut worst, mut worst_free) = (0.0f64, 0.0f64);
+        // The blank query first: it is the frame the TUI opens on, and it takes the branch
+        // that ranks nothing, so it is the one place a count could go wrong for free.
+        for text in ["", "borrow checker", "fts", "ind", "rus", "tes", "con", "the"] {
+            let (plain, with) = (cost(text, false), cost(text, true));
+            let total = search_grouped_counted(&conn, &Query::typeahead(text), &opts())
+                .unwrap()
+                .matched;
+            println!("{plain:8.1} ms  ->{with:8.1} ms   {total:>5} matched   {text}");
+            worst = worst.max(with - plain);
+            // These three match a small enough slice of the corpus that the scan reaches the
+            // end of the matches rather than the ceiling — so the answer was already in hand
+            // and the count is a `len()`.
+            if matches!(text, "" | "borrow checker" | "fts") {
+                worst_free = worst_free.max(with - plain);
+            }
+        }
+        println!("worst counting overhead: {worst:.1} ms (free cases: {worst_free:.1} ms)");
+        // The failure this guards is the count going unconditional — a second pass over the
+        // postings on every keystroke, including the ones whose answer the ranking already
+        // knew. That shows up here and nowhere else, because it costs nothing that a
+        // correctness test can see.
+        assert!(worst_free < 3.0, "an already-answered query paid {worst_free:.1} ms to be counted");
+        // And the bounded extra a genuinely broad prefix does cost. Loose against the
+        // measurement, tight against the regression: the count is one pass over the same
+        // postings the ranking just read, so it cannot exceed the search it follows by much.
+        assert!(worst < 60.0, "counting added {worst:.1} ms to a keystroke");
     }
 }

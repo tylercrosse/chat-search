@@ -29,6 +29,12 @@ pub struct App {
     /// Corpus size, for the header's "shown / indexed". Read once: the index is rebuilt by a
     /// separate process, never mutated underneath us.
     pub indexed: i64,
+    /// How many conversations the current query selects, `limit` ignored — the header's
+    /// middle number.
+    ///
+    /// Written only by a search that succeeded, so a failed one leaves the previous count
+    /// beside the previous rows rather than claiming the query matched nothing.
+    pub matched: usize,
     /// Per-source counts for the facet bar, index-derived and sorted for a stable order.
     ///
     /// A configured source holding zero rows is absent here, which is exactly the gap
@@ -84,6 +90,7 @@ impl App {
         let mut app = App {
             conn,
             indexed,
+            matched: 0,
             facets,
             now: cs_core::now_ms(),
             cursor: query.chars().count(),
@@ -124,10 +131,13 @@ impl App {
         // conversation, so per keystroke this would pay for 150 snippets and draw none.
         // Measured at limit 50 on the 180k-message index, that is a further 4–21 ms on top of
         // the ranking; it was 11–35 ms before chat-search-6eb.30 batched the marking.
-        match cs_core::search_grouped(&self.conn, &query, &q) {
-            Ok(groups) => {
+        // Counted, because "100 shown" says nothing about whether there were 101 or 2,000 —
+        // and the count is free unless the ranking pass stopped at its own scan ceiling.
+        match cs_core::search_grouped_counted(&self.conn, &query, &q) {
+            Ok(found) => {
                 self.last_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                self.groups = groups;
+                self.matched = found.matched;
+                self.groups = found.groups;
                 self.status = None;
                 self.rows = rows::build(&self.groups, &self.expanded, !query.is_searchable());
                 // A query edit is a new question, so the cursor belongs on the best answer to
@@ -512,6 +522,37 @@ mod tests {
             app.insert_char(ch);
         }
         assert_eq!(app.selected, 0, "a query edit resets to the best answer");
+    }
+
+    #[test]
+    fn the_header_can_say_how_many_conversations_the_limit_hid() {
+        // Without this the two situations that matter most — a list that is the whole answer
+        // and a list that is the first page of a long one — draw the same screen.
+        let mut app = app_with(&[("c0", "alpha beta"), ("c1", "alpha gamma")]);
+        app.limit = 1;
+        for ch in "alpha".chars() {
+            app.insert_char(ch);
+        }
+        assert_eq!(app.groups.len(), 1, "one row, because that is all limit allows");
+        assert_eq!(app.matched, 2, "and the header can still say there were two");
+    }
+
+    #[test]
+    fn a_failed_search_leaves_the_count_beside_the_rows_it_describes() {
+        // The rows survive a failed search (`me9.5`), so the number describing them has to
+        // as well — a zero here would report "nothing matched" for a query never run.
+        let mut app = app_with(&[("c0", "alpha beta"), ("c1", "alpha gamma")]);
+        for ch in "alpha".chars() {
+            app.insert_char(ch);
+        }
+        let (rows, matched) = (app.groups.len(), app.matched);
+        assert_eq!(matched, 2, "precondition: a search that worked");
+
+        app.conn.execute_batch("DROP TABLE fts_prose").unwrap();
+        app.insert_char('x');
+        assert!(app.status.is_some(), "the search failed");
+        assert_eq!(app.groups.len(), rows, "and left the rows alone");
+        assert_eq!(app.matched, matched, "along with the count that describes them");
     }
 
     #[test]

@@ -74,12 +74,34 @@ the same screen — and "keep typing" and "you have seen everything" are opposit
 drawn from the same rows. `50 of 50 matched` states the complete case rather than going quiet,
 because a form that appears only sometimes makes the reader infer meaning from an absence.
 
-It is usually free: `search_grouped_counted` reads it off the ranking pass, which already
-visits every matching message unless it stops at its own `limit * 50` scan ceiling. Only a
-query broad enough to blow through that ceiling pays for a second pass — measured against the
-3,019-conversation corpus at `limit 50`, nothing at all for a real query (`borrow checker`
-0.2 ms either way) and +5 to +36 ms for a two-or-three letter prefix of a common word, which
-`chat-search-6eb.29` already puts over budget on its own. `search::count_cost` is the guard.
+**A keystroke never pays for it.** `search_grouped_counted` reads the total off the ranking
+pass, which already visits every matching message unless it stops at its own `limit * 50` scan
+ceiling — so every query narrow enough to finish typing is answered for free. The rest come
+back `Total::AtLeast`, and the header draws `50 of … matched` rather than the floor that
+carries: the floor is an artifact of where the scan stopped, about half the truth on this
+corpus, and a number that lands, is read, and then doubles is worse than one that never
+claimed to be ready.
+
+**`count_matching` settles it 250 ms after the last keystroke**, from the event loop, gated on
+there being anything to settle (`App::needs_count`). That timing is the whole design rather
+than a detail. Settling costs 5–36 ms against this corpus and only ever on a broad prefix —
+which is exactly a query on its way somewhere, whose total nobody is reading yet. Charging it
+per keystroke spent the milliseconds at the one moment they bought nothing; charging it to the
+pause spends them when the number is looked at. Measured at `limit 50`:
+
+```
+   search    +count   settle    total   query
+     0.2       0.2      0.0       37   borrow checker
+     9.9      10.0      5.5    …1583   ind
+    60.0      60.2     36.6    …3008   the
+```
+
+This is not the generation counting `me9.4` closed and ADR 14 rules out. There is no
+concurrency: the count runs on the event loop like everything else, and a keystroke arriving
+first replaces the whole state before it is reached. The wait is one `event::poll` timeout
+that exists only while a total is outstanding, so an idle TUI is still a process asleep in
+`read()` rather than one waking to redraw an unchanged screen. `search::count_cost` guards
+both halves — the keystroke at zero, the settle bounded.
 
 The corpus total sheds first when the line will not fit. It is the only one of the three that
 does not move as you type, and it is also the sum the facet bar is already showing.

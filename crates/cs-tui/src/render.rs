@@ -56,23 +56,32 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
 ///
 /// The corpus total goes first when the line will not fit. It is the only one of the three
 /// that does not move as you type, and a number that never changes is the one you stop reading.
-fn tally(shown: usize, matched: usize, indexed: i64, ms: f64, room: usize) -> String {
+fn tally(shown: usize, matched: cs_core::Total, indexed: i64, ms: f64, room: usize) -> String {
     let latency = format!("{ms:.1}ms");
     // `31 of 31` rather than a bare `31`, because "this is all of them" is the answer being
-    // asked for as much as "this is 100 of 1515 is" — and a form that appears only sometimes
+    // asked for as much as "this is 100 of 1515" — and a form that appears only sometimes
     // makes the reader infer meaning from what is missing.
     //
     // A query that selects the whole corpus — every blank one — is the exception: it would
     // otherwise print the same number twice and present it as two facts.
-    let full = if matched as i64 == indexed {
-        format!("{shown} of {indexed} indexed   {latency}")
-    } else {
-        format!("{shown} of {matched} matched / {indexed} indexed   {latency}")
+    let total = match matched {
+        cs_core::Total::Exact(n) if n as i64 == indexed => None,
+        cs_core::Total::Exact(n) => Some(n.to_string()),
+        // An unsettled total is drawn as unknown rather than as the floor `Total::AtLeast`
+        // carries. The floor is an artifact of where the scan stopped — about half the truth
+        // on this corpus — and a number that lands, is read, and then doubles is worse than
+        // one that never claimed to be ready. It resolves within `SETTLE` of the last
+        // keystroke, so this is what a broad prefix shows while it is still being typed.
+        cs_core::Total::AtLeast(_) => Some("…".to_string()),
+    };
+    let full = match &total {
+        None => format!("{shown} of {indexed} indexed   {latency}"),
+        Some(t) => format!("{shown} of {t} matched / {indexed} indexed   {latency}"),
     };
     if text::width(&full) <= room {
         return full;
     }
-    format!("{shown}/{matched}   {latency}")
+    format!("{shown}/{}   {latency}", total.unwrap_or_else(|| indexed.to_string()))
 }
 
 fn search(frame: &mut Frame, area: Rect, app: &App) {
@@ -524,10 +533,12 @@ mod tests {
         }
     }
 
+    use cs_core::Total;
+
     #[test]
     fn the_tally_names_the_conversations_the_limit_hid() {
         assert_eq!(
-            super::tally(100, 1515, 3019, 3.25, 80),
+            super::tally(100, Total::Exact(1515), 3019, 3.25, 80),
             "100 of 1515 matched / 3019 indexed   3.2ms"
         );
     }
@@ -536,13 +547,31 @@ mod tests {
     fn a_complete_result_set_says_so_rather_than_going_quiet() {
         // The whole point of the number is telling these two apart, so the case where nothing
         // was hidden has to state it — not leave the reader to notice an absence.
-        assert_eq!(super::tally(31, 31, 3019, 0.44, 80), "31 of 31 matched / 3019 indexed   0.4ms");
+        assert_eq!(
+            super::tally(31, Total::Exact(31), 3019, 0.44, 80),
+            "31 of 31 matched / 3019 indexed   0.4ms"
+        );
     }
 
     #[test]
     fn a_query_that_selects_the_whole_corpus_states_that_number_once() {
         // Which is every blank query, so this is the line the TUI opens on.
-        assert_eq!(super::tally(100, 3019, 3019, 3.25, 80), "100 of 3019 indexed   3.2ms");
+        assert_eq!(
+            super::tally(100, Total::Exact(3019), 3019, 3.25, 80),
+            "100 of 3019 indexed   3.2ms"
+        );
+    }
+
+    #[test]
+    fn a_total_nobody_has_established_yet_is_drawn_as_unknown() {
+        // Not as the floor it carries. That number is where the ranking scan stopped rather
+        // than a fact about the corpus, and on this corpus it runs about half the truth — so
+        // drawing it would put a wrong number on screen for as long as anyone kept typing,
+        // and then double it.
+        assert_eq!(
+            super::tally(50, Total::AtLeast(1338), 3019, 61.6, 80),
+            "50 of … matched / 3019 indexed   61.6ms"
+        );
     }
 
     #[test]
@@ -550,9 +579,12 @@ mod tests {
         // The corpus size is the only one of the three that does not move as you type, so it
         // is the one worth the least. Losing the latency instead — which is what clipping at
         // the right edge would do — costs the reading that says whether a slow query is slow.
-        let narrow = super::tally(100, 1515, 3019, 3.2, 24);
+        let narrow = super::tally(100, Total::Exact(1515), 3019, 3.2, 24);
         assert_eq!(narrow, "100/1515   3.2ms");
         assert!(text::width(&narrow) <= 24, "and it actually fits");
+
+        // And a blank query keeps a number rather than shedding down to `100/`.
+        assert_eq!(super::tally(100, Total::Exact(3019), 3019, 3.2, 24), "100/3019   3.2ms");
     }
 
     /// The renderer and the click handler both derive the top row from this. If they ever

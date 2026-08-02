@@ -897,13 +897,28 @@ pub fn search_grouped(
     best_of(conn, query, q, ranked)
 }
 
-/// A result set and how large it would have been without [`SearchOptions::limit`].
+/// How many conversations a query selects, as far as a search could tell for free.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Total {
+    /// The whole number. The pass that produced it saw every match, so nothing is missing.
+    Exact(usize),
+    /// At least this many, and how many more is not known: the ranking scan stopped at its
+    /// ceiling rather than at the end of the matches.
+    ///
+    /// The number carried is a floor and a poor one — it is the conversations the best few
+    /// thousand messages happened to come from, which on this corpus runs about half the
+    /// truth. It is here to be *ranged*, not displayed as though it were the answer.
+    /// [`count_matching`] settles it.
+    AtLeast(usize),
+}
+
+/// A result set and what the search learned about its true size on the way past.
 pub struct Counted {
     /// The conversations `limit` left room for, best-first.
     pub groups: Vec<Group>,
-    /// How many conversations the query selects in all. Never below `groups.len()`, and equal
-    /// to it whenever nothing was left out.
-    pub matched: usize,
+    /// Never below `groups.len()`, and [`Total::Exact`] with exactly that value whenever
+    /// nothing was left out.
+    pub matched: Total,
 }
 
 /// [`search_grouped`], and how many conversations it had to leave behind.
@@ -912,9 +927,13 @@ pub struct Counted {
 /// of a hundred and a hundred out of two thousand are the same hundred rows on screen, and only
 /// a number taken against the unlimited set says which one is being read.
 ///
-/// Usually free. The ranking pass already visits every matching message unless it stops at its
-/// own scan ceiling, so the count is a `len()` on what it returned; the extra query runs only
-/// when that ceiling truncated the scan and the answer is therefore genuinely unknown.
+/// **This never runs a second query.** Everything it can answer, it answers off work the
+/// ranking pass had to do anyway — which is every query narrow enough for the scan to reach the
+/// end of its matches, meaning every query anyone finishes typing. The rest come back
+/// [`Total::AtLeast`], for [`count_matching`] to settle whenever the caller judges the answer
+/// worth the second pass. In a typeahead client that judgement is "once the user stops typing":
+/// a broad prefix is the expensive case *and* the one whose total nobody is reading yet, so
+/// spending the milliseconds there is spending them at the one moment they buy nothing.
 pub fn search_grouped_counted(
     conn: &Connection,
     query: &Query,
@@ -922,17 +941,21 @@ pub fn search_grouped_counted(
 ) -> rusqlite::Result<Counted> {
     if !query.is_searchable() {
         let groups = recent(conn, query, q.now_ms, q.limit)?;
-        // Same rule as the ranked branch below: a short list is its own total, because
-        // `recent` stops for nothing but `limit`.
+        // Always exact, and always cheap enough to take here: this branch ranks nothing, so
+        // the count is a scan of `conversation` — thousands of rows, not the millions of
+        // postings a term matches. Nothing to defer.
         let matched = if (groups.len() as i64) < q.limit {
+            // Same rule as the ranked branch below: a short list is its own total, because
+            // `recent` stops for nothing but `limit`.
             groups.len()
         } else {
             count_filtered(conn, query, q.now_ms)?
         };
-        return Ok(Counted { groups, matched });
+        return Ok(Counted { groups, matched: Total::Exact(matched) });
     }
     let (ranked, truncated) = rank(conn, query, q)?;
-    let matched = if truncated { count_matching(conn, query, q)? } else { ranked.len() };
+    let matched =
+        if truncated { Total::AtLeast(ranked.len()) } else { Total::Exact(ranked.len()) };
     Ok(Counted { groups: best_of(conn, query, q, ranked)?, matched })
 }
 
@@ -949,11 +972,22 @@ fn best_of(
 
 /// How many conversations hold a message this query matches, `limit` ignored.
 ///
+/// What settles a [`Total::AtLeast`]. Call it when a search has come back unsettled and the
+/// answer is about to be read — it is a second pass over the postings the ranking just walked,
+/// which on this corpus is 5–36 ms for the broad prefixes that produce an unsettled total in
+/// the first place. Pass the same [`SearchOptions`] the search was given, `now_ms` included: a
+/// `date:` filter resolved against a different instant counts a different set of conversations
+/// than the one on screen.
+///
 /// The predicate is [`rank`]'s minus the scoring and the ceiling, and it has to stay that way:
 /// a count over any other set would describe a result list nobody is looking at. Nothing here
 /// touches `message.text`, so the cost is the posting list and the rowid lookups, not the
 /// widest column in the schema.
-fn count_matching(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::Result<usize> {
+pub fn count_matching(
+    conn: &Connection,
+    query: &Query,
+    q: &SearchOptions,
+) -> rusqlite::Result<usize> {
     let table = q.field.table();
     let mut binds =
         vec![Value::Text(query.match_expr()), Value::Integer(q.include_off_path as i64)];
@@ -1480,7 +1514,7 @@ mod group_tests {
         let q = SearchOptions { limit: 2, ..SearchOptions::new(NO_DECAY) };
         let counted = search_grouped_counted(&conn, &Query::exact("widget"), &q).unwrap();
         assert_eq!(counted.groups.len(), 2, "the page is what limit allows");
-        assert_eq!(counted.matched, 5, "the total is what the query selects");
+        assert_eq!(counted.matched, Total::Exact(5), "the total is what the query selects");
     }
 
     #[test]
@@ -1493,16 +1527,16 @@ mod group_tests {
         }
         let q = SearchOptions { limit: 50, ..SearchOptions::new(NO_DECAY) };
         let counted = search_grouped_counted(&conn, &Query::exact("widget"), &q).unwrap();
-        assert_eq!(counted.matched, counted.groups.len());
-        assert_eq!(counted.matched, 5);
+        assert_eq!(counted.matched, Total::Exact(counted.groups.len()));
+        assert_eq!(counted.matched, Total::Exact(5));
     }
 
     #[test]
-    fn the_total_outlives_the_ceiling_the_ranking_scan_stops_at() {
+    fn a_scan_that_stopped_at_its_ceiling_reports_a_floor_rather_than_inventing_a_total() {
         // The ranking pulls a bounded number of messages, so on a broad query the
         // conversations it saw are not the conversations that matched: 500 of these 600 are
-        // all it ever looks at. Counting what came back would publish the ceiling as though
-        // it were a fact about the corpus.
+        // all it ever looks at. Publishing that as the total would be publishing the ceiling
+        // as though it were a fact about the corpus.
         let conn = crate::open(":memory:").unwrap();
         for i in 0..600 {
             seed(&conn, &format!("c:{i:03}"), 1_000, &["widget"]);
@@ -1510,7 +1544,33 @@ mod group_tests {
         let q = SearchOptions { limit: 10, ..SearchOptions::new(NO_DECAY) };
         let counted = search_grouped_counted(&conn, &Query::exact("widget"), &q).unwrap();
         assert_eq!(counted.groups.len(), 10);
-        assert_eq!(counted.matched, 600, "every conversation that matched, not the 500 scanned");
+        let Total::AtLeast(floor) = counted.matched else {
+            panic!("a truncated scan cannot know the total: {:?}", counted.matched);
+        };
+        assert!(floor <= 500, "and what it does know is bounded by the scan: {floor}");
+
+        // Which the caller settles when it decides the answer is worth a second pass.
+        assert_eq!(
+            count_matching(&conn, &Query::exact("widget"), &q).unwrap(),
+            600,
+            "every conversation that matched, not the 500 the ranking scanned"
+        );
+    }
+
+    #[test]
+    fn searching_never_pays_for_a_total_it_was_not_handed() {
+        // The guarantee the TUI's keystroke path is built on: this call runs the ranking and
+        // nothing else. `count_cost` measures it; this states it, so a future edit that moves
+        // the count back inline fails here rather than only on someone's machine.
+        let conn = crate::open(":memory:").unwrap();
+        for i in 0..600 {
+            seed(&conn, &format!("c:{i:03}"), 1_000, &["widget"]);
+        }
+        let q = SearchOptions { limit: 10, ..SearchOptions::new(NO_DECAY) };
+        let plain = search_grouped(&conn, &Query::exact("widget"), &q).unwrap();
+        let counted = search_grouped_counted(&conn, &Query::exact("widget"), &q).unwrap();
+        let ids = |gs: &[Group]| gs.iter().map(|g| g.conv_id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&plain), ids(&counted.groups), "one ranking, two views of it");
     }
 
     #[test]
@@ -1524,7 +1584,9 @@ mod group_tests {
         let q = SearchOptions { limit: 2, ..SearchOptions::new(NO_DECAY) };
         let counted = search_grouped_counted(&conn, &Query::typeahead(""), &q).unwrap();
         assert_eq!(counted.groups.len(), 2);
-        assert_eq!(counted.matched, 5);
+        // Exact, and taken inline: this branch counts `conversation` rows rather than
+        // postings, so there is nothing here worth deferring.
+        assert_eq!(counted.matched, Total::Exact(5));
     }
 }
 
@@ -1707,7 +1769,7 @@ mod filter_tests {
         let q = SearchOptions { limit: 1, ..opts() };
         let counted = search_grouped_counted(&conn, &Query::exact("agent:codex"), &q).unwrap();
         assert_eq!(counted.groups.len(), 1, "the page is what limit allows");
-        assert_eq!(counted.matched, 2, "the codex half of a four-conversation corpus");
+        assert_eq!(counted.matched, Total::Exact(2), "the codex half of a four-conversation corpus");
     }
 
     #[test]
@@ -1941,13 +2003,13 @@ mod filter_cost {
     }
 }
 
-/// What the header's match total costs a keystroke, measured the same way and for the same
-/// reason as [`filter_cost`].
+/// What the header's match total costs, measured the same way and for the same reason as
+/// [`filter_cost`].
 ///
-/// The count is free whenever the ranking pass saw every matching message, so the terms below
-/// are chosen to straddle that line: a real query stays inside the scan ceiling and pays
-/// nothing, while a two-or-three letter prefix of a common word blows through it and pays for
-/// a second pass over the postings.
+/// Two quantities, and the split between them is the design. A keystroke must pay *nothing* —
+/// [`search_grouped_counted`] answers off the ranking pass or not at all. Settling what it
+/// could not answer is a second pass over the postings, and that cost is real; it is charged
+/// to the pause after typing instead, where the number is actually read.
 #[cfg(test)]
 mod count_cost {
     use super::*;
@@ -1983,32 +2045,44 @@ mod count_cost {
                 .fold(f64::INFINITY, f64::min)
         };
 
-        let (mut worst, mut worst_free) = (0.0f64, 0.0f64);
+        // What settling costs, for the queries that need it. Charged to the pause, not here.
+        let settle = |text: &str| {
+            let query = Query::typeahead(text);
+            (0..7)
+                .map(|_| {
+                    let t0 = std::time::Instant::now();
+                    std::hint::black_box(count_matching(&conn, &query, &opts()).unwrap());
+                    t0.elapsed().as_secs_f64() * 1000.0
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+
+        let (mut keystroke, mut pause) = (0.0f64, 0.0f64);
+        println!("   search    +count   settle    total   query");
         // The blank query first: it is the frame the TUI opens on, and it takes the branch
         // that ranks nothing, so it is the one place a count could go wrong for free.
         for text in ["", "borrow checker", "fts", "ind", "rus", "tes", "con", "the"] {
             let (plain, with) = (cost(text, false), cost(text, true));
-            let total = search_grouped_counted(&conn, &Query::typeahead(text), &opts())
-                .unwrap()
-                .matched;
-            println!("{plain:8.1} ms  ->{with:8.1} ms   {total:>5} matched   {text}");
-            worst = worst.max(with - plain);
-            // These three match a small enough slice of the corpus that the scan reaches the
-            // end of the matches rather than the ceiling — so the answer was already in hand
-            // and the count is a `len()`.
-            if matches!(text, "" | "borrow checker" | "fts") {
-                worst_free = worst_free.max(with - plain);
-            }
+            let counted = search_grouped_counted(&conn, &Query::typeahead(text), &opts()).unwrap();
+            let (mark, later) = match counted.matched {
+                Total::Exact(n) => (n.to_string(), 0.0),
+                Total::AtLeast(_) => {
+                    let settled =
+                        count_matching(&conn, &Query::typeahead(text), &opts()).unwrap();
+                    (format!("…{settled}"), settle(text))
+                }
+            };
+            println!("{plain:8.1} {with:9.1} {later:8.1} {mark:>8}   {text}");
+            keystroke = keystroke.max(with - plain);
+            pause = pause.max(later);
         }
-        println!("worst counting overhead: {worst:.1} ms (free cases: {worst_free:.1} ms)");
-        // The failure this guards is the count going unconditional — a second pass over the
-        // postings on every keystroke, including the ones whose answer the ranking already
-        // knew. That shows up here and nowhere else, because it costs nothing that a
-        // correctness test can see.
-        assert!(worst_free < 3.0, "an already-answered query paid {worst_free:.1} ms to be counted");
-        // And the bounded extra a genuinely broad prefix does cost. Loose against the
-        // measurement, tight against the regression: the count is one pass over the same
-        // postings the ranking just read, so it cannot exceed the search it follows by much.
-        assert!(worst < 60.0, "counting added {worst:.1} ms to a keystroke");
+        println!("worst keystroke overhead: {keystroke:.1} ms; worst settle: {pause:.1} ms");
+        // The invariant the whole split exists to hold: a keystroke pays for the ranking and
+        // nothing else, whatever the query. This is the only place an inline count would show
+        // up — it costs nothing a correctness test can see.
+        assert!(keystroke < 3.0, "a keystroke paid {keystroke:.1} ms towards a total");
+        // And the deferred half stays bounded: it is one pass over the postings the ranking
+        // just walked, so it cannot run away from the search that precedes it.
+        assert!(pause < 60.0, "settling a total took {pause:.1} ms");
     }
 }

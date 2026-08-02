@@ -32,9 +32,12 @@ pub struct App {
     /// How many conversations the current query selects, `limit` ignored — the header's
     /// middle number.
     ///
+    /// [`cs_core::Total::AtLeast`] while a broad query's real total is still unknown; the
+    /// event loop settles it once typing stops ([`App::settle_count`]).
+    ///
     /// Written only by a search that succeeded, so a failed one leaves the previous count
     /// beside the previous rows rather than claiming the query matched nothing.
-    pub matched: usize,
+    pub matched: cs_core::Total,
     /// Per-source counts for the facet bar, index-derived and sorted for a stable order.
     ///
     /// A configured source holding zero rows is absent here, which is exactly the gap
@@ -90,7 +93,7 @@ impl App {
         let mut app = App {
             conn,
             indexed,
-            matched: 0,
+            matched: cs_core::Total::Exact(0),
             facets,
             now: cs_core::now_ms(),
             cursor: query.chars().count(),
@@ -124,15 +127,16 @@ impl App {
         // force a branch it would have taken anyway — and that rewrite is what made
         // `rows::build` see a different answer here than in `rebuild_rows`.
         let query = self.parsed();
-        let q = cs_core::SearchOptions { limit: self.limit, ..cs_core::SearchOptions::new(self.now) };
+        let q = self.options();
         // `nested = 0`: no snippets. Building one means tokenizing the whole message, because
         // the highlighter has to agree with the ranker about which words matched
         // (chat-search-6eb.20) — and the row model draws hits only for an expanded
         // conversation, so per keystroke this would pay for 150 snippets and draw none.
         // Measured at limit 50 on the 180k-message index, that is a further 4–21 ms on top of
         // the ranking; it was 11–35 ms before chat-search-6eb.30 batched the marking.
-        // Counted, because "100 shown" says nothing about whether there were 101 or 2,000 —
-        // and the count is free unless the ranking pass stopped at its own scan ceiling.
+        // Counted, because "50 shown" says nothing about whether there were 51 or 2,000. This
+        // call never pays for that number: it reports what the ranking pass could see for
+        // free and leaves the rest to `settle_count`, off the keystroke.
         match cs_core::search_grouped_counted(&self.conn, &query, &q) {
             Ok(found) => {
                 self.last_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -152,6 +156,50 @@ impl App {
             }
             Err(e) => self.status = Some(format!("search failed: {e}")),
         }
+    }
+
+    /// How this session searches. One place, because [`App::settle_count`] has to count the
+    /// set [`App::search`] ranked and not one resembling it — `now_ms` included, since a
+    /// `date:` filter resolved against a second instant selects a second set of conversations.
+    fn options(&self) -> cs_core::SearchOptions {
+        cs_core::SearchOptions { limit: self.limit, ..cs_core::SearchOptions::new(self.now) }
+    }
+
+    /// Whether the header is still showing a total nobody has established.
+    ///
+    /// True only after a query broad enough for the ranking scan to stop at its ceiling, which
+    /// in practice means a two-or-three letter prefix of a common word — a query on its way
+    /// somewhere, not one anybody is reading the total of.
+    pub fn needs_count(&self) -> bool {
+        matches!(self.matched, cs_core::Total::AtLeast(_))
+    }
+
+    /// Establish the total the search declined to pay for. Returns whether it now has one.
+    ///
+    /// Called when the user has stopped typing, which is the whole point: the count costs
+    /// 5–36 ms on exactly the broad prefixes that produce an unsettled total, and those are
+    /// exactly the queries whose total is worth nothing while it is still being typed. Moving
+    /// it here spends the milliseconds at the one moment the number is read instead.
+    ///
+    /// This is not the generation-counting `me9.4` closed and ADR 14 rules out. There is no
+    /// concurrency to get wrong: the count runs on the event loop like everything else, from
+    /// the query and clock the last search used, and a keystroke arriving first simply
+    /// replaces the whole state before this is ever reached.
+    ///
+    /// A failure leaves the total unsettled and says nothing. The floor on screen is still
+    /// true, the rows it describes are still there, and the loop blocks for the next event
+    /// rather than retrying — so a broken index costs one query per keystroke, not a spin.
+    pub fn settle_count(&mut self) -> bool {
+        if !self.needs_count() {
+            return false;
+        }
+        let Ok(total) = cs_core::count_matching(&self.conn, &self.parsed(), &self.options()) else {
+            return false;
+        };
+        // True even when the number equals the floor it replaces: the header was drawing the
+        // unsettled marker, not the floor, so every success is a change on screen.
+        self.matched = cs_core::Total::Exact(total);
+        true
     }
 
     /// Rebuild the row vector without re-querying, keeping the cursor on `previous`.
@@ -534,7 +582,35 @@ mod tests {
             app.insert_char(ch);
         }
         assert_eq!(app.groups.len(), 1, "one row, because that is all limit allows");
-        assert_eq!(app.matched, 2, "and the header can still say there were two");
+        assert_eq!(app.matched, cs_core::Total::Exact(2), "and the header can still say two");
+        assert!(!app.needs_count(), "settled by the search itself, at no cost");
+    }
+
+    #[test]
+    fn a_total_the_search_could_not_settle_is_left_for_the_idle_moment() {
+        // The scan stops at `limit * 50` messages but never below 500, so reaching it takes
+        // both a low limit and a corpus wider than that floor. The search must then come back
+        // saying it does not know, rather than paying 5–36 ms mid-keystroke to find out.
+        let convs: Vec<(String, &str)> = (0..600).map(|i| (format!("c{i:03}"), "alpha")).collect();
+        let pairs: Vec<(&str, &str)> = convs.iter().map(|(i, t)| (i.as_str(), *t)).collect();
+        let mut app = app_with(&pairs);
+        app.limit = 10;
+        for ch in "alpha".chars() {
+            app.insert_char(ch);
+        }
+
+        assert!(app.needs_count(), "the ranking scan stopped short, so the total is unknown");
+        assert!(
+            matches!(app.matched, cs_core::Total::AtLeast(n) if n < 600),
+            "and what it does hold is a floor, not the answer: {:?}",
+            app.matched
+        );
+
+        // What the event loop does once the keyboard goes quiet.
+        assert!(app.settle_count(), "settling reports that the header now has a number");
+        assert_eq!(app.matched, cs_core::Total::Exact(600));
+        assert!(!app.needs_count(), "and does not ask to run again");
+        assert!(!app.settle_count(), "nor does a second call find anything to do");
     }
 
     #[test]
@@ -546,7 +622,7 @@ mod tests {
             app.insert_char(ch);
         }
         let (rows, matched) = (app.groups.len(), app.matched);
-        assert_eq!(matched, 2, "precondition: a search that worked");
+        assert_eq!(matched, cs_core::Total::Exact(2), "precondition: a search that worked");
 
         app.conn.execute_batch("DROP TABLE fts_prose").unwrap();
         app.insert_char('x');

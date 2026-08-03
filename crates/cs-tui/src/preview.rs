@@ -75,6 +75,23 @@ impl Block {
     pub fn drawn(&self) -> bool {
         self.kind != "tool_result" || self.is_error
     }
+
+    /// Which layer-3 style a match inside this block is entitled to.
+    ///
+    /// Everything drawn here gets marked, because marking runs over a scratch table that
+    /// indexes whatever text it is handed and knows nothing about the corpus index. For most
+    /// kinds those two agree. For one they do not: a `reasoning` block carries no postings
+    /// (`Kind::is_indexed`), so a word highlighted in it is a word `cs search` will not find
+    /// and `cs explain` reports zero hits for. Drawing that in `match_hl` states that the
+    /// match is why the conversation is on screen, which it cannot be.
+    ///
+    /// Derived from `Kind::ALL` rather than testing for `"reasoning"`, so this answer follows
+    /// the indexing rule instead of restating a snapshot of it (chat-search-8mb).
+    fn mark_style(&self, theme: &Theme) -> Style {
+        let unranked =
+            cs_core::Kind::ALL.iter().any(|k| !k.is_indexed() && k.as_str() == self.kind);
+        if unranked { theme.match_unranked } else { theme.match_hl }
+    }
 }
 
 pub struct Preview {
@@ -414,7 +431,7 @@ impl Preview {
                         // repeated on every wrapped row, which is what keeps a long paragraph
                         // and a fenced block visually distinct all the way down.
                         let marks = rebase(&block.marks, at, raw.len(), 0);
-                        let body = text::marked_runs(raw, &marks, base, theme.match_hl);
+                        let body = text::marked_runs(raw, &marks, base, block.mark_style(theme));
                         for wrapped in wrap_body(indent.clone(), body, theme, width) {
                             out.push(Row::body(i, wrapped));
                         }
@@ -528,7 +545,7 @@ fn collapsed_runs(block: &Block, theme: &Theme) -> Vec<Span<'static>> {
             (format!("{sigil}{line}"), marks, Style::new())
         }
     };
-    text::marked_runs(&body, &marks, style, theme.match_hl)
+    text::marked_runs(&body, &marks, style, block.mark_style(theme))
 }
 
 /// Marks rebased from `block.text` onto a line lifted out of it at `at`, then shifted by the
@@ -1055,14 +1072,24 @@ mod tests {
 
     /// The text of a rendered line, with the marked runs wrapped in brackets — the only way to
     /// assert *what* got highlighted rather than merely that something did.
+    ///
+    /// `[word]` is a ranked match and `<word>` one the ranker never saw, because those are two
+    /// different claims and a test that could not tell them apart would pass either way
+    /// (chat-search-8mb).
     fn marks_of(line: &Line<'static>, theme: &Theme) -> String {
+        let has = |s: &Span<'static>, m: ratatui::style::Modifier| {
+            !m.is_empty() && s.style.add_modifier.contains(m)
+        };
         line.spans
             .iter()
             .map(|s| {
-                let hit = s.style.add_modifier.contains(
-                    theme.match_hl.add_modifier,
-                ) && !theme.match_hl.add_modifier.is_empty();
-                if hit { format!("[{}]", s.content) } else { s.content.to_string() }
+                if has(s, theme.match_hl.add_modifier) {
+                    format!("[{}]", s.content)
+                } else if has(s, theme.match_unranked.add_modifier) {
+                    format!("<{}>", s.content)
+                } else {
+                    s.content.to_string()
+                }
             })
             .collect()
     }
@@ -1098,7 +1125,59 @@ mod tests {
         let rendered: Vec<String> =
             p.lines(&theme, 80).iter().map(|l| marks_of(l, &theme)).collect();
         assert!(rendered[0].contains("ask about the [borrow] checker"), "{rendered:?}");
-        assert!(rendered[1].contains("thinking about [borrow] rules"), "{rendered:?}");
+        // Angle brackets: the reasoning line is marked in the same place, but as a match the
+        // ranker never saw. See `a_match_in_reasoning_is_not_dressed_as_a_reason_it_ranked`.
+        assert!(rendered[1].contains("thinking about <borrow> rules"), "{rendered:?}");
+    }
+
+    #[test]
+    fn a_match_in_reasoning_is_not_dressed_as_a_reason_it_ranked() {
+        // chat-search-8mb. Reasoning carries no postings, so a word highlighted here is a word
+        // `cs search` will not return this conversation for and `cs explain` reports zero hits
+        // for. Marking it exactly like a prose hit says the opposite, and says it in the one
+        // place the user has gone to check.
+        let theme = Theme::plain();
+        let p = preview(vec![
+            marked("prose", "user", "a", "ask about the borrow checker", "borrow"),
+            marked("reasoning", "assistant", "b", "the borrow rules again", "borrow"),
+        ]);
+        let rendered: Vec<String> =
+            p.lines(&theme, 80).iter().map(|l| marks_of(l, &theme)).collect();
+        let all = rendered.join("\n");
+        assert!(all.contains("[borrow]"), "the prose hit still marks as ranked: {rendered:?}");
+        assert!(all.contains("<borrow>"), "the reasoning hit still marks: {rendered:?}");
+        assert!(
+            !all.contains("[borrow] rules"),
+            "the reasoning hit must not claim the loud mark: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn the_two_mark_styles_are_told_apart_by_something_a_monochrome_terminal_renders() {
+        // The distinction is worthless if it is carried by colour alone: `NO_COLOR` and
+        // `TERM=dumb` get `Theme::plain`, and that is exactly where a reader most needs to know
+        // which of the two they are looking at.
+        let plain = Theme::plain();
+        assert_ne!(plain.match_hl.add_modifier, plain.match_unranked.add_modifier);
+        assert!(!plain.match_unranked.add_modifier.is_empty(), "it has to render as something");
+        assert!(
+            !plain.match_hl.add_modifier.contains(plain.match_unranked.add_modifier),
+            "neither may be mistaken for the other by a `contains` test"
+        );
+        assert!(!plain.match_unranked.add_modifier.contains(plain.match_hl.add_modifier));
+    }
+
+    #[test]
+    fn which_kinds_mark_quietly_follows_the_indexing_rule_rather_than_a_copy_of_it() {
+        // If `Kind::is_indexed` changes its mind, this changes with it. A `== "reasoning"`
+        // test here would be a second copy of that rule, quietly drifting from the first.
+        let theme = Theme::plain();
+        for kind in cs_core::Kind::ALL {
+            let b = marked(kind.as_str(), "assistant", "a", "the borrow rules", "borrow");
+            let expected =
+                if kind.is_indexed() { theme.match_hl } else { theme.match_unranked };
+            assert_eq!(b.mark_style(&theme), expected, "{kind:?}");
+        }
     }
 
     #[test]

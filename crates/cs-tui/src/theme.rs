@@ -34,6 +34,19 @@ pub struct Theme {
     pub header: Style,
     /// Layer 3. Applied over whatever the underlying span was.
     pub match_hl: Style,
+    /// Layer 3 for a match in a message the ranker never saw (chat-search-8mb).
+    ///
+    /// The preview marks every block it draws, through a scratch table that indexes whatever
+    /// text it is handed — so it happily highlights a word inside a `reasoning` block, which
+    /// [`cs_core::Kind::is_indexed`] excludes from the corpus index. Drawn in `match_hl` that
+    /// is a claim the conversation cannot honour: the same word makes `cs explain` report zero
+    /// hits and makes `cs search` return nothing.
+    ///
+    /// A different *channel* rather than a weaker `match_hl`, because the two are not degrees
+    /// of the same thing. Underline instead of reverse video: still unmistakably a mark, still
+    /// present on a monochrome terminal, and it neither takes BOLD nor subtracts DIM — so
+    /// inside the dim reasoning block it stays as quiet as the text it belongs to.
+    pub match_unranked: Style,
 }
 
 impl Theme {
@@ -95,6 +108,10 @@ impl Theme {
                 .fg(Color::Blue)
                 .add_modifier(Modifier::REVERSED | Modifier::BOLD)
                 .remove_modifier(Modifier::DIM),
+            // Uncoloured on purpose. A hue here would put it back in competition with the
+            // layer-3 bar it is meant to be distinguishable from, and the underline already
+            // carries the whole message.
+            match_unranked: Style::new().add_modifier(Modifier::UNDERLINED),
         }
     }
 
@@ -123,6 +140,10 @@ impl Theme {
             match_hl: Style::new()
                 .add_modifier(Modifier::REVERSED | Modifier::BOLD)
                 .remove_modifier(Modifier::DIM),
+            // Already colourless in `indexed`, so it survives the strip unchanged — and
+            // underline is one of the attributes a monochrome terminal still renders, which is
+            // the whole reason this slot uses it.
+            match_unranked: Style::new().add_modifier(Modifier::UNDERLINED),
         }
     }
 
@@ -268,8 +289,18 @@ mod tests {
     ///
     /// Destructured exhaustively on purpose: a field added to [`Theme`] without being added
     /// here fails to compile, rather than quietly escaping every rule enforced below.
-    fn slots(theme: Theme) -> [(&'static str, Style); 8] {
-        let Theme { accent, border, dim, warning, error, selected, header, match_hl } = theme;
+    fn slots(theme: Theme) -> [(&'static str, Style); 9] {
+        let Theme {
+            accent,
+            border,
+            dim,
+            warning,
+            error,
+            selected,
+            header,
+            match_hl,
+            match_unranked,
+        } = theme;
         [
             ("accent", accent),
             ("border", border),
@@ -279,6 +310,7 @@ mod tests {
             ("selected", selected),
             ("header", header),
             ("match_hl", match_hl),
+            ("match_unranked", match_unranked),
         ]
     }
 

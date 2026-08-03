@@ -74,7 +74,10 @@ docs/               vocabulary, decisions, architecture, backlog
    building the same thing twice caught.
 4. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit. Draft, and derived from
    the decision log rather than authoritative over it.
-5. [docs/BACKLOG.md](docs/BACKLOG.md) — deferred work and the MVP definition.
+5. [docs/INGESTION.html](docs/INGESTION.html) — the ingestion and index path stage by stage,
+   which sources have archivers, and what each one contributes to the index. Open it in a
+   browser; every figure is measured rather than asserted.
+6. [docs/BACKLOG.md](docs/BACKLOG.md) — deferred work and the MVP definition.
 
 ## Three ideas worth knowing before reading the code
 

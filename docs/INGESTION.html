@@ -1,0 +1,1054 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chat-search · the ingestion and index path</title>
+<style>
+/* ───────────────────────────────────────────────────────────────────────────
+   chat-search · ingestion & index path
+
+   Colour carries meaning here, not decoration:
+     ochre  = durable. Cannot be rebuilt from anything. (archive, manifest, query log)
+     steel  = derived. `rm` it and run `cs index`.       (index.db, FTS, every column)
+
+   The categorical series palette was checked with the dataviz validator against
+   both surfaces below. Dark passes every gate; light warns sub-3:1 on three
+   slots, so every chart ships direct labels AND a full table — the relief rule.
+   ─────────────────────────────────────────────────────────────────────────── */
+:root {
+  color-scheme: light;
+
+  --paper:        #f7f3ea;
+  --surface-1:    #faf6ed;
+  --surface-2:    #f1ebdd;
+  --rule:         #ded4c0;
+  --rule-strong:  #b9ab90;
+
+  --ink:          #17150f;
+  --ink-2:        #4c463a;
+  --ink-3:        #7a7263;
+
+  --ochre:        #9a6b16;
+  --ochre-bg:     #f0e3c8;
+  --steel:        #1f6b86;
+  --steel-bg:     #dcebf0;
+  --alarm:        #a33227;
+  --alarm-bg:     #f6e2de;
+
+  --s1: #2a78d6;  /* codex          */
+  --s2: #eb6834;  /* claude-code    */
+  --s3: #1baf7a;  /* chatgpt-export */
+  --s4: #eda100;  /* gemini-cli     */
+
+  --font-display: "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-mono: "SF Mono", SFMono-Regular, ui-monospace, "JetBrains Mono", "IBM Plex Mono", Menlo, Consolas, monospace;
+
+  --grain: .022;
+  --blend: multiply;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --paper:       #101216;
+    --surface-1:   #16181d;
+    --surface-2:   #1c1f26;
+    --rule:        #2c313b;
+    --rule-strong: #4a515e;
+    --ink:         #f2efe6;
+    --ink-2:       #b9b5a9;
+    --ink-3:       #837f74;
+    --ochre:       #d9a441;
+    --ochre-bg:    #2e2617;
+    --steel:       #5fb6d4;
+    --steel-bg:    #14262e;
+    --alarm:       #e0705f;
+    --alarm-bg:    #2c1815;
+    --s1: #3987e5;
+    --s2: #d95926;
+    --s3: #199e70;
+    --s4: #c98500;
+    --grain: .04;
+    --blend: screen;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper:       #101216;
+  --surface-1:   #16181d;
+  --surface-2:   #1c1f26;
+  --rule:        #2c313b;
+  --rule-strong: #4a515e;
+  --ink:         #f2efe6;
+  --ink-2:       #b9b5a9;
+  --ink-3:       #837f74;
+  --ochre:       #d9a441;
+  --ochre-bg:    #2e2617;
+  --steel:       #5fb6d4;
+  --steel-bg:    #14262e;
+  --alarm:       #e0705f;
+  --alarm-bg:    #2c1815;
+  --s1: #3987e5;
+  --s2: #d95926;
+  --s3: #199e70;
+  --s4: #c98500;
+  --grain: .04;
+  --blend: screen;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 17px;
+  line-height: 1.62;
+  overflow-x: hidden;
+}
+/* Paper grain — pure CSS, no asset, no network. */
+body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 100;
+  opacity: var(--grain); mix-blend-mode: var(--blend);
+  background-image:
+    repeating-linear-gradient(0deg,  #000 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, #000 0 1px, transparent 1px 3px);
+}
+
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px 120px; }
+
+/* ── masthead ─────────────────────────────────────────────────────────── */
+.masthead { padding: 64px 0 34px; border-bottom: 3px double var(--rule-strong); }
+.eyebrow {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .22em;
+  text-transform: uppercase; color: var(--ink-3); margin: 0 0 20px;
+}
+h1 {
+  font-size: clamp(34px, 6.2vw, 62px); line-height: 1.02; margin: 0 0 18px;
+  font-weight: 400; letter-spacing: -.02em; max-width: 16ch;
+}
+h1 em { font-style: italic; color: var(--ochre); }
+.standfirst { font-size: clamp(17px, 2.1vw, 20px); color: var(--ink-2); max-width: 62ch; margin: 0; }
+.dateline {
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3);
+  margin-top: 26px; display: flex; flex-wrap: wrap; gap: 8px 20px;
+}
+
+/* ── section furniture ────────────────────────────────────────────────── */
+section { margin-top: 76px; scroll-margin-top: 24px; }
+.sec-head { display: flex; align-items: baseline; gap: 16px; border-bottom: 1px solid var(--rule); padding-bottom: 10px; margin-bottom: 28px; }
+.sec-num { font-family: var(--font-mono); font-size: 12px; color: var(--ochre); letter-spacing: .1em; flex: none; }
+h2 { font-size: clamp(23px, 3.2vw, 31px); font-weight: 400; margin: 0; letter-spacing: -.015em; }
+h3 { font-size: 19px; font-weight: 400; margin: 40px 0 12px; letter-spacing: -.01em; }
+h3 .tag, h4 .tag {
+  font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; margin-left: 10px; vertical-align: middle;
+  padding: 2px 7px; border-radius: 2px; border: 1px solid var(--rule);
+  background: var(--surface-2); color: var(--ink-3);
+}
+h4 .tag[data-kind="durable"] { background: var(--ochre-bg); border-color: var(--ochre); color: var(--ochre); }
+h4 .tag[data-kind="derived"] { background: var(--steel-bg); border-color: var(--steel); color: var(--steel); }
+p { margin: 0 0 16px; max-width: 74ch; }
+a { color: var(--steel); text-underline-offset: 3px; }
+code, .mono { font-family: var(--font-mono); font-size: .855em; }
+p code, li code, td code, th code, .note code {
+  background: var(--surface-2); border: 1px solid var(--rule);
+  padding: .08em .36em; border-radius: 3px; white-space: nowrap;
+}
+ul { max-width: 74ch; padding-left: 1.1em; }
+li { margin-bottom: 9px; }
+
+/* ── KPI row ──────────────────────────────────────────────────────────── */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin: 34px 0 0; }
+.kpi { background: var(--surface-1); padding: 20px 18px; }
+.kpi .v { font-family: var(--font-mono); font-size: clamp(23px, 3.2vw, 31px); line-height: 1; letter-spacing: -.03em; display: block; }
+.kpi .l { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-top: 10px; display: block; }
+.kpi .n { font-size: 13.5px; color: var(--ink-2); margin-top: 7px; display: block; line-height: 1.45; }
+.kpi.durable .v { color: var(--ochre); }
+.kpi.derived .v { color: var(--steel); }
+
+/* ── pipeline ─────────────────────────────────────────────────────────── */
+.flow { margin: 30px 0 8px; }
+.stage { display: grid; grid-template-columns: 92px 1fr; gap: 22px; align-items: start; padding: 22px 0; border-top: 1px solid var(--rule); }
+.stage:last-child { border-bottom: 1px solid var(--rule); }
+.stage-key { font-family: var(--font-mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); padding-top: 4px; }
+.stage-key b { display: block; font-size: 26px; font-weight: 400; color: var(--rule-strong); letter-spacing: -.02em; margin-bottom: 4px; }
+.stage-body h4 { margin: 0 0 6px; font-size: 19px; font-weight: 400; }
+.stage-body p { margin: 0 0 10px; font-size: 15.5px; color: var(--ink-2); }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+.chip {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .04em;
+  padding: 3px 9px; border-radius: 2px; border: 1px solid var(--rule);
+  background: var(--surface-2); color: var(--ink-2); white-space: nowrap;
+}
+.chip.durable { background: var(--ochre-bg); border-color: var(--ochre); color: var(--ochre); }
+.chip.derived { background: var(--steel-bg); border-color: var(--steel); color: var(--steel); }
+
+/* ── callouts ─────────────────────────────────────────────────────────── */
+.note {
+  border-left: 3px solid var(--rule-strong); background: var(--surface-1);
+  padding: 16px 20px; margin: 26px 0; font-size: 15.5px; max-width: 82ch;
+}
+.note.durable { border-left-color: var(--ochre); background: var(--ochre-bg); }
+.note.derived { border-left-color: var(--steel); background: var(--steel-bg); }
+.note.alarm   { border-left-color: var(--alarm); background: var(--alarm-bg); }
+.note p { margin: 0 0 10px; } .note p:last-child { margin: 0; }
+.note .h { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); display: block; margin-bottom: 8px; }
+
+/* ── tables ───────────────────────────────────────────────────────────── */
+.scroller { overflow-x: auto; margin: 24px 0; border: 1px solid var(--rule); background: var(--surface-1); }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 14px; }
+caption { text-align: left; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); padding: 14px 16px 0; }
+th, td { text-align: left; padding: 9px 16px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+thead th { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); font-weight: 400; border-bottom: 1px solid var(--rule-strong); white-space: nowrap; }
+tbody tr:last-child td { border-bottom: none; }
+td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.mono { white-space: nowrap; }
+table.wide { min-width: 940px; }
+.src-name { white-space: nowrap; }
+tbody tr:hover td { background: var(--surface-2); }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 8px; vertical-align: baseline; }
+.yes { color: var(--ochre); font-family: var(--font-mono); font-size: 12px; }
+.no  { color: var(--ink-3); font-family: var(--font-mono); font-size: 12px; }
+.bad { color: var(--alarm); font-family: var(--font-mono); font-size: 12px; }
+
+/* ── charts ───────────────────────────────────────────────────────────── */
+.figure { margin: 34px 0 10px; }
+.fig-title { font-size: 17px; margin: 0 0 4px; font-weight: 400; }
+.fig-sub { font-size: 13.5px; color: var(--ink-3); margin: 0 0 18px; max-width: 74ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin-bottom: 14px; }
+.legend span { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); display: flex; align-items: center; }
+
+.stackbar { display: flex; width: 100%; height: 46px; background: var(--surface-2); border: 1px solid var(--rule); }
+.seg { position: relative; cursor: default; transition: filter .16s ease; }
+/* 2px surface gap between adjacent fills — a spacer, not a border */
+.seg + .seg { box-shadow: -2px 0 0 0 var(--surface-1); }
+.seg:hover { filter: brightness(1.14); }
+.stackbar .seg:first-child { border-radius: 3px 0 0 3px; }
+.stackbar .seg:last-child  { border-radius: 0 3px 3px 0; }
+.seg-labels { display: flex; width: 100%; margin-top: 7px; }
+.seg-label { font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); overflow: hidden; white-space: nowrap; padding-right: 6px; }
+.seg-label b { font-weight: 400; color: var(--ink); display: block; }
+/* A sliver segment still has to carry its own number — it is the series most
+   likely to be misread as zero. Give the label a floor width and let the wide
+   labels, which have slack to spare, absorb the few pixels. */
+.seg-label.tiny { color: var(--ink-3); min-width: min(96px, 25vw); flex-shrink: 0; }
+
+.bars { display: grid; gap: 10px; margin-top: 6px; }
+.bar-row { display: grid; grid-template-columns: minmax(96px, 130px) 1fr minmax(104px, auto); gap: 14px; align-items: center; }
+.bar-name { font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); text-align: right; overflow: hidden; text-overflow: ellipsis; }
+.bar-track { background: var(--surface-2); height: 22px; border-radius: 3px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 0 4px 4px 0; min-width: 2px; transition: filter .16s ease; }
+.bar-fill:hover { filter: brightness(1.14); }
+.bar-val { font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink); }
+.bar-val small { color: var(--ink-3); }
+
+#tip {
+  position: fixed; z-index: 200; pointer-events: none; opacity: 0;
+  transition: opacity .12s ease; background: var(--ink); color: var(--paper);
+  font-family: var(--font-mono); font-size: 11.5px; line-height: 1.5;
+  padding: 7px 10px; border-radius: 4px; max-width: 260px;
+  box-shadow: 0 4px 16px rgba(0,0,0,.28);
+}
+
+/* ── theme toggle ─────────────────────────────────────────────────────── */
+#theme {
+  position: fixed; top: 16px; right: 16px; z-index: 150;
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .1em;
+  text-transform: uppercase; background: var(--surface-1); color: var(--ink-2);
+  border: 1px solid var(--rule); border-radius: 3px; padding: 7px 11px; cursor: pointer;
+}
+#theme:hover { border-color: var(--rule-strong); color: var(--ink); }
+
+footer { margin-top: 84px; padding-top: 22px; border-top: 3px double var(--rule-strong); font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); }
+footer p { max-width: 78ch; margin-bottom: 8px; }
+
+@media (max-width: 620px) {
+  body { font-size: 16px; }
+  .wrap { padding: 0 18px 80px; }
+  .stage { grid-template-columns: 1fr; gap: 10px; }
+  .stage-key { display: flex; align-items: baseline; gap: 10px; padding-top: 0; }
+  .stage-key b { font-size: 19px; margin: 0; }
+  .bar-row { grid-template-columns: 1fr; gap: 4px; }
+  .bar-name { text-align: left; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<button id="theme" type="button" aria-label="Toggle colour theme">theme</button>
+<div id="tip" role="status" aria-live="polite"></div>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">chat-search · docs</p>
+  <h1>How a transcript becomes a <em>searchable</em> row</h1>
+  <p class="standfirst">
+    Five stages run between a coding agent appending a line to a log file and that line coming
+    back out of <code>cs search</code>. The seam that matters sits in the middle: everything
+    left of the archive is captured and never interpreted, everything right of it is derived
+    and can be thrown away. This page walks the path, names the archivers that exist today,
+    and measures what each one actually contributes to the index.
+  </p>
+  <p class="dateline">
+    <span>measured 2026-08-01</span>
+    <span>importer version 4</span>
+    <span>3,035 conversations</span>
+    <span>archive 2.36 GiB</span>
+    <span>index 317.0 MiB</span>
+  </p>
+</header>
+
+<div class="kpis">
+  <div class="kpi durable">
+    <span class="v">2.36 GiB</span>
+    <span class="l">raw archive</span>
+    <span class="n">1,183 files across 4 sources. Immutable, append-only.</span>
+  </div>
+  <div class="kpi derived">
+    <span class="v">317.0 MiB</span>
+    <span class="l">index.db</span>
+    <span class="n">Disposable. <code>rm</code> and rebuild in ~9 s.</span>
+  </div>
+  <div class="kpi">
+    <span class="v">3,035</span>
+    <span class="l">conversations</span>
+    <span class="n">181,521 messages, 43,119 of them prose.</span>
+  </div>
+  <div class="kpi">
+    <span class="v">4 / 6</span>
+    <span class="l">sources live</span>
+    <span class="n">One configured but uncaptured, one importer with no source.</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="pipeline">
+  <div class="sec-head"><span class="sec-num">01</span><h2>The path, end to end</h2></div>
+
+  <p>
+    The straight line is source → archive → importer → index → client. Each stage is allowed to
+    know strictly less than you would expect, and that is the design: the archiver never parses
+    content, and the importer never touches the filesystem. Those two restrictions are what make
+    it possible to re-parse three years of transcripts against a better parser without
+    re-collecting a byte.
+  </p>
+
+  <div class="flow">
+    <div class="stage">
+      <div class="stage-key"><b>1</b>sources</div>
+      <div class="stage-body">
+        <h4>Live, mutating files on disk</h4>
+        <p>
+          Agent CLIs append to their own transcript logs as they run. A source is defined as a
+          <em>watched location</em> — a path plus a glob — never as a product or a surface
+          (ADR 16). That is precisely the definition a server-side chat cannot satisfy, which is
+          why claude.ai and ChatGPT-on-the-web are dark here until something lands their bytes
+          in a watched directory (ADR 21).
+        </p>
+        <div class="chips">
+          <span class="chip">~/.codex/sessions</span>
+          <span class="chip">~/.claude/projects</span>
+          <span class="chip">~/.gemini/tmp</span>
+          <span class="chip">chatgpt export dir</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-key"><b>2</b>capture</div>
+      <div class="stage-body">
+        <h4><code>cs archive</code> — copies bytes, reads nothing</h4>
+        <p>
+          Scan each watched location and classify every file against the last observation:
+          <b>unchanged</b> (size and mtime match — not even hashed), <b>new</b>,
+          <b>appended</b> (grew with its first 64 KiB hashing the same), <b>rewritten</b>
+          (prefix changed or the file shrank), <b>vanished</b>. Only the middle three copy
+          anything. On APFS the copy is a <code>clonefile</code> reflink, so capturing a gigabyte
+          costs almost no additional disk until the two sides diverge.
+        </p>
+        <div class="chips">
+          <span class="chip">64 KiB prefix hash</span>
+          <span class="chip">clonefile / FICLONE</span>
+          <span class="chip">rewritten → _superseded/</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-key"><b>3</b>archive</div>
+      <div class="stage-body">
+        <h4>The raw archive and its manifest <span class="tag" data-kind="durable">durable</span></h4>
+        <p>
+          Bytes land at
+          <code>&lt;root&gt;/raw/&lt;machine&gt;/&lt;source&gt;/&lt;rel_path&gt;</code>,
+          mirroring the source tree. Alongside them, an append-only JSONL event log records every
+          observation. The manifest holds the two facts nothing else can reconstruct — when a
+          file was <em>first</em> seen, and when it <em>vanished</em> — which is exactly why it
+          lives in the archive and not in the index (ADR 19).
+        </p>
+        <div class="chips">
+          <span class="chip durable">raw/ · immutable</span>
+          <span class="chip durable">manifest/*.jsonl</span>
+          <span class="chip durable">1,693 events</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-key"><b>4</b>import</div>
+      <div class="stage-body">
+        <h4>One module per <em>format</em>, pure over bytes</h4>
+        <p>
+          An importer is a function of <code>(logical_path, bytes)</code> and nothing else. No
+          database, no network, no reading a sibling file. It mints conversation identity,
+          collects title candidates, and emits normalized <code>Conversation</code> records
+          carrying a message DAG — parent edges and thread keys, not a flat list (ADR 4).
+        </p>
+        <div class="chips">
+          <span class="chip">codex.rs</span>
+          <span class="chip">claude_code.rs</span>
+          <span class="chip">chatgpt_export.rs</span>
+          <span class="chip">gemini.rs</span>
+          <span class="chip">claude_desktop.rs</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="stage-key"><b>5</b>index</div>
+      <div class="stage-body">
+        <h4><code>cs index</code> — always a full rebuild <span class="tag" data-kind="derived">derived</span></h4>
+        <p>
+          The database file is deleted, not emptied, then rewritten from scratch in one
+          transaction per source. Conversations fold together on their id; messages insert
+          <code>OR IGNORE</code>; tool text is clipped to 1 KiB on the way in; postings go into
+          one of two separate FTS5 tables. There are no migrations, because every column is a
+          pure function of (archive, importer version).
+        </p>
+        <div class="chips">
+          <span class="chip derived">index.db</span>
+          <span class="chip derived">fts_prose</span>
+          <span class="chip derived">fts_tools</span>
+          <span class="chip derived">~9 s full rebuild</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="note durable">
+    <span class="h">The invariant the whole shape rests on</span>
+    <p>
+      Every column in <code>index.db</code> must be a pure function of (archive, importer
+      version). That is what makes <code>rm index.db &amp;&amp; cs index</code> a valid answer to
+      <em>any</em> schema change, and why the codebase has no migration path at all. Anything
+      authored rather than derived — stars, notes, renames, the query log — belongs in a
+      different file (ADR 1, ADR 3).
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="sources">
+  <div class="sec-head"><span class="sec-num">02</span><h2>Which sources have archivers</h2></div>
+
+  <p>
+    Six sources exist in some form. Four are fully wired — configured, captured, imported, and
+    present in the index. The other two each fail at a different stage, and the distinction
+    matters because they need opposite fixes.
+  </p>
+
+  <div class="scroller">
+    <table>
+      <caption>Source coverage · config.toml against crates/cs-import</caption>
+      <thead>
+        <tr>
+          <th>Source id</th><th>Watched location</th><th>Layout</th>
+          <th>Archiver</th><th>Importer</th><th class="num">Files</th><th class="num">In index</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="swatch" style="background:var(--s1)"></span><code>codex</code></td>
+          <td><code>~/.codex/sessions</code></td><td>mirror</td>
+          <td class="yes">✓ live</td><td class="yes">✓ codex.rs</td>
+          <td class="num">696</td><td class="num">655 convs</td>
+        </tr>
+        <tr>
+          <td><span class="swatch" style="background:var(--s2)"></span><code>claude-code</code></td>
+          <td><code>~/.claude/projects</code></td><td>mirror</td>
+          <td class="yes">✓ live</td><td class="yes">✓ claude_code.rs</td>
+          <td class="num">432</td><td class="num">357 convs</td>
+        </tr>
+        <tr>
+          <td><span class="swatch" style="background:var(--s3)"></span><code>chatgpt-export</code></td>
+          <td>manual export, unpacked</td><td>mirror</td>
+          <td class="yes">✓ live</td><td class="yes">✓ chatgpt_export.rs</td>
+          <td class="num">21</td><td class="num">2,011 convs</td>
+        </tr>
+        <tr>
+          <td><span class="swatch" style="background:var(--s4)"></span><code>gemini-cli</code></td>
+          <td><code>~/.gemini/tmp</code></td><td>mirror</td>
+          <td class="yes">✓ live</td><td class="yes">✓ gemini.rs</td>
+          <td class="num">34</td><td class="num">12 convs</td>
+        </tr>
+        <tr>
+          <td><code>opencode</code></td>
+          <td><code>~/.local/share/opencode/storage</code></td><td>bundle</td>
+          <td class="bad">✗ bundle layout not implemented</td><td class="bad">✗ none</td>
+          <td class="num">0</td><td class="num">0</td>
+        </tr>
+        <tr>
+          <td><code>claude-desktop</code></td>
+          <td class="no">not configured</td><td>—</td>
+          <td class="bad">✗ no source entry</td><td class="yes">✓ claude_desktop.rs</td>
+          <td class="num">0</td><td class="num">0</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3>The two that do not reach the index</h3>
+  <ul>
+    <li>
+      <b>OpenCode is a capture problem.</b> It is configured with <code>layout = "bundle"</code>,
+      and bundle capture has never been written, so the archiver walks past it. The reason it
+      needs its own layout is scale: OpenCode stores roughly 170,000 fragment files averaging
+      under 4 KB across <code>session/</code>, <code>message/</code> and <code>part/</code>.
+      Mirroring that 1:1 means re-walking 170k paths on every scan (ADR 18). Usefully,
+      <code>cs index</code> prints the source with its reason rather than omitting it.
+    </li>
+    <li>
+      <b>Claude Desktop is the mirror image — a config problem.</b> The importer exists and
+      works: it reads the Cowork and Chat tabs' local sessions, where one session is two files
+      (a <code>.json</code> carrying the title and model, an <code>audit.jsonl</code> carrying
+      the messages) that fold together on a shared native id. There is simply no
+      <code>[[sources]]</code> block pointing at it. Aiming the existing <code>claude-code</code>
+      glob at that directory is the tempting shortcut and is wrong — the files parse, but land
+      under the wrong source id, carrying a <code>claude --resume</code> command that cannot
+      reopen a desktop session, and without titles. A test pins that, because the failure looks
+      like success.
+    </li>
+  </ul>
+
+  <div class="note">
+    <span class="h">Still dark, and no archiver can fix it</span>
+    <p>
+      claude.ai, ChatGPT on the web, and Gemini on the web keep conversations server-side. They
+      have no path, so under ADR 16 they cannot be sources at all. The accepted route is a
+      fetcher that materializes export-shaped files <em>into</em> a watched directory — which
+      keeps the archiver and the importers offline and pure — rather than network code inside
+      either one (ADR 21). ChatGPT's local store is AES-256-GCM behind a Keychain access group
+      and is not readable by anyone but OpenAI.
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="proportions">
+  <div class="sec-head"><span class="sec-num">03</span><h2>Proportion of the index</h2></div>
+
+  <p>
+    Which source dominates depends entirely on what you count, and the answer inverts between
+    the first two charts. ChatGPT supplies two thirds of the <em>conversations</em> and one
+    twelfth of the <em>messages</em>; Codex does almost exactly the reverse. Neither figure is
+    wrong — they are measuring a web chat against an agent session, and an agent session here
+    runs about twenty-five times longer.
+  </p>
+
+  <div class="legend">
+    <span><span class="swatch" style="background:var(--s1)"></span>codex</span>
+    <span><span class="swatch" style="background:var(--s2)"></span>claude-code</span>
+    <span><span class="swatch" style="background:var(--s3)"></span>chatgpt-export</span>
+    <span><span class="swatch" style="background:var(--s4)"></span>gemini-cli</span>
+  </div>
+
+  <div class="figure">
+    <p class="fig-title">Conversations — 3,035 rows</p>
+    <p class="fig-sub">One row per distinct conversation id, after folding re-delivered snapshots and multi-file threads together.</p>
+    <div class="stackbar" id="bar-convs"></div>
+    <div class="seg-labels" id="lab-convs"></div>
+  </div>
+
+  <div class="figure">
+    <p class="fig-title">Messages — 181,521 rows</p>
+    <p class="fig-sub">Every message of every kind. The inversion against the chart above is the whole story of this corpus.</p>
+    <div class="stackbar" id="bar-msgs"></div>
+    <div class="seg-labels" id="lab-msgs"></div>
+  </div>
+
+  <div class="figure">
+    <p class="fig-title">Prose messages — 43,119 rows</p>
+    <p class="fig-sub">What <code>cs search</code> actually queries by default. The three real sources land within 22 points of each other.</p>
+    <div class="stackbar" id="bar-prose"></div>
+    <div class="seg-labels" id="lab-prose"></div>
+  </div>
+
+  <div class="figure">
+    <p class="fig-title">Archive bytes on disk — 2,415.3 MiB</p>
+    <p class="fig-sub">What capture costs, which tracks neither of the counts above.</p>
+    <div class="stackbar" id="bar-bytes"></div>
+    <div class="seg-labels" id="lab-bytes"></div>
+  </div>
+
+  <h3>The same four sources, four ways <span class="tag">table view</span></h3>
+  <div class="scroller">
+    <table class="wide">
+      <caption>Per-source contribution · measured on a full rebuild, 2026-08-01</caption>
+      <thead>
+        <tr>
+          <th>Source</th>
+          <th class="num">Convs</th><th class="num">%</th>
+          <th class="num">Messages</th><th class="num">%</th>
+          <th class="num">Prose</th><th class="num">%</th>
+          <th class="num">Msgs/conv</th>
+          <th class="num">Archive</th>
+          <th>Coverage</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="src-name"><span class="swatch" style="background:var(--s1)"></span>codex</td>
+          <td class="num">655</td><td class="num">21.6%</td>
+          <td class="num">119,290</td><td class="num">65.7%</td>
+          <td class="num">20,299</td><td class="num">47.1%</td>
+          <td class="num">182.1</td>
+          <td class="num">1,757.2 MiB</td>
+          <td class="mono">2025-09-15 → 2026-08-01</td>
+        </tr>
+        <tr>
+          <td class="src-name"><span class="swatch" style="background:var(--s2)"></span>claude-code</td>
+          <td class="num">357</td><td class="num">11.8%</td>
+          <td class="num">47,721</td><td class="num">26.3%</td>
+          <td class="num">11,618</td><td class="num">26.9%</td>
+          <td class="num">133.7</td>
+          <td class="num">398.7 MiB</td>
+          <td class="mono">2026-06-17 → 2026-08-01</td>
+        </tr>
+        <tr>
+          <td class="src-name"><span class="swatch" style="background:var(--s3)"></span>chatgpt-export</td>
+          <td class="num">2,011</td><td class="num">66.3%</td>
+          <td class="num">14,390</td><td class="num">7.9%</td>
+          <td class="num">11,082</td><td class="num">25.7%</td>
+          <td class="num">7.2</td>
+          <td class="num">83.6 MiB</td>
+          <td class="mono">2023-01-30 → 2026-07-15</td>
+        </tr>
+        <tr>
+          <td class="src-name"><span class="swatch" style="background:var(--s4)"></span>gemini-cli</td>
+          <td class="num">12</td><td class="num">0.4%</td>
+          <td class="num">120</td><td class="num">0.07%</td>
+          <td class="num">120</td><td class="num">0.3%</td>
+          <td class="num">10.0</td>
+          <td class="num">175.8 MiB</td>
+          <td class="mono">2025-10-19 → 2026-02-24</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note alarm">
+    <span class="h">Two numbers in that table are worth stopping on</span>
+    <p>
+      <b>gemini-cli costs 175.8 MiB to contribute 120 messages.</b> Of its 34 archived files, 15
+      are chat sessions and 15 are <code>checkpoints/</code> — and the checkpoints are 175.5 MiB
+      of the total, six of them 29 MiB apiece. The source's glob is <code>**/*.json</code> over
+      <code>~/.gemini/tmp</code>, which sweeps up state snapshots containing no conversation at
+      all. That is 7.3% of the entire archive buying 0.07% of the index.
+    </p>
+    <p>
+      <b>claude-code's coverage starts 2026-06-17</b>, not because that is when it was first
+      used, but because Claude Code auto-deleted transcripts after 30 days until retention was
+      raised. Everything earlier is gone upstream and unrecoverable — an archive can only ever
+      be as old as its first capture.
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="shape">
+  <div class="sec-head"><span class="sec-num">04</span><h2>What the index holds, and what it searches</h2></div>
+
+  <p>
+    Every message carries a <code>kind</code>, and kind decides everything downstream: how much
+    text is stored, which FTS table gets the posting, and whether a query can reach it at all.
+    Tool traffic is 68.3% of the rows and would flatten BM25 if it shared a table with prose, so
+    it gets its own (ADR 5).
+  </p>
+
+  <div class="figure">
+    <p class="fig-title">Rows by kind — 181,521 messages</p>
+    <p class="fig-sub">Tool calls and results together are more than two thirds of the index by row count.</p>
+    <div class="bars" id="bars-kind"></div>
+  </div>
+
+  <div class="figure">
+    <p class="fig-title">Stored text by kind — 105.6 MiB after clipping</p>
+    <p class="fig-sub">Prose is under a quarter of the rows but 42% of the stored bytes, because tool text is truncated and prose is not.</p>
+    <div class="bars" id="bars-bytes"></div>
+  </div>
+
+  <h3>Tool text is clipped on the way in</h3>
+  <p>
+    Tool output was dominating the database — 201 MB of <code>tool_result</code> and 40 MB of
+    <code>tool_call</code> against 41 MB of prose. All of it is reproducible from the archive, so
+    by ADR 1 none of it strictly has to be stored. But the <em>head</em> of a tool call earns its
+    keep: it holds the tool name and the start of its arguments, which is what makes "which
+    conversation ran <code>cargo build</code>" an answerable question.
+  </p>
+  <p>
+    So <code>TOOL_TEXT_MAX</code> is 1 KiB, applied before insert rather than at query time — the
+    bytes never reach the database, and the FTS index only ever sees what is stored. Measured on
+    this corpus that truncates <b>13.1% of tool calls and 44.7% of tool results</b>. Truncation
+    is marked in the text rather than silent, because a quietly shortened result reads as "the
+    tool returned little", which is a different and more misleading claim than "there is more in
+    the archive".
+  </p>
+
+  <div class="scroller">
+    <table>
+      <caption>Kind → storage → searchability</caption>
+      <thead>
+        <tr><th>Kind</th><th class="num">Rows</th><th class="num">% rows</th><th class="num">Stored text</th><th class="num">Clipped</th><th>FTS postings</th><th>Reachable by</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>tool_call</code></td><td class="num">62,499</td><td class="num">34.4%</td><td class="num">21.7 MiB</td><td class="num">13.1%</td><td class="mono">fts_tools</td><td class="mono">--tools</td></tr>
+        <tr><td><code>tool_result</code></td><td class="num">61,535</td><td class="num">33.9%</td><td class="num">36.7 MiB</td><td class="num">44.7%</td><td class="mono">fts_tools</td><td class="mono">--tools</td></tr>
+        <tr><td><code>prose</code></td><td class="num">43,119</td><td class="num">23.8%</td><td class="num">44.5 MiB</td><td class="no">—</td><td class="mono">fts_prose</td><td class="mono">default</td></tr>
+        <tr><td><code>reasoning</code></td><td class="num">14,368</td><td class="num">7.9%</td><td class="num">2.5 MiB</td><td class="no">—</td><td class="bad">none</td><td class="bad">nothing</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note">
+    <span class="h">Reasoning is stored and deliberately not indexed</span>
+    <p>
+      The posting counts confirm it exactly: 43,119 prose postings plus 124,034 tool postings is
+      167,153, against 181,521 messages. The 14,368-row difference is precisely the reasoning
+      count. Those rows sit in <code>message</code> with their full text and carry no posting in
+      either FTS table.
+    </p>
+    <p>
+      This is a decision, not an oversight, and it was measured before it was made: across 28
+      real logged queries the recall gain from indexing reasoning is <em>exactly zero</em>,
+      because reasoning discusses work that also appears in prose. What it would add is process
+      boilerplate — "preparing" 186 times, "summarizing" 169, "verifying" 155 — placed directly
+      in BM25's way, which is the ADR 5 hazard the two-table split exists to avoid.
+    </p>
+    <p>
+      What remains open (<code>chat-search-8mb</code>) is not an indexing job but an honesty one:
+      <code>cs search</code> will not return a conversation whose only hit is in reasoning, while
+      <code>cs explain</code> reports <code>exists: true</code> for the same term, and the
+      preview surface renders reasoning happily. Two surfaces disagree about whether something
+      matched, and neither admits it.
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="writepath">
+  <div class="sec-head"><span class="sec-num">05</span><h2>Inside the index write</h2></div>
+
+  <p>
+    <code>cs index</code> opens a fresh database — the file is deleted rather than emptied,
+    because <code>DELETE FROM</code> on a contentless FTS5 table fails once it holds rows, and
+    <code>CREATE TABLE IF NOT EXISTS</code> will not add a column a newer schema introduced.
+    Then, one source at a time, it reads every archived file, runs the matching importer, and
+    writes the result in a single transaction. Accumulating per source rather than across all of
+    them keeps peak memory at the largest source instead of the whole corpus.
+  </p>
+
+  <h3>Four behaviours worth knowing</h3>
+  <ul>
+    <li>
+      <b>Conversations merge; they do not overwrite.</b> The upsert is <code>COALESCE</code>-based,
+      so a conversation assembled from several transcript files keeps whichever file carried the
+      title, cwd or model (ADR 7). This rebuild folded <b>95 conversations</b> that arrived more
+      than once and skipped <b>605 duplicate messages</b>. A re-downloaded ChatGPT export
+      re-delivers every conversation in the previous one; counting importer <em>output</em>
+      rather than rows written once reported 4,022 conversations for a corpus of 2,011 — the
+      dedup it looked like a failure of was working correctly the whole time.
+    </li>
+    <li>
+      <b>A conversation is a DAG.</b> Messages carry a parent edge and an explicit thread key.
+      After insert, <code>on_head_path</code> is computed by walking parents back from each
+      <em>thread's</em> leaf — per thread, not just from the conversation head, because a
+      subagent thread runs parallel to the main one rather than being an abandoned branch. What
+      it does catch is a superseded sibling from an edit-branch.
+    </li>
+    <li>
+      <b>The FTS tables are external content over <code>message</code>.</b> They store postings
+      only and read text back by rowid, so this is the same bytes on disk as a contentless table
+      — but fts5's <code>highlight()</code> becomes usable directly, where previously every
+      message to be marked had to be re-inserted into a scratch table first. The consequence to
+      remember when writing queries: an unconstrained scan of <code>fts_prose</code> returns
+      every row of <code>message</code>. Only a <code>MATCH</code> consults the index.
+    </li>
+    <li>
+      <b>A source that contributes nothing still gets a row in the report.</b> Skipping it
+      silently is how 2,011 ChatGPT conversations went missing from a run that reported success —
+      an absent row reads as "no such source", which is indistinguishable from "nothing archived
+      yet".
+    </li>
+  </ul>
+
+  <h3>Where the 317 MiB goes</h3>
+  <div class="figure">
+    <div class="bars" id="bars-pages"></div>
+  </div>
+  <p>
+    The <code>message</code> table is 62% of the file and its four indexes another 25%. The FTS
+    postings — the thing the database exists for — are 39.5 MiB, or 12.5%. Storing message text
+    at all is a convenience for snippets and highlighting rather than a requirement: every byte
+    of it is reproducible from the archive.
+  </p>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="manifest">
+  <div class="sec-head"><span class="sec-num">06</span><h2>The manifest, and what capture has seen</h2></div>
+
+  <p>
+    Change detection is a fold over an append-only event log, one file per month, stored inside
+    the archive. It merges by concatenation, which is what makes it safe to sync across machines
+    — a SQLite file in the same role is the corruption path the project explicitly avoids.
+    Current state is derived; the log is the truth.
+  </p>
+
+  <div class="scroller">
+    <table>
+      <caption>Manifest events to date · 1,693 total</caption>
+      <thead><tr><th>Source</th><th class="num">seen</th><th class="num">appended</th><th class="num">rewritten</th><th class="num">vanished</th></tr></thead>
+      <tbody>
+        <tr><td><code>codex</code></td><td class="num">696</td><td class="num">21</td><td class="num">0</td><td class="num">0</td></tr>
+        <tr><td><code>claude-code</code></td><td class="num">432</td><td class="num">485</td><td class="num">0</td><td class="num">4</td></tr>
+        <tr><td><code>gemini-cli</code></td><td class="num">34</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+        <tr><td><code>chatgpt-export</code></td><td class="num">21</td><td class="num">0</td><td class="num">0</td><td class="num">0</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>
+    No file has been rewritten yet, so <code>_superseded/</code> does not exist on disk. The
+    append counts are the shape you would expect: claude-code transcripts are written to
+    continuously, codex files are mostly closed by the time they are first seen, and both export
+    sources are write-once.
+  </p>
+
+  <div class="note alarm">
+    <span class="h">One edge of this is drawn but not wired</span>
+    <p>
+      Four claude-code files have vanished upstream. The tombstone column
+      (<code>deleted_upstream_at</code>) exists in the schema for exactly this, but the fold from
+      manifest into the index has not been built — so a vanished file's conversation currently
+      looks identical to a live one. Deletion is meant to keep the data and make forgetting
+      explicit (ADR 9); today it keeps the data and says nothing.
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="rules">
+  <div class="sec-head"><span class="sec-num">07</span><h2>The rules, in one place</h2></div>
+
+  <div class="scroller">
+    <table>
+      <caption>Load-bearing decisions · docs/DECISIONS.md</caption>
+      <thead><tr><th>#</th><th>Rule</th><th>What it buys</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">1</td><td>Raw archive is the source of truth; the index is disposable</td><td>Any schema change is answered by <code>rm index.db</code>. No migrations exist.</td></tr>
+        <tr><td class="mono">3</td><td>Authored data lives in a different file from derived data</td><td>Rebuilding cannot destroy a rename, a star, or the query log.</td></tr>
+        <tr><td class="mono">4</td><td>A conversation is a DAG, not a list</td><td>Edit-branches and subagent threads survive import instead of being flattened.</td></tr>
+        <tr><td class="mono">5</td><td>Prose is indexed separately from tool traffic</td><td>68% of rows cannot drown BM25 for the 24% anyone actually searches.</td></tr>
+        <tr><td class="mono">7</td><td>Determinism rules for importers</td><td>One conversation split across many files assembles the same way every run.</td></tr>
+        <tr><td class="mono">9</td><td>Deletion keeps data; forgetting is explicit</td><td>Upstream pruning cannot silently shrink the corpus. <span class="bad">(fold not wired)</span></td></tr>
+        <tr><td class="mono">16</td><td>A source is the watched location, never the surface</td><td>Ids stay permanent when a vendor renames its product or ships a new client.</td></tr>
+        <tr><td class="mono">18</td><td>Mirror whole-file sources, bundle fragmented ones</td><td>170k OpenCode fragments do not get walked 1:1 on every scan.</td></tr>
+        <tr><td class="mono">19</td><td>Manifest is an append-only event log inside the archive</td><td><code>first_seen</code> and <code>vanished</code> are observations, so they cannot live in a disposable file.</td></tr>
+        <tr><td class="mono">20</td><td>Archive compression and storage location</td><td>~1 GB/month of growth against 17 GB free is a 14-month runway.</td></tr>
+        <tr><td class="mono">21</td><td>Server-side sources are fetched into the archive, never into the index</td><td>Network code never enters an importer, so retroactive reparse stays possible.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note derived">
+    <span class="h">The one-line version</span>
+    <p>
+      Capture bytes without understanding them; understand them without touching the disk; store
+      the understanding somewhere you are willing to delete. Everything else in this document
+      follows from those three.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <p>
+    Every figure on this page was measured on 2026-08-01 from a full <code>cs index</code>
+    rebuild at importer version 4 — counts and byte sums queried from the resulting database,
+    archive sizes from <code>stat</code> over <code>raw/</code>, event counts folded from
+    <code>manifest/*.jsonl</code>. ADR numbers refer to <code>docs/DECISIONS.md</code>.
+  </p>
+  <p>
+    The corpus grows while you read: this page's own session is being captured into
+    <code>claude-code</code>. Regenerate with <code>cs index --json</code> and the SQL in this
+    file's source. Categorical palette validated for CVD separation and contrast in both themes.
+  </p>
+</footer>
+
+</div>
+
+<script type="module">
+/* ── theme toggle ─────────────────────────────────────────────────────── */
+const root = document.documentElement;
+document.getElementById('theme').addEventListener('click', () => {
+  const osDark = matchMedia('(prefers-color-scheme: dark)').matches;
+  const cur = root.dataset.theme || (osDark ? 'dark' : 'light');
+  root.dataset.theme = cur === 'dark' ? 'light' : 'dark';
+});
+
+/* ── tooltip ──────────────────────────────────────────────────────────── */
+const tip = document.getElementById('tip');
+function bindTip(el, lines) {
+  el.addEventListener('pointerenter', () => {
+    tip.replaceChildren();                       // build by DOM, never innerHTML
+    lines.filter(Boolean).forEach((t, i) => {
+      if (i) tip.appendChild(document.createElement('br'));
+      const node = i === 0 ? document.createElement('b') : document.createTextNode(t);
+      if (i === 0) { node.textContent = t; }
+      tip.appendChild(node);
+    });
+    tip.style.opacity = '1';
+  });
+  el.addEventListener('pointermove', e => {
+    const pad = 14;
+    let x = e.clientX + pad, y = e.clientY + pad;
+    const r = tip.getBoundingClientRect();
+    if (x + r.width  > innerWidth  - 8) x = e.clientX - r.width  - pad;
+    if (y + r.height > innerHeight - 8) y = e.clientY - r.height - pad;
+    tip.style.left = x + 'px'; tip.style.top = y + 'px';
+  });
+  el.addEventListener('pointerleave', () => { tip.style.opacity = '0'; });
+}
+
+const fmt = n => n.toLocaleString('en-US');
+const pct = (n, t) => n / t * 100;
+const show = (n, dec) => dec ? n.toFixed(dec) : fmt(n);
+
+/* Colour follows the entity, in a fixed order — never rank, never cycled.
+   The same four hues mean the same four sources in every chart on the page. */
+const SOURCES = [
+  { key: 'codex',          label: 'codex',          v: 'var(--s1)' },
+  { key: 'claude-code',    label: 'claude-code',    v: 'var(--s2)' },
+  { key: 'chatgpt-export', label: 'chatgpt-export', v: 'var(--s3)' },
+  { key: 'gemini-cli',     label: 'gemini-cli',     v: 'var(--s4)' },
+];
+
+const DATA = {
+  convs: { total: 3035,   unit: 'conversations',  vals: { 'codex': 655, 'claude-code': 357, 'chatgpt-export': 2011, 'gemini-cli': 12 } },
+  msgs:  { total: 181521, unit: 'messages',       vals: { 'codex': 119290, 'claude-code': 47721, 'chatgpt-export': 14390, 'gemini-cli': 120 } },
+  prose: { total: 43119,  unit: 'prose messages', vals: { 'codex': 20299, 'claude-code': 11618, 'chatgpt-export': 11082, 'gemini-cli': 120 } },
+  bytes: { total: 2415.3, unit: 'MiB archived',   vals: { 'codex': 1757.2, 'claude-code': 398.7, 'chatgpt-export': 83.6, 'gemini-cli': 175.8 }, dec: 1 },
+};
+
+function stackbar(barId, labId, spec) {
+  const bar = document.getElementById(barId);
+  const lab = document.getElementById(labId);
+  for (const s of SOURCES) {
+    const n = spec.vals[s.key];
+    const p = pct(n, spec.total);
+
+    const seg = document.createElement('div');
+    seg.className = 'seg';
+    seg.style.flex = `0 0 ${p}%`;
+    seg.style.background = s.v;
+    bindTip(seg, [
+      s.label,
+      `${show(n, spec.dec)} ${spec.unit}`,
+      `${p.toFixed(p < 1 ? 2 : 1)}% of ${show(spec.total, spec.dec)}`,
+    ]);
+    bar.appendChild(seg);
+
+    /* Direct labels on every segment: the relief rule for the light-mode
+       sub-3:1 slots, and mandatory anyway at four categorical series. */
+    const l = document.createElement('div');
+    l.className = 'seg-label' + (p < 8 ? ' tiny' : '');
+    l.style.flex = `0 0 ${p}%`;
+    const strong = document.createElement('b');
+    strong.textContent = p.toFixed(p < 1 ? 2 : 1) + '%';
+    l.appendChild(strong);
+    if (p >= 4) l.appendChild(document.createTextNode(s.label));
+    l.title = `${s.label} — ${show(n, spec.dec)} ${spec.unit}`;
+    lab.appendChild(l);
+  }
+}
+
+stackbar('bar-convs', 'lab-convs', DATA.convs);
+stackbar('bar-msgs',  'lab-msgs',  DATA.msgs);
+stackbar('bar-prose', 'lab-prose', DATA.prose);
+stackbar('bar-bytes', 'lab-bytes', DATA.bytes);
+
+/* The kind charts use emphasis rather than a second categorical scale: what is
+   searched by default carries the accent and everything else recedes. Reusing
+   the source hues here would imply a relationship that does not exist. */
+function barchart(id, rows, unit, dec) {
+  const host = document.getElementById(id);
+  const max = Math.max(...rows.map(r => r.n));
+  const total = rows.reduce((a, r) => a + r.n, 0);
+  for (const r of rows) {
+    const row = document.createElement('div');
+    row.className = 'bar-row';
+
+    const name = document.createElement('div');
+    name.className = 'bar-name';
+    name.textContent = r.label;
+
+    const track = document.createElement('div');
+    track.className = 'bar-track';
+    const fill = document.createElement('div');
+    fill.className = 'bar-fill';
+    fill.style.width = (r.n / max * 100) + '%';
+    fill.style.background = r.color;
+    bindTip(fill, [r.label, `${show(r.n, dec)} ${unit}`, `${pct(r.n, total).toFixed(1)}% of total`, r.note]);
+    track.appendChild(fill);
+
+    const val = document.createElement('div');
+    val.className = 'bar-val';
+    val.appendChild(document.createTextNode(show(r.n, dec) + ' '));
+    const small = document.createElement('small');
+    small.textContent = pct(r.n, total).toFixed(1) + '%';
+    val.appendChild(small);
+
+    row.append(name, track, val);
+    host.appendChild(row);
+  }
+}
+
+const ACCENT = 'var(--steel)', MUTE = 'var(--rule-strong)', WARN = 'var(--alarm)';
+
+barchart('bars-kind', [
+  { label: 'tool_call',   n: 62499, color: MUTE,   note: 'clipped to 1 KiB · fts_tools' },
+  { label: 'tool_result', n: 61535, color: MUTE,   note: 'clipped to 1 KiB · fts_tools' },
+  { label: 'prose',       n: 43119, color: ACCENT, note: 'searched by default · fts_prose' },
+  { label: 'reasoning',   n: 14368, color: WARN,   note: 'stored, no FTS posting' },
+], 'messages');
+
+barchart('bars-bytes', [
+  { label: 'prose',       n: 44.5, color: ACCENT, note: 'stored in full' },
+  { label: 'tool_result', n: 36.7, color: MUTE,   note: '44.7% of rows truncated' },
+  { label: 'tool_call',   n: 21.7, color: MUTE,   note: '13.1% of rows truncated' },
+  { label: 'reasoning',   n: 2.5,  color: WARN,   note: 'stored in full, unsearchable' },
+], 'MiB stored', 1);
+
+barchart('bars-pages', [
+  { label: 'message',     n: 195.2, color: MUTE,   note: 'row text — reproducible from the archive' },
+  { label: 'msg indexes', n: 79.1,  color: MUTE,   note: 'thread, parent, conv, primary key' },
+  { label: 'fts_tools',   n: 22.8,  color: ACCENT, note: 'postings only, external content' },
+  { label: 'fts_prose',   n: 16.7,  color: ACCENT, note: 'postings only, external content' },
+  { label: 'other',       n: 3.2,   color: MUTE,   note: 'conversation, docsize, build_info' },
+], 'MiB of pages', 1);
+</script>
+</body>
+</html>

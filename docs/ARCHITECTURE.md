@@ -324,5 +324,6 @@ states every client has to render rather than transport errors it can ignore.
 2. [DECISIONS.md](./DECISIONS.md) — what was decided and why, with status.
 3. [../poc/RESULTS.md](../poc/RESULTS.md) — measurements, and the three bugs differential testing caught. A settled language question (ADR 13), not a foundation; the product lives in `crates/`.
 4. This document — the shape it all adds up to, provisionally.
-5. [TUI-DESIGN.md](./TUI-DESIGN.md) — the one client with a written spec, including what was rejected from the tool it was read against.
-6. [BACKLOG.md](./BACKLOG.md) — framing, MVP scope and live operational state; the work itself is in beads (`bd ready`).
+5. [INGESTION.html](./INGESTION.html) — the same path walked stage by stage against measured numbers: source coverage, per-source proportion of the index, and where the 317 MiB goes. Open in a browser.
+6. [TUI-DESIGN.md](./TUI-DESIGN.md) — the one client with a written spec, including what was rejected from the tool it was read against.
+7. [BACKLOG.md](./BACKLOG.md) — framing, MVP scope and live operational state; the work itself is in beads (`bd ready`).

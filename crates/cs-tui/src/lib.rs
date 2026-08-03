@@ -124,6 +124,22 @@ const BURST: usize = 4;
 /// failure and still stops.
 const MAX_MISREADS: u32 = 64;
 
+/// How still the keyboard has to go before the header's match total is worth establishing.
+///
+/// The total is free for any query narrow enough to finish typing, so this timer only ever
+/// governs broad prefixes — where settling costs 5–36 ms against this corpus
+/// (`cs_core::search::count_cost`). Paying that per keystroke put the spend at the one moment
+/// the number buys nothing: `tes` is three letters into a word, not a result set anyone is
+/// reading the size of.
+///
+/// 250 ms is measured against typing rather than picked for feel. A 100 wpm typist leaves
+/// ~120 ms between keystrokes, so this clears a fast burst without firing inside it — which
+/// matters, because a count started one keystroke early is not merely wasted, it is 36 ms of
+/// latency handed to the keystroke that interrupts it. Erring long costs only how soon a
+/// number appears after you stop, and a quarter second after stopping still reads as "already
+/// there".
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
+
 fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
     let mut misreads = 0u32;
     loop {
@@ -133,7 +149,19 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
         let area = term.size().ok().map(|s| ratatui::layout::Rect::new(0, 0, s.width, s.height));
         let panes = area.map(|a| layout::app(a, app.show_preview));
 
-        // The first read blocks — with no background work there is nothing to poll for, and a
+        // The one thing worth waking up for. With a total still unsettled, wait `SETTLE` for
+        // the next keystroke instead of indefinitely: if it does not come, the user has
+        // stopped typing and the number they are about to read is worth the query.
+        //
+        // Deliberately gated on there being something to do. An unconditional timeout would
+        // wake the process forever to redraw an unchanged screen, and a settle that fails
+        // returns false so this falls through to the blocking read below rather than retrying
+        // at 4 Hz against an index that is not going to answer.
+        if app.needs_count() && !event::poll(SETTLE).unwrap_or(false) && app.settle_count() {
+            continue;
+        }
+
+        // The first read blocks — with nothing pending there is nothing to poll for, and a
         // timeout would just wake the process to redraw an unchanged screen. Everything already
         // queued behind it is then taken without blocking and folded into the same frame.
         for absorbed in 0..BURST {

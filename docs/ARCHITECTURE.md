@@ -49,7 +49,7 @@ flowchart TB
     QLOG[("queries.jsonl<br/>authored, precious, already real")]
 
     subgraph CL["5 · Clients"]
-        CLIENTS["cs search · cs tui · scripts/cs-fzf"]
+        CLIENTS["cs search · cs tui"]
     end
 
     LOCAL --> ARCH

@@ -23,7 +23,7 @@ pub fn now_ms() -> i64 {
 /// `YYYY-MM-DD` for an instant, in the machine's own zone.
 ///
 /// The single home of the date rule. It previously existed three times over — a hand-rolled
-/// civil-from-days conversion in the `cs` binary, a `strflocaltime` in the cs-fzf jq, and
+/// civil-from-days conversion in the `cs` binary, a `strflocaltime` in a shell client's jq, and
 /// implicitly in whatever the next client wrote — and the binary's copy counted UTC days, so
 /// a conversation logged after 17:00 PDT was labelled with tomorrow's date.
 pub fn local_ymd(ms: i64) -> Option<String> {

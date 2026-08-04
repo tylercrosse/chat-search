@@ -71,6 +71,25 @@ impl Manifest {
         v
     }
 
+    /// When the newest bytes this archive holds for a source were written, over paths that
+    /// have not vanished. `None` when nothing has ever been captured for it.
+    ///
+    /// The file's mtime and not the event's `ts`: `ts` is when the archiver *looked*, which is
+    /// today for a month-old export first captured today. Staleness is a question about the
+    /// bytes, so it has to be answered from the bytes (chat-search-a7k.10).
+    ///
+    /// Deliberately not "the newest conversation" — that would mean parsing, which this crate
+    /// must never do (ADR 16). For a source whose files arrive by being unpacked the two
+    /// differ by the hours between the vendor building the export and it landing here, which
+    /// is far inside the week the caller measures against.
+    pub fn newest_mtime_ms(&self, source: &str) -> Option<u64> {
+        self.latest
+            .values()
+            .filter(|e| e.source == source && e.op != Op::Vanished)
+            .map(|e| e.fingerprint.mtime_ms)
+            .max()
+    }
+
     pub fn apply(&mut self, event: Event) {
         self.latest.insert((event.source.clone(), event.path.clone()), event);
     }

@@ -1,9 +1,10 @@
 //! The conversation, drawn (docs/TUI-DESIGN.md §8).
 //!
-//! The *rules* — which messages are drawn, how each kind folds by default, and which matches
-//! may claim to have ranked the conversation — live in [`cs_core::blocks`], because the TUI is
-//! no longer the only thing that has to answer them. What is left here is this terminal's
-//! answer to them: rows, wrapping, gutters, sigils and styles.
+//! The *rules* — which messages are drawn, how each kind folds by default, which matches may
+//! claim to have ranked the conversation, and which one line stands in for a message that is
+//! folded shut — live in [`cs_core::blocks`], because the TUI is no longer the only thing that
+//! has to answer them. What is left here is this terminal's answer to them: rows, wrapping,
+//! gutters, sigils and styles.
 //!
 //! Folding is the whole design. Prose is 24% of this corpus; `tool_call` and `tool_result`
 //! are 33% each and `reasoning` 8% (measured 2026-07-30 over 168k messages). Rendering all
@@ -13,7 +14,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use cs_core::blocks::{self, Block, Density, Fold, MarkKind};
+use cs_core::blocks::{self, offset_lines, Block, Density, Fold, MarkKind};
 use cs_core::highlight::Span as Mark;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -381,41 +382,32 @@ fn mark_style(block: &Block, theme: &Theme) -> Style {
 
 /// One line standing in for a whole message, with any matches in it marked.
 ///
+/// *What* the line says is [`Block::collapsed`], because outline mode has to read the same in
+/// every client. What is left here is this terminal's half: the sigil that fronts it and the
+/// style it is drawn in.
+///
 /// Untruncated: the caller prepends the fold chevron and spends one budget on the whole line,
 /// because a mark is only useful if it is still on screen.
 fn collapsed_runs(block: &Block, theme: &Theme) -> Vec<Span<'static>> {
-    // Checked before `kind`, because a failed result is the one result that survives and it
-    // is the failure, not the tool, that is worth the row.
-    if block.is_error {
-        let (at, line) = recognition_line(block);
-        let sigil = "✗ ";
-        let marks = rebase(&block.marks, at, line.len(), sigil.len());
-        return text::marked_runs(&format!("{sigil}{line}"), &marks, theme.error, theme.match_hl);
-    }
-    let (body, marks, style) = match block.kind.as_str() {
-        // Reasoning opens with its own bolded summary — `**Planning README creation**` — so
-        // where nothing matched, the model has already written the one-line version. Use it
-        // rather than counting lines at the user.
-        "reasoning" => {
-            let (at, line) = recognition_line(block);
-            // The asterisks are the model's own emphasis syntax rather than content, and
-            // dropping them moves every offset after them.
-            let shown = line.trim_matches('*').to_string();
-            let sigil = "⋯ ";
-            let dropped = line.find(&shown).unwrap_or(0);
-            let marks = rebase(&block.marks, at + dropped, shown.len(), sigil.len());
-            (format!("{sigil}{shown}"), marks, theme.dim)
-        }
-        // The one collapsed form that is *synthesised* rather than quoted, so it is the one
-        // that cannot show the line a query hit — and the one whose offsets would be fiction.
-        "tool_call" => (format!("⚙ {}", tool_summary(&block.text)), Vec::new(), theme.dim),
-        _ => {
-            let (at, line) = recognition_line(block);
-            let sigil = format!("{} ", speaker(block));
-            let marks = rebase(&block.marks, at, line.len(), sigil.len());
-            (format!("{sigil}{line}"), marks, Style::new())
+    let line = block.collapsed();
+    // Asked in the order core answers it, so the sigil and the text cannot disagree about which
+    // form this is: a failed result takes the cross whatever kind it is.
+    let (sigil, style) = if block.is_error {
+        ("✗ ".to_string(), theme.error)
+    } else {
+        match block.kind.as_str() {
+            "reasoning" => ("⋯ ".to_string(), theme.dim),
+            "tool_call" => ("⚙ ".to_string(), theme.dim),
+            _ => (format!("{} ", speaker(block)), Style::new()),
         }
     };
+    // No offset means core synthesised the line rather than quoting it, so there is nothing on
+    // it a mark can honestly point at.
+    let marks = line
+        .at
+        .map(|at| rebase(&block.marks, at, line.text.len(), sigil.len()))
+        .unwrap_or_default();
+    let body = format!("{sigil}{}", line.text);
     text::marked_runs(&body, &marks, style, mark_style(block, theme))
 }
 
@@ -431,25 +423,6 @@ fn rebase(marks: &[Mark], at: usize, len: usize, prefix: usize) -> Vec<Mark> {
         .filter(|m| m.start >= at && m.end <= at + len)
         .map(|m| Mark { start: m.start - at + prefix, end: m.end - at + prefix })
         .collect()
-}
-
-/// The one line of a message worth standing in for all of it, with its byte offset.
-///
-/// The line the query hit, when there is one. §8 specs this and it is the whole reason outline
-/// mode is worth more than a density knob: with every message reduced to the line that matched,
-/// the pane becomes a map of where the query landed across the conversation, in conversation
-/// order — complementary to the top-3 hit rows in the results list rather than a duplicate of
-/// them. Falling back to the first non-empty line makes a non-matching message a table of
-/// contents entry, which is all it can honestly be.
-fn recognition_line(block: &Block) -> (usize, String) {
-    let marked = offset_lines(&block.text)
-        .find(|(at, line)| block.marks.iter().any(|m| m.start >= *at && m.start < at + line.len()));
-    let (at, line) = marked
-        .or_else(|| offset_lines(&block.text).find(|(_, l)| !l.trim().is_empty()))
-        .unwrap_or((0, ""));
-    // The offset is of the untrimmed line, so a caller rebasing marks onto the returned string
-    // has to account for the leading whitespace this drops.
-    (at + (line.len() - line.trim_start().len()), line.trim().to_string())
 }
 
 /// One body line, broken to fit the pane, with the gutter repeated down the left of every row.
@@ -517,64 +490,6 @@ impl Fence {
             ("  ".to_string(), Style::new())
         }
     }
-}
-
-/// The lines of a message with their byte offsets, so a mark can be attributed to the line
-/// holding it.
-///
-/// Splits exactly where `str::lines` splits — `split_inclusive` yields one chunk per line and
-/// agrees with it on a trailing newline, where a plain `split('\n')` would report one line too
-/// many. That agreement is load-bearing twice over: [`Preview::rendered_rows`] counts rows with
-/// it, and [`Preview::block_at_row`] turns a click into a message with those counts, so an
-/// off-by-one on the last line of any expanded message would fold the wrong one.
-fn offset_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
-    let mut at = 0;
-    text.split_inclusive('\n').map(move |chunk| {
-        let start = at;
-        at += chunk.len();
-        let line = chunk.strip_suffix('\n').unwrap_or(chunk);
-        (start, line.strip_suffix('\r').unwrap_or(line))
-    })
-}
-
-/// `name` plus whatever argument identifies the call.
-///
-/// A `tool_call` body is the tool name on its own line followed by a JSON argument object,
-/// so the name is free and the useful part is picking the one argument a human would use to
-/// recognise the call — the command for a shell, the path for a read.
-fn tool_summary(text: &str) -> String {
-    let mut lines = text.lines();
-    let name = lines.next().unwrap_or("tool").trim().to_string();
-    let rest: String = lines.collect::<Vec<_>>().join("\n");
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&rest) else {
-        return name;
-    };
-
-    // `command` is spelled differently by each tool and both spellings are common here:
-    // Codex writes an argv array, Claude Code a single string. Handling only the array meant
-    // every Claude Code `Bash` call collapsed to a bare `⚙ Bash` — the name with the one
-    // piece of information stripped out.
-    if let Some(cmd) = json.get("command") {
-        if let Some(line) = cmd.as_str() {
-            return format!("{name} {}", line.replace('\n', " "));
-        }
-        if let Some(argv) = cmd.as_array() {
-            let parts: Vec<&str> = argv.iter().filter_map(|v| v.as_str()).collect();
-            // `["bash", "-lc", "<script>"]` is the overwhelmingly common argv shape, and the
-            // script is the only interesting element — the shell and its flag never vary.
-            let shown = match parts.as_slice() {
-                [_shell, flag, script, ..] if flag.starts_with('-') => script,
-                _ => return format!("{name} {}", parts.join(" ")),
-            };
-            return format!("{name} {shown}");
-        }
-    }
-    for key in ["path", "file_path", "pattern", "query", "url"] {
-        if let Some(v) = json.get(key).and_then(|v| v.as_str()) {
-            return format!("{name} {v}");
-        }
-    }
-    name
 }
 
 #[cfg(test)]
@@ -696,37 +611,6 @@ mod tests {
     }
 
     #[test]
-    fn a_shell_call_collapses_to_the_script_not_the_shell() {
-        let t = "shell\n{\"command\":[\"bash\",\"-lc\",\"sed -n '1,160p' config.py\"],\"workdir\":\".\"}";
-        assert_eq!(tool_summary(t), "shell sed -n '1,160p' config.py");
-    }
-
-    #[test]
-    fn a_command_string_reads_the_same_as_a_command_array() {
-        // Codex writes argv, Claude Code writes a line. Both are `command`, and handling one
-        // shape silently rendered the other as a bare tool name.
-        assert_eq!(tool_summary("Bash\n{\"command\":\"ls -la\"}"), "Bash ls -la");
-        assert_eq!(
-            tool_summary("Bash\n{\"command\":\"echo one\\necho two\"}"),
-            "Bash echo one echo two",
-            "a multi-line script still occupies one row"
-        );
-    }
-
-    #[test]
-    fn a_call_with_an_identifying_path_uses_it() {
-        assert_eq!(tool_summary("Read\n{\"file_path\":\"/x/schema.rs\"}"), "Read /x/schema.rs");
-    }
-
-    #[test]
-    fn an_unparseable_body_still_yields_the_tool_name() {
-        // Argument shapes vary per tool and per version; the name alone is always better
-        // than a raw JSON fragment wrapped into the pane.
-        assert_eq!(tool_summary("update_plan\nnot json at all"), "update_plan");
-        assert_eq!(tool_summary("bare_name"), "bare_name");
-    }
-
-    #[test]
     fn threads_read_one_at_a_time_rather_than_interleaved() {
         // Found by running it against a real 9-thread conversation: `seq` restarts at 0 per
         // thread, so ordering by it alone put all nine opening user turns first and all nine
@@ -795,23 +679,6 @@ mod tests {
         p.move_focus(-39);
         p.follow_focus(&theme, 80, 10);
         assert_eq!(p.scroll, 0, "and back to the top");
-    }
-
-    #[test]
-    fn offset_lines_splits_exactly_where_str_lines_splits() {
-        // `rendered_rows` counts with this and `block_at_row` turns clicks into messages with
-        // those counts, so one extra line on a trailing newline — which `split('\n')` reports
-        // and `lines()` does not — puts every click after it on the wrong message.
-        for text in ["", "a", "a\n", "a\nb", "a\nb\n", "\n\n", "a\r\nb\r\n", "\n"] {
-            let got: Vec<&str> = offset_lines(text).map(|(_, l)| l).collect();
-            let want: Vec<&str> = text.lines().collect();
-            assert_eq!(got, want, "{text:?}");
-        }
-        // And the offsets point at the line they came from.
-        let text = "alpha\nbeta\ngamma";
-        for (at, line) in offset_lines(text) {
-            assert_eq!(&text[at..at + line.len()], line);
-        }
     }
 
     #[test]
@@ -885,29 +752,6 @@ mod tests {
         assert!(first.len() > 3, "the paragraph wrapped to several rows: {}", first.len());
         assert_eq!(first[0].owner, Some((0, true)), "only the speaker line is the header");
         assert!(first[1..].iter().all(|r| r.owner == Some((0, false))), "a body row became a header");
-    }
-
-    #[test]
-    fn a_collapsed_message_shows_the_line_the_query_hit() {
-        // §8: collapsed prose is "the matching line, else the first non-empty line". Showing
-        // the first line instead makes outline mode a table of contents when its whole purpose
-        // is being a map of where the query landed.
-        let text = "a preamble nobody asked about\nsome filler\nthe borrow checker complained";
-        let b = marked("prose", "assistant", "a", text, "borrow");
-        assert!(!b.marks.is_empty(), "the fixture has to actually match");
-        assert_eq!(recognition_line(&b).1, "the borrow checker complained");
-
-        // Stemmed, because the whole point is agreeing with the ranker rather than with a
-        // substring scan: `commits` ranks this row on `Commit`.
-        let b = marked("prose", "user", "b", "hello there\nCommit current changes", "commits");
-        assert_eq!(recognition_line(&b).1, "Commit current changes");
-    }
-
-    #[test]
-    fn a_message_that_matched_nothing_falls_back_to_its_first_real_line() {
-        let b = marked("prose", "user", "a", "\n\n  first words here\nlater", "elephant");
-        assert!(b.marks.is_empty());
-        assert_eq!(recognition_line(&b).1, "first words here");
     }
 
     #[test]

@@ -46,6 +46,15 @@
 //! scratch table nothing, while without one the index answers from postings it already has and
 //! the scratch table is paying to build them a second time.
 //!
+//! Declaring `prefix='2 3 4'` on the fts tables would make that walk a doclist lookup and looks
+//! like it should retire the branch. It does not, and it was measured rather than assumed
+//! (chat-search-6eb.38, ADR 6): a prefix longer than the longest configured length still walks,
+//! so the rule would become "is this prefix longer than the number in `schema.rs`" — the same
+//! branch, now reading a declaration this module has no other reason to know about. At
+//! `prefix='2 3 4'` the index route wins `pro`* 4.7 ms against 8.1 and loses `commit`* 11.0
+//! against 2.4. It also costs the index 26% of its size and buys no wall clock here at all,
+//! since the scratch table already answers a prefix in the same time.
+//!
 //! The scratch table costs ~86 µs to create, so it is built once per thread and reused; it does
 //! not grow (`page_count` is flat at 63 after 40,000 calls). Its marginal cost is ~25 µs fixed
 //! plus ~60 ns per byte inserted.

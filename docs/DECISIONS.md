@@ -106,7 +106,19 @@ Truncation is marked in the stored text with the dropped byte count. A silently 
 
 The indexes were `content=''` until 2026-08-01. External content stores no more — the postings are the same and the text is read back from `message`, which every ranking query already joins by rowid — but it makes fts5's auxiliary functions usable against the index, and `highlight()` is how a snippet marks the word that actually matched (chat-search-6eb.30). Two consequences to know: an unconstrained scan of an fts table now returns every row of `message` rather than only the indexed ones, so anything counting postings must go through `MATCH` or the `_docsize` shadow table; and `message.text` is now *the* content, so the indexer's postings and that column must never drift.
 
-**Revisit when.** Corpus exceeds ~50 GB, or hybrid ranking needs something FTS5 can't do. A prefix index (`prefix='2 3 4'`) is the open question: fts5 answers every prefix term by walking its vocabulary, which is most of what a broad typeahead keystroke costs, and the trade is index size.
+**Rejected — a prefix index (`prefix='2 3 4'`).** Priced 2026-08-01 on the 181k-message / 317 MB index, release, warm, at TUI settings (chat-search-6eb.38). It does exactly what fts5 documents and it does not buy what it was wanted for.
+
+The premise was that walking the vocabulary for a prefix term is most of what a broad typeahead keystroke costs. It is not. Ranking `the`* takes 59.9 ms; ranking `the` — the same query with no prefix in it at all — takes 48.9 ms. The expansion is that 11 ms gap, and a prefix index recovers exactly it (59.9 → 50.4 ms). The other 49 ms is BM25 scoring: `ORDER BY score` has to score every one of the 37,911 matching rows before `LIMIT` can discard them. Asked directly, the doclist merge for `"the"*` is 7 ms against 1 ms with the index, while the same query with the scoring left in is 148 ms against 131 ms. So the two queries this was meant to rescue stay over the 30 ms budget of chat-search-me9.1 after it — `the` 71.6 → 62.1 ms end to end, `pro` 38.3 → 35.5 ms — and cold first touch in a fresh process does not move at all (`pro` 637 ms → 747 ms, `the` 487 → 538, both slightly worse for the larger file).
+
+The one thing it genuinely fixes is already fixed. Marking a row through the corpus index costs 5.2 ms/row for a prefix term and 37 µs/row with a prefix index — a real 140x, and the measurement this bead was filed on. But `highlight::spans_for` already routes prefix terms to a 150-row scratch table where the expansion is free, and that route costs the same either way, so the wall clock is unchanged (`the`* marking: 10.4 ms before, 10.3 ms after).
+
+Nor does it collapse `spans_for`'s two-branch rule, which was the second reason to want it. It moves the branch rather than removing it: prefixes longer than the longest configured length still fall back to the walk, so at `prefix='2 3 4'` the index route wins for `pro`* (4.7 ms vs 8.1) and loses for `commit`* (11.0 vs 2.4) and `learning`* (17.8 vs 15.1). The condition would become "is this prefix longer than the schema's longest configured prefix length", which is a worse rule than the one it replaces — it couples `highlight.rs` to a declaration in `schema.rs` that it currently does not have to know about.
+
+Against that: the index grows 317 → 400 MB (+26%), postings 41 → 123 MB (3x, one full posting list per configured length), and a full rebuild goes from ~10.4 s to ~15.4 s (+48%, medians of three interleaved rounds on a loaded machine). `prefix='2 3'` is the same trade at two thirds the size and buys less, since it leaves 4-character prefixes like `deep`* on the slow path.
+
+Do not re-litigate this without first repricing the BM25 scoring, because that is where the time is. The harness both sets of numbers came from is in commit 015e661 of this branch, deleted after use.
+
+**Revisit when.** Corpus exceeds ~50 GB, or hybrid ranking needs something FTS5 can't do. The open question on ranking cost is no longer the prefix expansion but the candidate ceiling: `search_grouped` pulls `limit * 50` rows, and `ORDER BY bm25(...)` scores the whole match set to fill it (chat-search-6eb.29).
 
 ---
 
@@ -130,7 +142,11 @@ The indexes were `content=''` until 2026-08-01. External content stores no more 
 
 **Why.** Claude Code already models renames as append-only `custom-title` events (re-emitted on every save, observed up to 44× in one session), so rename history is fully recoverable and rebuild-safe. Ignoring `custom-title` loses the most useful titles — 35 sessions carry one, and manual renaming is a primary organising habit here.
 
-**Open sub-question.** If a conversation is renamed both in-app and upstream, authored currently wins. Last-write-wins by timestamp is the alternative.
+**Sub-question, settled 2026-08-01.** If a conversation is renamed both in-app and upstream, **authored wins**, unconditionally — the fold order above is the whole rule, with no timestamp comparison anywhere in it.
+
+Last-write-wins was the alternative and is rejected. It depends on two independent sources' clocks being comparable, which nothing here establishes: an in-app rename is stamped by this tool and an upstream one by the vendor, and a fold that silently prefers whichever clock ran fast is worse than one that is merely opinionated. The opinion is also the right one — an in-app rename is a deliberate act by the user, while an upstream rename is usually the vendor regenerating a title from the conversation's own content. Preferring the vendor's regeneration over a name the user chose is the failure mode worth designing against, and it is the one last-write-wins would produce every time the vendor re-titled after a rename.
+
+Consequence for the fold: `authored override` is unconditional, so `custom-title` and below are only ever consulted when no override exists. `chat-search-6eb.15` implements this and carries the test.
 
 ---
 

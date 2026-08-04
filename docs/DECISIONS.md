@@ -767,3 +767,59 @@ trigger; the honest figure is about a third of the way, and the trigger has not 
 **Revisit when.** A client appears that logs genuinely per keystroke — the TUI does not, it
 writes one event per session — since then the ladders arrive inside one process and a session
 id would be cheaper and more exact than a timing rule.
+
+---
+
+## 23. The reply to a search is a core-owned type, and clients adapt rather than assemble
+
+`accepted` · 2026-08-04
+
+**Context.** ADR 12 put the client seam at a JSON protocol and ADR 14 kept it a spawned CLI
+rather than a daemon. Neither said who *builds* the reply, and the answer turned out to be
+everybody. `cs/src/commands.rs` assembled the envelope inline at four sites; the flat and
+grouped key lists agreed only because `json_contract.rs` asserted it; `(ms*100).round()/100`
+appeared three times, one of them feeding the query log, so a logged need and a printed answer
+could round differently. Meanwhile `cs-tui` reached `search_grouped_counted` for a `Total` that
+no JSON client could ask for, so `cs search --json` could not report how many conversations
+matched — only how many it returned.
+
+Five public entry points (`search`, `search_grouped`, `search_grouped_counted`,
+`count_matching`, `recent`) exposed routing that was never a caller's decision. The reply had
+no author, so every client became one.
+
+**Decision.** `cs_core::answer` owns the reply. One entry point returns an `Answer`; a private
+receipt of the ask lets `settle` establish the total the first pass declined to pay for.
+Serializing it *is* the wire, the way `blocks::Transcript` already works for `cs show --json`.
+Clients adapt: the CLI serializes, the TUI renders, a Swift app decodes.
+
+Three wire rules follow, and all three are things a client can no longer get wrong:
+
+- **One shape per question.** `results` is always conversations; the polymorphic `results` and
+  its sometimes-present `grouped` flag are gone, and `--flat` has its own small envelope. A
+  decoder never branches to learn what type a key holds.
+- **Identity is stated once.** A match carries message fields only. Repeating `conv_id`,
+  `title`, `source` and the whole `destinations` array inside every nested hit was bytes and a
+  second place for two copies to disagree.
+- **`v`, and a policy for it.** Additions are silent; `v` bumps only when a field changes
+  meaning.
+
+**Two promises made early because they are free now and breaking later.** `score` is opaque
+ordering — clients never re-sort and never parse it — and `snippet_spans` may be empty. Both
+exist for ranking this project has already said it intends to grow into: the Indexer's
+definition in GLOSSARY.md says "and later vectors", and a semantic match need contain no
+lexical term to highlight. Documented today they cost one table row each; documented after a
+client ships they cost a `v` bump.
+
+**Why not a sectioned reply.** The alternative — sections requested à la carte, keyed by
+`conv_id`, with a total policy per ask — is genuinely better for three futures: retiring
+`kind_runs` by economics rather than by schema, adding facets, and settling a count over the
+wire without re-running the search. It was rejected because the cost lands daily and the
+benefit only if those futures arrive: every consumer would unwrap `Option`s it knows are
+`Some`, a Swift client would join matches to conversations by key instead of reading nesting,
+and "asked implies present" is a runtime law no type system checks. It also designs for the
+stdio transport ADR 14 deferred and `chat-search-me9.22` measured as unnecessary — one adapter
+is a hypothetical seam.
+
+**Revisit when.** A second thing in the reply becomes expensive and optional the way
+`kind_runs` already is. One knob is a knob; two are a sections model arriving one field at a
+time, and at that point the rejected design is the right one.

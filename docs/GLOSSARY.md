@@ -120,6 +120,12 @@ Resolved from `(source, native_id)` at display time, never stored. Both parts ar
 
 Parsed exactly once, by `cs_core::query`. Everything downstream reads the parsed value; nothing re-reads the string. Before that rule existed the ranker and the highlighter each tokenized it themselves and disagreed twice — `agent:codex` reached FTS5 as two literal words, and a repeated final word lost its prefix star.
 
+**Answer** **[code: `cs_core::answer`, wire: the whole search reply]** The reply to one **Query** run under one set of search options: the envelope (`v`, `ms`, `index_state`, rejected filters), the conversations that came back, and how many matched in total. Serializing it _is_ the wire — the same arrangement `blocks::Transcript` has for `cs show --json` — so the CLI, the TUI and a native client read one shape instead of three clients each assembling their own (ADR 23).
+
+Distinct from the **Query** it answers and the search options it ran under, both of which it remembers privately so that settling the total counts the set that was ranked rather than whatever the caller passes second. That invariant used to live in a doc comment, and a second caller had already drifted from it.
+
+**Settled** **[wire: `settled`]** Whether `total` is the whole number or a floor. A search takes whatever count the ranking pass saw for free; establishing the exact one costs a second pass, which is worth paying when typing stops and not on every keystroke. `false` means "at least this many" and is to be shown as a range, never as the answer.
+
 **Term** One word the ranker matches on, after filter tokens have been lifted out. Held in the order typed and **not** deduplicated: the ranker ANDs a repeat, and `learn deep learn` must still put its prefix star on the final `learn`.
 
 **Marking terms** The same terms rendered for a highlighter rather than for FTS5 — deduplicated, since marking a word twice paints it twice. Both renderings come from one term list, which is what keeps "what ranked" and "what is highlighted" the same answer.

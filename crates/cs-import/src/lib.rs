@@ -9,3 +9,9 @@ pub mod claude_code;
 pub mod claude_desktop;
 pub mod codex;
 pub mod gemini;
+pub mod google_takeout;
+
+/// Shared by importers, not by their callers: an importer's public surface is its `import`
+/// function, and these are implementation detail behind it.
+mod html_text;
+mod timestamp;

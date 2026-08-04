@@ -15,6 +15,8 @@ fn import_source(source_id: &str, logical_path: &str, bytes: &[u8]) -> Vec<Conve
         }
         "chatgpt-export" => cs_import::chatgpt_export::import_all(bytes),
         "gemini-cli" => cs_import::gemini::import(logical_path, bytes).into_iter().collect(),
+        // Four formats behind one id; the importer dispatches on the shape of the path.
+        "google-takeout" => cs_import::google_takeout::import_all(logical_path, bytes),
         _ => Vec::new(),
     }
 }

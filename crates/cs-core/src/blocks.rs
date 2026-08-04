@@ -53,6 +53,22 @@ pub enum Fold {
     Expanded,
 }
 
+/// The order a conversation is read in, and so the order every client draws it in.
+///
+/// `seq` is per *thread*, not per conversation — ADR 4 makes a conversation a DAG and
+/// `thread_key` carries which strand a message belongs to. Ordering by `seq` alone therefore
+/// interleaves every thread at once: on a real 9-thread conversation it put all nine opening
+/// user turns first, then all nine first replies, which reads as nonsense. Main thread before
+/// sidechains, each strand contiguous. `idx_message_thread` is (conv_id, thread_key, seq),
+/// which exists for exactly this.
+///
+/// A shared fragment rather than a comment on one query, because two of them now have to
+/// produce the *same* order: [`load`], and the shape `cs search` puts on every row
+/// ([`crate::Group::kind_runs`]). A strip built in one order beside a transcript built in the
+/// other lines up only by coincidence, and the coincidence holds right up until a conversation
+/// has a subagent in it.
+pub const READING_ORDER: &str = "ORDER BY is_sidechain, thread_key, seq";
+
 /// Which claim a match inside a block is entitled to make.
 ///
 /// Not a colour. A client maps this to whatever its medium can carry — the TUI spends a text
@@ -67,6 +83,88 @@ pub enum MarkKind {
     /// This word matched here but carries no postings, so `cs search` will not return the
     /// conversation for it and `cs explain` reports zero hits.
     Unranked,
+}
+
+/// What a message is, at the resolution a conversation's *shape* is drawn at.
+///
+/// Coarser than [`crate::Kind`] in one place and finer in another, and both departures are the
+/// point. A call and its result merge, because at a strip's resolution they are one stretch of
+/// the same traffic — and that traffic is 66–85% of this corpus by message, so keeping them
+/// apart would spend the reader's whole strip on the distinction. Prose splits by role,
+/// because "you asked" against "it answered" is the one boundary a reader triages on: it is
+/// what makes a 900-message agent session legible as a handful of things you asked for rather
+/// than as an undifferentiated wall.
+///
+/// Four is also what fits. The strip is ~200px on the interface prototype and a text cell in
+/// the TUI, so a fifth category would be a stripe too thin to see and a legend entry nobody
+/// reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Band {
+    /// Prose from the person. One message, and usually the reason for everything after it.
+    User,
+    /// Prose from anyone else — the assistant, and the four `system` messages in this corpus,
+    /// which are not worth a band of their own.
+    Agent,
+    /// Thinking. Drawn, never searched: [`crate::Kind::is_indexed`] is why.
+    Reasoning,
+    /// Calls and their results, failures included.
+    Tool,
+}
+
+/// Which band a message belongs to.
+///
+/// Takes the two columns rather than a [`Block`], so `cs search` can answer it for a whole
+/// page of conversations without reading their text — the query behind
+/// [`crate::Group::kind_runs`] selects three narrow columns, and a `Block` would drag every
+/// message body along with them.
+///
+/// Resolved through [`crate::Kind`] rather than matched as strings, so adding a kind breaks
+/// this arm-by-arm instead of quietly defaulting into one of the four (same reason as
+/// [`Block::mark_kind`]).
+pub fn band(role: &str, kind: &str) -> Band {
+    match crate::Kind::ALL.into_iter().find(|k| k.as_str() == kind) {
+        Some(crate::Kind::Prose) if role == crate::Role::User.as_str() => Band::User,
+        Some(crate::Kind::Prose) => Band::Agent,
+        Some(crate::Kind::Reasoning) => Band::Reasoning,
+        Some(crate::Kind::ToolCall | crate::Kind::ToolResult) => Band::Tool,
+        // A kind no importer writes. It came from somewhere, and something on the far side of
+        // the conversation said it, so it reads as the agent rather than disappearing.
+        None => Band::Agent,
+    }
+}
+
+/// Whether a message of this kind is drawn at all — [`Block::drawn`], for a caller holding the
+/// two columns it depends on rather than a whole [`Block`].
+///
+/// The rule lives here and the method delegates, so `cs show` and the shape on a search row
+/// cannot come to different conclusions about what a conversation is made of.
+pub fn drawn(kind: &str, is_error: bool) -> bool {
+    kind != crate::Kind::ToolResult.as_str() || is_error
+}
+
+/// A stretch of one band, `["tool", 12]` on the wire.
+///
+/// A tuple rather than an object because there are a great many of these — a 2,553-message
+/// conversation is the corpus's longest and the list is per result row — and `{"band":"tool",
+/// "n":12}` is four times the bytes for the same two facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Run(pub Band, pub usize);
+
+/// Run-length encode a conversation's bands, in the order they were read in.
+///
+/// Compresses hard on exactly the conversations that need it: tool traffic arrives in long
+/// stretches, so the agent sessions with hundreds of messages are the ones whose shape is a
+/// few dozen runs. Short chatty conversations barely compress, and they are short.
+pub fn runs(bands: impl IntoIterator<Item = Band>) -> Vec<Run> {
+    let mut out: Vec<Run> = Vec::new();
+    for band in bands {
+        match out.last_mut() {
+            Some(Run(last, n)) if *last == band => *n += 1,
+            _ => out.push(Run(band, 1)),
+        }
+    }
+    out
 }
 
 /// One message of a conversation, with any matches in it already located.
@@ -114,7 +212,12 @@ impl Block {
     /// one you were looking for. `Message::is_error` comes from each source's own signal
     /// (Claude Code's `is_error`, Codex's `metadata.exit_code`), never from the text.
     pub fn drawn(&self) -> bool {
-        self.kind != "tool_result" || self.is_error
+        drawn(&self.kind, self.is_error)
+    }
+
+    /// Which band this message is drawn in — [`band`].
+    pub fn band(&self) -> Band {
+        band(&self.role, &self.kind)
     }
 
     /// Which claim a match inside this block is entitled to.
@@ -145,17 +248,13 @@ impl Block {
 /// caller marks exactly what the ranker matched, trailing prefix star included. An empty slice
 /// marks nothing, which is the honest state for a query that was never run.
 pub fn load(conn: &Connection, conv_id: &str, terms: &[String]) -> rusqlite::Result<Vec<Block>> {
-    // `seq` is per *thread*, not per conversation — ADR 4 makes a conversation a DAG and
-    // `thread_key` carries which strand a message belongs to. Ordering by `seq` alone therefore
-    // interleaves every thread at once: on a real 9-thread conversation it put all nine opening
-    // user turns first, then all nine first replies, which reads as nonsense. Main thread before
-    // sidechains, each strand contiguous. `idx_message_thread` is (conv_id, thread_key, seq),
-    // which exists for exactly this.
-    let mut stmt = conn.prepare_cached(
+    // [`READING_ORDER`] carries why this is not `ORDER BY seq`, and is shared rather than
+    // repeated because the shape on a search row has to come out in the same order as this.
+    let mut stmt = conn.prepare_cached(&format!(
         "SELECT id, role, kind, seq, on_head_path, text, is_sidechain, thread_key, is_error
          FROM message WHERE conv_id = ?1 AND on_head_path = 1
-         ORDER BY is_sidechain, thread_key, seq",
-    )?;
+         {READING_ORDER}"
+    ))?;
     let mut blocks = stmt
         .query_map(rusqlite::params![conv_id], |r| {
             Ok(Block {
@@ -334,6 +433,56 @@ mod tests {
                 if kind.is_indexed() { MarkKind::Ranked } else { MarkKind::Unranked };
             assert_eq!(b.mark_kind(), expected, "{kind:?}");
         }
+    }
+
+    #[test]
+    fn a_band_says_who_was_talking_where_the_kind_alone_cannot() {
+        // The one place the shape is finer than `Kind`: a prose message is the person or it is
+        // the machine, and on an agent session that is the only boundary a reader has.
+        assert_eq!(band("user", "prose"), Band::User);
+        assert_eq!(band("assistant", "prose"), Band::Agent);
+        // And the one place it is coarser: a call and its result are one stretch of traffic.
+        assert_eq!(band("assistant", "tool_call"), Band::Tool);
+        assert_eq!(band("tool", "tool_result"), Band::Tool);
+        assert_eq!(band("assistant", "reasoning"), Band::Reasoning);
+        // Four `system` prose messages exist in this corpus. They are the machine's side of
+        // the conversation, not a fifth stripe.
+        assert_eq!(band("system", "prose"), Band::Agent);
+    }
+
+    #[test]
+    fn every_kind_lands_in_a_band_so_none_can_vanish_from_the_shape() {
+        // A kind with nowhere to go would be a message the strip silently drops, which is the
+        // failure the run lengths cannot report: the shape would still look plausible.
+        for kind in crate::Kind::ALL {
+            for role in ["user", "assistant", "tool", "system"] {
+                let b = band(role, kind.as_str());
+                assert_eq!(b, block(kind.as_str(), role, "a", "x").band(), "{kind:?}/{role}");
+            }
+        }
+    }
+
+    #[test]
+    fn runs_collapse_neighbours_and_keep_the_order_they_arrived_in() {
+        use Band::{Agent, Tool, User};
+        let bands = [User, Agent, Tool, Tool, Tool, Agent, Tool];
+        assert_eq!(
+            runs(bands),
+            [Run(User, 1), Run(Agent, 1), Run(Tool, 3), Run(Agent, 1), Run(Tool, 1)]
+        );
+        // The same band twice with something between it is two runs, not one — a strip that
+        // merged them would move every position after it.
+        assert_eq!(runs(bands).iter().map(|Run(_, n)| n).sum::<usize>(), bands.len());
+        assert!(runs([]).is_empty(), "nothing to draw is no runs, not one empty run");
+    }
+
+    #[test]
+    fn a_run_is_a_pair_on_the_wire_rather_than_an_object() {
+        // A published shape (ADR 12): the interface prototype draws one strip per result row,
+        // and at 354 rows the difference between `["tool",12]` and a named object is the
+        // difference between a payload a client streams and one it waits for.
+        let v = serde_json::to_value(runs([Band::User, Band::Tool, Band::Tool])).unwrap();
+        assert_eq!(v, serde_json::json!([["user", 1], ["tool", 2]]));
     }
 
     #[test]

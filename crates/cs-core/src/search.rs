@@ -1103,15 +1103,16 @@ fn fill_sittings(conn: &Connection, groups: &mut [Group]) -> rusqlite::Result<()
 /// that had to interleave the fold would be that rule written down twice.
 fn fill_shape(conn: &Connection, groups: &mut [Group]) -> rusqlite::Result<()> {
     for group in groups {
-        let mut bands = Vec::new();
-        match &group.sitting {
+        let bands = match &group.sitting {
             Some(sitting) => {
+                let mut bands = Vec::new();
                 for member in &sitting.members {
                     bands.extend(drawn_bands(conn, member)?);
                 }
+                bands
             }
-            None => bands = drawn_bands(conn, &group.conv_id)?,
-        }
+            None => drawn_bands(conn, &group.conv_id)?,
+        };
         group.kind_runs = crate::blocks::runs(bands);
     }
     Ok(())

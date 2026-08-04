@@ -5,12 +5,16 @@
 //! the tokenizer, the schema and the ranking, and splitting them produces silent recall
 //! bugs rather than compile errors.
 //!
+//! `build` owns the file rather than its contents: how a rebuild is swapped in whole, and
+//! what a reader is allowed to conclude from what it finds at the path.
+//!
 //! `time` holds what every client needs and no client should re-derive: the clock, and the
 //! rule for naming the local day an instant fell on. `blocks` is the same idea one level up:
 //! which messages a reader draws and which matches may claim to have ranked the conversation,
 //! answered once for the TUI, `cs show --json`, and everything downstream of that JSON.
 
 pub mod blocks;
+pub mod build;
 pub mod destination;
 pub mod eval;
 pub mod highlight;
@@ -23,11 +27,12 @@ pub mod search;
 pub mod time;
 
 pub use blocks::{Block, Density, Fold, MarkKind, Transcript, WireBlock};
+pub use build::{open_for_read, IndexBuild, IndexState, Reader, Unreadable};
 pub use destination::{destinations, Destination};
 pub use eval::{Grade, Judged, QueryScore, Report};
 pub use index::{
-    built_by, ensure_current, open, open_fresh, reset, write_conversations, write_conversations_with, IndexOptions,
-    IndexStats, TOOL_TEXT_MAX,
+    built_by, ensure_current, open, record_importer_version, reset, write_conversations,
+    write_conversations_with, IndexOptions, IndexStats, TOOL_TEXT_MAX,
 };
 pub use model::{Conversation, Kind, Message, Role, Titles};
 pub use query::{Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection, Window};

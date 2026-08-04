@@ -8,7 +8,10 @@ exclude = ["poc/rust"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+# 1.89 for `std::fs::File::try_lock`, which is how `cs-core::build` tells a rebuild that is
+# still running from one that was killed. The alternatives were a new dependency for `flock`
+# or a timeout guessed at, and neither is worth a version floor nothing enforces.
+rust-version = "1.89"
 
 # Pinned once here so the two crates cannot drift apart on a shared type.
 [workspace.dependencies]

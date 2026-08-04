@@ -65,11 +65,11 @@ pub enum Exit {
 }
 
 pub fn run(db_path: PathBuf, log: LogSink<'_>, opts: Opts) -> anyhow::Result<Exit> {
-    let conn = rusqlite::Connection::open(&db_path)
-        .with_context(|| format!("opening {} (run `cs index` first?)", db_path.display()))?;
     // Checked before the terminal is taken over: an error printed into the alternate screen
-    // is an error nobody reads.
-    cs_core::ensure_current(&conn).map_err(anyhow::Error::msg)?;
+    // is an error nobody reads. Missing, half-built and stale are separate answers here
+    // (`cs_core::IndexState`), which is what stops a first run being told its brand-new index
+    // predates the schema.
+    let conn = cs_core::open_for_read(&db_path)?.conn;
     let mut app = state::App::new(conn, &opts, theme::Theme::detect(theme::no_color_env()))?;
 
     // The guard owns the restore, so a `?` out of the loop below leaves a usable terminal

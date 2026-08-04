@@ -108,27 +108,12 @@ pub fn open(path: &str) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-/// Open an index from scratch, discarding whatever was there.
+/// Empty an already-open index. Only usable on tables that support it —
+/// [`crate::build::IndexBuild`] is what a real rebuild goes through.
 ///
-/// The file is *deleted* rather than emptied. Two reasons, both learned the hard way:
-/// `DELETE FROM` an fts5 table that stores no content of its own fails once it holds rows (it
-/// silently succeeds while empty, so the bug hides until the second run — hence the
-/// `delete-all` command in [`reset`]), and `CREATE TABLE IF NOT EXISTS` will not add a column
-/// that a newer schema introduced.
-///
-/// Deleting is also simply the correct move under ADR 1 — the index is a pure function of
-/// the archive, so there is no state worth preserving and no migration to write. If this
-/// ever needs to become an in-place migration, something has gone in that the archive
-/// cannot reproduce.
-pub fn open_fresh(path: &str) -> rusqlite::Result<Connection> {
-    for suffix in ["", "-wal", "-shm"] {
-        let _ = std::fs::remove_file(format!("{path}{suffix}"));
-    }
-    open(path)
-}
-
-/// Empty an already-open index. Only usable on tables that support it — prefer
-/// [`open_fresh`] for a real rebuild.
+/// `DELETE FROM` an fts5 table that stores no content of its own fails once it holds rows, and
+/// silently succeeds while empty, so the bug hides until the second run. Hence `delete-all`,
+/// which is the only form fts5 accepts.
 pub fn reset(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "DELETE FROM conversation; DELETE FROM message; DELETE FROM build_info;
@@ -166,12 +151,23 @@ where
            started_at   = (SELECT MIN(m.ts) FROM message m WHERE m.conv_id = conversation.id),
            ended_at     = (SELECT MAX(m.ts) FROM message m WHERE m.conv_id = conversation.id)",
     )?;
-    tx.execute(
+    record_importer_version(&tx)?;
+    tx.commit()?;
+    Ok(stats)
+}
+
+/// Stamp the version that produced this index's contents.
+///
+/// Written when a build starts as well as when conversations are written, because an archive
+/// that holds nothing still produces a perfectly current index — and an index with no such row
+/// is indistinguishable from one too old to read (see [`ensure_current`]), so a first run over
+/// an empty archive was told its brand-new index predated the schema.
+pub fn record_importer_version(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute(
         "INSERT OR REPLACE INTO build_info(key, value) VALUES ('importer_version', ?1)",
         params![IMPORTER_VERSION.to_string()],
     )?;
-    tx.commit()?;
-    Ok(stats)
+    Ok(())
 }
 
 fn write_one(

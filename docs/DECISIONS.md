@@ -258,6 +258,8 @@ _C. Ship `cs-core` as a C-ABI shared library for non-Rust clients_
 
 **Consequence — the JSON contract is now load-bearing for real.** Argv in, JSON on stdout, and a nonzero exit is part of the interface. Clients must treat "no index yet" and "index being rebuilt" as first-class states, not as transport errors, because they will hit both.
 
+_2026-08-04, `chat-search-me9.28`:_ the contract now carries the distinction, because a client could not draw it — a rebuild in place made queries return silently partial result sets for ~5s, with exit 0 and nothing in the body saying so. A rebuild is assembled in a sibling file and renamed over the target, so a reader sees the whole old index or the whole new one, and the four states travel as names a client can branch on: `no_index` and `building` as an `error.code` beside the nonzero exit, `ready` and `rebuilding` as `index_state` on a body that is complete either way. See `cs_core::build`.
+
 **Revisit when.** Spawn-plus-open p95 passes ~20 ms — far enough above today's ~3 ms that the per-keystroke path stops leaving room for the client to render, most plausibly reached as the index grows well past 293 MB or as `cs` accumulates startup work. Or when a client needs state that only a resident process can hold: a warm embedding model, a live tail of the running session, or an incremental writer that must not be re-established per keystroke. Reaching either means starting with `--stdio`, not with a socket.
 
 ---

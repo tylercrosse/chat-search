@@ -63,6 +63,17 @@ This shared session id is why per-file message ordinals collide (7,637 messages,
 
 **Index** **[`index.db`]** Disposable. A pure function of _(raw archive, importer version)_. Deleting and rebuilding it must always be safe; a full rebuild is ~7s for 1.8 GB. Anything that cannot survive `rm index.db` is in the wrong file.
 
+**Index state** **[wire: `index_state`, `error.code`]** What a reader found at the index path — the only thing a client is meant to branch on, since the sentence beside it is prose and free to change. Four values, and each says what to do next:
+
+| state | how it arrives | what it means |
+| --- | --- | --- |
+| `no_index` | `error.code`, exit 1 | nothing at the path. Run `cs index` |
+| `building` | `error.code`, exit 1 | nothing to answer with **yet**, and a build is running. Wait, do not start another |
+| `rebuilding` | `index_state`, exit 0 | a complete answer from the previous build, with a newer index on the way |
+| `ready` | `index_state`, exit 0 | a complete answer, nothing running |
+
+`rebuilding` never means partial. A rebuild is assembled in a sibling file (`index.db.building`) and renamed over the target, so a reader sees the whole old index or the whole new one and never a half-written one — which is what the states are worth naming for. The build holds a lock on `index.db.building.lock` for its lifetime, so a rebuild killed halfway leaves litter that reads as `ready` rather than as a build that never ends; the next `cs index` clears it (ADR 14, `chat-search-me9.28`).
+
 **Library** **[`library.db`]** Precious, tiny, backed up. Holds only **authored** data as an append-only event log. Merging two machines is concatenate-and-fold with last-write-wins per key.
 
 **Derived** vs **Authored** The central invariant: every mutable thing is one or the other, never both and never neither. Derived state is recomputed on rebuild and never merged. Authored state is appended and never overwritten.

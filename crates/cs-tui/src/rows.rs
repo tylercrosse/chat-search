@@ -138,6 +138,7 @@ mod tests {
             score: 0.0,
             match_count: n,
             match_seqs: Vec::new(),
+            kind_runs: Vec::new(),
             native_id: conv_id.into(),
             destinations: Vec::new(),
             deleted_upstream: false,

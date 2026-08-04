@@ -351,7 +351,7 @@ pub fn preview_body_width(area_width: u16) -> usize {
 /// [`crate::preview`]; this only lays it out.
 fn preview(frame: &mut Frame, area: Rect, app: &App) {
     let title = match app.preview.as_ref().map(|p| p.density) {
-        Some(crate::preview::Density::Outline) => " Outline ",
+        Some(cs_core::blocks::Density::Outline) => " Outline ",
         _ => " Preview ",
     };
     let block = Block::default()

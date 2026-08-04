@@ -150,11 +150,30 @@ enum Command {
         kind: Option<String>,
     },
     /// What you have searched for, and what answered it.
+    ///
+    /// Needs rather than keystrokes: a query typed one character at a time is one row, and a
+    /// query run three times to time it is one search. What that sets aside is printed under
+    /// the table, because these counts are what chat-search-6eb.21 reads before harvesting an
+    /// eval set out of them.
     Needs {
         #[arg(long, default_value = "40")]
         limit: usize,
         #[arg(long)]
         json: bool,
+        /// Read a log other than the configured one.
+        #[arg(long)]
+        log: Option<PathBuf>,
+        /// Record that a half-open span of the log was machine-driven, then show the result.
+        ///
+        /// Local dates or times: `2026-08-04..2026-08-05`, or
+        /// `2026-08-04T09:47..2026-08-04T11:00`. A benchmark's queries cannot be told from real
+        /// ones after the fact — both are ordinary text and both go unpicked — so this is how
+        /// the person who ran it says which were which.
+        #[arg(long, value_name = "FROM..UNTIL")]
+        driven: Option<String>,
+        /// What was being measured. Required by `--driven`.
+        #[arg(long, value_name = "TEXT")]
+        why: Option<String>,
     },
     /// Why a conversation did not come back for a query.
     Explain {
@@ -272,7 +291,9 @@ fn main() -> Result<()> {
         Command::Pick { conv_id, query: q, db, source, limit, quiet, kind } => {
             commands::pick(&config_path, db, &conv_id, &q, source.as_deref(), limit, quiet, kind.as_deref())
         }
-        Command::Needs { limit, json } => commands::needs(&config_path, limit, json),
+        Command::Needs { limit, json, log, driven, why } => {
+            commands::needs(&config_path, log, limit, json, driven.as_deref(), why.as_deref())
+        }
         Command::Explain { conv_id, query: q, db } => commands::explain(&config_path, db, &conv_id, &q),
         Command::Show { conv_id, query: q, db, json } => {
             commands::show(&config_path, db, &conv_id, &q, json)

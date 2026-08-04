@@ -236,7 +236,7 @@ pub fn search(
 
 /// Record a search. Never fails the search it is describing — see `querylog::append`.
 fn log_search(cfg: &Config, text: &str, source: Option<&str>, groups: &[cs_core::Group], ms: f64) {
-    if !cfg.log_queries || cs_core::Query::exact(text).mode() == cs_core::Mode::Empty {
+    if !cfg.recording_queries() || cs_core::Query::exact(text).mode() == cs_core::Mode::Empty {
         return;
     }
     let shown = cs_core::querylog::truncate_shown(
@@ -290,7 +290,7 @@ pub fn pick(
     let rank = shown.iter().position(|c| c == conv_id).map(|i| i + 1);
     shown = cs_core::querylog::truncate_shown(shown);
 
-    if cfg.log_queries {
+    if cfg.recording_queries() {
         let _ = cs_core::querylog::append(&cfg.query_log(), &cs_core::querylog::Event::Pick {
             ts: cs_core::now_ms(),
             q: text.to_string(),
@@ -345,16 +345,33 @@ pub fn pick(
 }
 
 /// What has been searched for, and what answered it.
-pub fn needs(config_path: &Path, limit: usize, json: bool) -> Result<()> {
+///
+/// The counts printed under the table are not decoration. The fold sets aside far more than it
+/// keeps — keystrokes on the way to a query, benchmark spans, picks made with nothing typed —
+/// and chat-search-6eb.21 reads the distinct-need count here as its trigger for harvesting an
+/// eval set. A number that does not say what it excluded cannot be read honestly.
+pub fn needs(
+    config_path: &Path,
+    log: Option<PathBuf>,
+    limit: usize,
+    json: bool,
+    driven: Option<&str>,
+    why: Option<&str>,
+) -> Result<()> {
     let cfg = Config::load(config_path)?;
-    let path = cfg.query_log();
+    let path = log.unwrap_or_else(|| cfg.query_log());
+    if let Some(span) = driven {
+        declare_driven(&path, span, why)?;
+    }
     let (events, skipped) = cs_core::querylog::load(&path)?;
-    let needs = cs_core::querylog::needs(&events);
+    let folded = cs_core::querylog::fold(&events);
 
     if json {
         println!("{:#}", serde_json::json!({
             "log": path, "events": events.len(), "unreadable": skipped,
-            "needs": needs.iter().take(limit).collect::<Vec<_>>(),
+            "keystrokes": folded.keystrokes, "driven": folded.driven, "spans": folded.spans,
+            "browsed": folded.browsed,
+            "needs": folded.needs.iter().take(limit).collect::<Vec<_>>(),
         }));
         return Ok(());
     }
@@ -365,16 +382,84 @@ pub fn needs(config_path: &Path, limit: usize, json: bool) -> Result<()> {
     }
 
     println!("  {:<34} {:>8} {:>7}  {}", "query", "searches", "picks", "opened");
-    for n in needs.iter().take(limit) {
+    for n in folded.needs.iter().take(limit) {
         let picks: usize = n.picked.iter().map(|(_, c)| c).sum();
         let top = n.picked.first().map(|(c, _)| c.as_str()).unwrap_or("—");
         println!("  {:<34} {:>8} {:>7}  {}", trunc(&n.q, 34), n.searches, picks, trunc(top, 40));
     }
-    let picked: usize = needs.iter().map(|n| n.picked.len()).sum();
-    println!("\n  {} distinct quer(y/ies) · {} event(s) · {picked} answered", needs.len(), events.len());
+    let answered: usize = folded.needs.iter().map(|n| n.picked.len()).sum();
+    println!(
+        "\n  {} need(s) · {} event(s) · {answered} answered",
+        folded.needs.len(),
+        events.len()
+    );
+
+    // Each of these is a claim about what the log means, so each is named rather than summed
+    // into one "folded away" figure that nobody could check.
+    let mut aside = Vec::new();
+    if folded.keystrokes > 0 {
+        aside.push(format!("{} on the way to another query", folded.keystrokes));
+    }
+    if folded.driven > 0 {
+        aside.push(format!("{} in {} driven span(s)", folded.driven, folded.spans));
+    }
+    if folded.browsed > 0 {
+        aside.push(format!("{} browsed with nothing typed", folded.browsed));
+    }
+    if !aside.is_empty() {
+        println!("  set aside: {}", aside.join(" · "));
+    }
     if skipped > 0 {
         println!("  warning: {skipped} unreadable line(s) in {}", path.display());
     }
+    Ok(())
+}
+
+/// Record that a span of the log was machine-driven, so the fold stops reading it as needs.
+///
+/// Authored rather than detected, and deliberately so: see `querylog::Event::Driven`. The
+/// reason is mandatory because an exclusion nobody explained is the silent carry this exists
+/// to prevent, and the pick count is reported because picks are the only relevance judgements
+/// the log ever produces — excluding one should be a decision, not a side effect.
+fn declare_driven(path: &Path, span: &str, why: Option<&str>) -> Result<()> {
+    let why = why.context(
+        "--driven needs --why: an exclusion with no reason is a silent one a week from now",
+    )?;
+    let bound = |text: &str| {
+        cs_core::time::local_instant(text).with_context(|| {
+            format!("{text:?} is not a local date or time — try 2026-08-04 or 2026-08-04T10:30")
+        })
+    };
+    let (from, until) = span
+        .split_once("..")
+        .context("--driven takes a half-open span, as in 2026-08-04..2026-08-05")?;
+    let (from, until) = (bound(from)?, bound(until)?);
+    if until <= from {
+        anyhow::bail!("a driven span has to end after it starts");
+    }
+
+    let (events, _) = cs_core::querylog::load(path)?;
+    let inside: Vec<&cs_core::querylog::Event> = events
+        .iter()
+        .filter(|e| e.query().is_some() && e.ts() >= from && e.ts() < until)
+        .collect();
+    let picks = inside
+        .iter()
+        .filter(|e| matches!(e, cs_core::querylog::Event::Pick { .. }))
+        .count();
+
+    cs_core::querylog::append(path, &cs_core::querylog::Event::Driven {
+        ts: cs_core::now_ms(),
+        from,
+        until,
+        why: why.to_string(),
+    })?;
+    println!("  driven: {why}");
+    println!("  covers {} event(s) in {}", inside.len(), path.display());
+    if picks > 0 {
+        println!("  warning: {picks} of them are picks — the only judgements this log has");
+    }
+    println!("  written as one line; delete it to take the exclusion back\n");
     Ok(())
 }
 

@@ -58,6 +58,7 @@
     uncapped: new Set(),        // groups showing past the 20-row cap
     smallShown: false,          // the tail of one- and two-conversation projects
     railProjects: false,        // the project rail past its first eight
+    pvTopics: false,            // the drawer's topic chips past the first three
   };
 
   /* The list is one list. These are the axes it can be cut along, and every one of them
@@ -140,7 +141,8 @@
     const n = msgs.length;
     const cols = Math.min(n, width);
     const cw = width / cols;
-    const buckets = Array.from({ length: cols }, () => ({ p: 0, r: 0, t: 0, hit: false, len: 0 }));
+    const buckets = Array.from({ length: cols }, () =>
+      ({ p: 0, r: 0, t: 0, hit: false, cut: false, len: 0 }));
 
     msgs.forEach((m, i) => {
       const b = buckets[Math.min(cols - 1, Math.floor((i / n) * cols))];
@@ -149,6 +151,7 @@
       else b.t++;
       b.len = Math.max(b.len, Math.log10(m.len));
       if (m.match) b.hit = true;
+      if (m.compacted) b.cut = true;
     });
 
     return buckets
@@ -159,7 +162,10 @@
         const w = Math.max(0.8, cw - 0.35).toFixed(2);
         return (
           `<i class="${kind}" style="left:${x}px;width:${w}px;height:${h.toFixed(1)}px"></i>` +
-          (b.hit ? `<i class="hit" style="left:${x}px;width:${Math.max(1.5, cw).toFixed(2)}px"></i>` : '')
+          (b.hit ? `<i class="hit" style="left:${x}px;width:${Math.max(1.5, cw).toFixed(2)}px"></i>` : '') +
+          // The minimap is how you cross a 1,300-message conversation, so the one
+          // boundary that changes what the agent knew belongs on it.
+          (b.cut ? `<i class="cut" style="left:${x}px"></i>` : '')
         );
       })
       .join('');
@@ -531,6 +537,16 @@
   const RIBBON_W = 236;
   const FOUR_HOURS = 4 * 3600000;
 
+  /* The ribbon used to draw 236px whether the conversation held 10 messages or 2,553,
+     so the one mark that could carry scale was the one mark that refused to. The track
+     now takes a share of the cell by log length: linear would render everything under
+     ~200 messages as a stub, since the corpus spans 4 to 2,553. Floor at 14% so a short
+     conversation is still a shape rather than a dot; the cell keeps its full width, so
+     the columns either side stay on the grid. */
+  const LONGEST = Math.max(120, ...CONVERSATIONS.map((c) => c.n));
+  const ribbonWidth = (n) =>
+    RIBBON_W * Math.max(0.14, Math.min(1, Math.log(Math.max(n, 2)) / Math.log(LONGEST)));
+
   /* Four categories, matching the four fidelity knobs and the four ribbon colours. */
   const bandClass = (m) =>
     m.kind === 'prose' ? (m.role === 'user' ? 'user' : 'agent')
@@ -545,13 +561,47 @@
   ];
 
   const LEVELS = ['hidden', 'collapsed', 'expanded'];
-  const LEVEL_GLYPH = { hidden: '○', collapsed: '◐', expanded: '●' };
+  /* The model keeps the names TUI-DESIGN §8 uses; the chip shows shorter words, because
+     "collapsed" does not fit a 10px chip next to its kind and "off" says the same thing
+     faster. */
+  const LEVEL_WORD = { hidden: 'off', collapsed: 'brief', expanded: 'full' };
 
+  /* Four presets, no all-buttons. There used to be three presets plus `expand all` and
+     `collapse all`, and two of those five were the same command — `outline` sets every
+     kind to collapsed and so did `collapse all` — while `full` was not full (it left
+     reasoning and tools collapsed) and `expand all` was. Naming a preset for what it
+     does and letting `everything` mean everything removes both the duplicate and the
+     lie. */
   const PRESETS = {
-    segments: { user: 'expanded', agent: 'collapsed', reason: 'hidden',    tool: 'hidden' },
-    outline:  { user: 'collapsed', agent: 'collapsed', reason: 'collapsed', tool: 'collapsed' },
-    full:     { user: 'expanded', agent: 'expanded',  reason: 'collapsed', tool: 'collapsed' },
+    segments:   { user: 'expanded',  agent: 'collapsed', reason: 'hidden',    tool: 'hidden' },
+    outline:    { user: 'collapsed', agent: 'collapsed', reason: 'collapsed', tool: 'collapsed' },
+    read:       { user: 'expanded',  agent: 'expanded',  reason: 'collapsed', tool: 'collapsed' },
+    everything: { user: 'expanded',  agent: 'expanded',  reason: 'expanded',  tool: 'expanded' },
   };
+
+  /* Visibility and detail are two axes, not three states on one. Hiding a kind is
+     "is it on screen"; brief/full is "how much of it". Conflating them is why every
+     arrangement of this control has felt wrong, including the segmented one it replaces:
+     with a single 3-cycle, one of the six transitions always costs two clicks.
+
+     So the chip carries both. Its body cycles off → brief → full → off, which is the
+     path you actually walk (peek at the tools, then read them, then put them away) —
+     the earlier note rejecting a cycle optimised the rare transition. Its dot toggles
+     visibility outright and restores whatever detail level the kind last had, which is
+     the escape a pure cycle cannot give you. */
+  const lastLevel = { user: 'expanded', agent: 'collapsed', reason: 'collapsed', tool: 'collapsed' };
+
+  function cycleKind(k, back) {
+    const i = LEVELS.indexOf(state.fidelity[k]);
+    const next = LEVELS[(i + (back ? LEVELS.length - 1 : 1)) % LEVELS.length];
+    state.fidelity[k] = next;
+    if (next !== 'hidden') lastLevel[k] = next;
+  }
+
+  function toggleKind(k) {
+    if (state.fidelity[k] === 'hidden') state.fidelity[k] = lastLevel[k];
+    else { lastLevel[k] = state.fidelity[k]; state.fidelity[k] = 'hidden'; }
+  }
 
   const ovrKey = (m) => state.selected + ':' + m.i;
   const levelOf = (m) =>
@@ -587,13 +637,20 @@
   /* Run-length encode consecutive same-kind messages into blocks. Per-message bands
    * at this width are 1.6px of near-identical grey — the structure only appears once
    * a 30-message tool run is drawn as one block. */
+  /* Runs break on act as well as on kind, so a patch landing inside forty exec calls
+     shows as its own band instead of being swallowed by the run around it. A tool_result
+     inherits the act of the call it answers — they are one event, and splitting them
+     would double the band count for nothing. */
   function runs(msgs) {
     const out = [];
+    let carried = null;
     msgs.forEach((m) => {
       const k = bandClass(m);
+      if (m.act) carried = m.act;
+      const a = k === 'tool' ? (m.act || carried || 'run') : null;
       const last = out[out.length - 1];
-      if (last && last.k === k && last.off === !m.onPath) last.len++;
-      else out.push({ k, len: 1, off: !m.onPath, start: m.i });
+      if (last && last.k === k && last.a === a && last.off === !m.onPath) last.len++;
+      else out.push({ k, a, len: 1, off: !m.onPath, start: m.i });
     });
     return out;
   }
@@ -604,22 +661,26 @@
     // same teal/white alternation and the list stopped being triageable at all.
     const shown = conv.msgs;
     const n = shown.length || 1;
-    let html = '<div class="rb-track">';
+    const W = ribbonWidth(n);
+    // The track is the length cue: it is the thing that ends early, so a short
+    // conversation reads as short rather than as a long one drawn mostly empty.
+    let html = `<div class="rb-track" style="width:${W.toFixed(1)}px">`;
 
     let x = 0;
     runs(conv.msgs).forEach((r) => {
-      const w = (r.len / n) * RIBBON_W;
+      const w = (r.len / n) * W;
       // A steer is one message; give it a floor so it stays a visible separator.
       const drawn = r.k === 'user' ? Math.max(2, w) : Math.max(0.7, w - 0.4);
       const dim = state.fidelity[r.k] === 'hidden' ? ' dim' : '';
-      html += `<div class="rb-band ${r.k}${r.off ? ' off' : ''}${dim}" ` +
+      const act = r.a ? ` a-${r.a}` : '';
+      html += `<div class="rb-band ${r.k}${act}${r.off ? ' off' : ''}${dim}" ` +
               `style="left:${x.toFixed(2)}px;width:${drawn.toFixed(2)}px"></div>`;
       x += w;
     });
     html += '</div>';
 
     shown.forEach((m, i) => {
-      const x = (i / n) * RIBBON_W;
+      const x = (i / n) * W;
       if (withTicks && m.match) {
         html += `<div class="rb-tick" style="left:${x.toFixed(2)}px"></div>`;
       }
@@ -627,6 +688,10 @@
       if (m.err) html += `<div class="rb-mark x" style="left:${x.toFixed(2)}px"></div>`;
       // A pause is a pause wherever it lands.
       if (m.paused) html += `<div class="rb-notch" style="left:${x.toFixed(2)}px"></div>`;
+      // A compaction is not a pause. A pause says you went away; this says the earlier
+      // half of the conversation stopped being verbatim, so it gets its own mark rather
+      // than a heavier notch. Full height, because it cuts the whole thing.
+      if (m.compacted) html += `<div class="rb-cut" style="left:${x.toFixed(2)}px"></div>`;
     });
 
     return html;
@@ -841,7 +906,10 @@
         ? `${m.text} · ${Math.round(m.len / 52)} lines`
         : `reasoning · ${Math.round(m.len / 52)} lines`;
     } else if (m.kind === 'tool_call') {
-      sig = '⚙';
+      // The glyph says what the call was for. In the preview there is room for the
+      // distinction to be legible, which is where the ribbon's sub-shades cannot be.
+      sig = ACT_GLYPH[m.act] || '⚙';
+      d.classList.add('a-' + (m.act || 'run'));
       text = level === 'expanded' ? `${m.tool}  ·  ${(m.len / 1024).toFixed(1)} KB` : m.tool;
     } else {
       // tool_result omitted: the call implies it. A failure is not — a tool breaking
@@ -874,9 +942,62 @@
     return b;
   }
 
+  /* Louder than a pause rule, because it means something worse: at seq 924 of 1,323 you
+     would never find this by scrolling, and everything above it is a summary. */
+  function cutRule() {
+    const b = el('div', 'brk cut');
+    b.innerHTML = '<span>context compacted &middot; everything above is summarised ' +
+      'from here on</span>';
+    return b;
+  }
+
   function hours(ms) {
     const h = ms / 3600000;
     return h >= 24 ? `${Math.round(h / 24)}d later` : `${Math.round(h)}h later`;
+  }
+
+  const ACT_ORDER = ['run', 'change', 'look', 'steer'];
+
+  /* One line for the shape of the work, one for where it landed. Both are free: the act
+     comes from the tool name, the paths were already mined for the project rollup and
+     were being thrown away at conversation scale. */
+  function workSummary(c) {
+    const calls = c.msgs.filter((m) => m.act);
+    const side = c.sidechain || 0;
+    if (!calls.length && !c.files.length && side < 0.05) return '';
+
+    const n = new Map();
+    calls.forEach((m) => n.set(m.act, (n.get(m.act) || 0) + 1));
+    // A share that rounds to 0% is noise on the line; the count says the thing happened
+    // without claiming it was a proportion of the work.
+    const acts = ACT_ORDER.filter((a) => n.get(a)).map((a) => {
+      const pct = Math.round((n.get(a) / calls.length) * 100);
+      return `<span class="act ${a}"><i>${ACT_GLYPH[a]}</i>${a}` +
+             `<b>${pct >= 1 ? pct + '%' : '×' + n.get(a)}</b></span>`;
+    });
+
+    // Subagents share the `did` row rather than taking one of their own: they appear on
+    // 57 conversations in the whole corpus, and a label that is blank on 98% of rows is
+    // a row nobody should be paying vertical space for.
+    const sub = side >= 0.05
+      ? `<span class="act sub"><i>⑃</i>subagents<b>${Math.round(side * 100)}%</b></span>`
+      : '';
+
+    let html = '<div class="pv-work">';
+    if (calls.length || sub) {
+      html += '<div class="pv-acts"><span class="gname">did</span>' +
+        (calls.length ? `<span class="n">${calls.length} call${calls.length > 1 ? 's' : ''}</span>` : '') +
+        acts.join('') + sub + '</div>';
+    }
+    if (c.files.length) {
+      // Three, so the row cannot wrap. The count carries the rest.
+      html += '<div class="pv-acts"><span class="gname">touched</span>' +
+        c.files.slice(0, 3).map(() =>
+          '<span class="tchip sm ghost"><span class="nm"></span></span>').join('') +
+        (c.files.length > 3 ? `<span class="n">+${c.files.length - 3}</span>` : '') +
+        '</div>';
+    }
+    return html + '</div>';
   }
 
   function previewCol() {
@@ -888,40 +1009,57 @@
     h.innerHTML =
       '<div class="pv-title"></div>' +
       '<div class="pv-meta"></div>' +
+      // Folded to one line. Sixteen chips took four rows and pushed the controls halfway
+      // down the drawer, which is a lot of space for a facet you can also reach from the
+      // rail. The count on the fold says what is behind it.
       (() => {
         const t = ((REAL && REAL.topics) || []).filter((x) => x.members.includes(c.id));
         if (!t.length) return '<div class="pv-tags"><span class="tchip sm ghost">no topic</span></div>';
-        return '<div class="pv-tags">' + t.map((x) =>
+        const open = state.pvTopics;
+        const shown = open ? t : t.slice(0, 3);
+        return '<div class="pv-tags">' + shown.map((x) =>
           `<span class="tchip sm${hasTopic(x.name) ? ' on' : ''}" data-topic="${x.name.replace(/"/g, '')}">${x.name}</span>`
-        ).join('') + '</div>';
+        ).join('') +
+          (t.length > 3
+            ? `<button type="button" class="tchip sm more" data-tagfold="1">${open ? 'fewer' : `+${t.length - 3}`}</button>`
+            : '') +
+          '</div>';
       })() +
-      '<div style="display:flex;align-items:center;margin-top:8px">' +
+      // What the conversation *did*, as opposed to what it was made of. The ribbon can
+      // say "this is mostly tool traffic"; only this can say whether that traffic was
+      // reading, editing or executing, and which files it landed on.
+      workSummary(c) +
       '<div class="zoom" id="zoom" role="group" aria-label="Preset">' +
-      ['segments', 'outline', 'full']
+      Object.keys(PRESETS)
         .map((z) => `<button type="button" data-zoom="${z}" aria-pressed="${preset === z}">${z}</button>`)
         .join('') +
       (preset ? '' : '<button type="button" aria-pressed="true" disabled>custom</button>') +
-      '</div></div>' +
-      '<div class="fid" id="fid" role="group" aria-label="Fidelity per message kind">' +
+      '</div>' +
+      // Label, state and dot inside one box. The 2x2 grid this replaces put `you`'s
+      // control nearer to `agent`'s label than `agent`'s own control was, so proximity
+      // pointed at the wrong thing on every read.
+      '<div class="fid" id="fid" role="group" aria-label="Detail per message kind">' +
       KINDS.map(({ k, label }) => {
         const lv = state.fidelity[k];
         return (
-          `<div class="fid-row${lv === 'hidden' ? '' : ' on'}">` +
-          `<span class="nm"><i style="background:var(--k-${k})"></i>${label}</span>` +
-          '<span class="fid-seg">' +
-          LEVELS.map((L) =>
-            `<button type="button" data-kind="${k}" data-set="${L}" ` +
-            `aria-pressed="${lv === L}" title="${label}: ${L}" ` +
-            `aria-label="${label}: ${L}">${LEVEL_GLYPH[L]}</button>`).join('') +
-          '</span></div>'
+          `<div class="fid-chip${lv === 'hidden' ? '' : ' on'}">` +
+          `<button type="button" class="dot" data-vis="${k}" aria-pressed="${lv !== 'hidden'}" ` +
+          `title="${label}: ${lv === 'hidden' ? 'show' : 'hide'}" ` +
+          `aria-label="${label}: ${lv === 'hidden' ? 'show' : 'hide'}" ` +
+          `style="--k:var(--k-${k})"></button>` +
+          `<button type="button" class="lv" data-kind="${k}" ` +
+          `title="${label}: ${LEVEL_WORD[lv]} — click to cycle, shift-click to go back" ` +
+          `aria-label="${label}: ${LEVEL_WORD[lv]}">` +
+          `<span class="nm">${label}</span><span class="st">${LEVEL_WORD[lv]}</span>` +
+          '</button></div>'
         );
       }).join('') +
       '</div>' +
-      '<div class="fid-all" id="fid-all">' +
-      '<button type="button" data-all="expanded">expand all</button>' +
-      '<button type="button" data-all="collapsed">collapse all</button>' +
-      (state.overrides.size ? '<button type="button" data-all="clear">clear overrides</button>' : '') +
-      '</div>';
+      (state.overrides.size
+        ? '<div class="fid-all" id="fid-all"><button type="button" data-all="clear">' +
+          `clear ${state.overrides.size} per-message override${state.overrides.size > 1 ? 's' : ''}` +
+          '</button></div>'
+        : '');
     h.querySelector('.pv-title').textContent = c.title;
 
     // The drawer used to print the cwd as text, so the one navigable relation on the
@@ -940,6 +1078,18 @@
     }
     meta.appendChild(document.createTextNode(
       ` · ${c.n} msgs · ${c.segments.length} segments · ${c.span}`));
+    // Model never changes inside a conversation — 0 of 3,057 carry more than one — so it
+    // is a property of the whole thing rather than something to draw along the axis.
+    if (c.model) meta.appendChild(document.createTextNode(` · ${c.model}`));
+
+    // Mined paths go in through the DOM, not the template: they are the one part of this
+    // markup that was not authored here.
+    h.querySelectorAll('.pv-work .tchip .nm').forEach((n, i) => {
+      const f = c.files[i];
+      if (!f) return;
+      n.textContent = elidePath(f, 30);
+      n.parentElement.title = f;
+    });
 
     col.appendChild(h);
 
@@ -956,6 +1106,9 @@
       c.segments.forEach((sg, idx) => {
         const paused = sg.items.find((m) => m.paused);
         if (paused) body.appendChild(breakRule(hours(paused.gapShown || FOUR_HOURS * 1.5)));
+        if (sg.items.some((m) => m.compacted) || (sg.steer && sg.steer.compacted)) {
+          body.appendChild(cutRule());
+        }
         // A steer with nothing after it is not a segment worth a summary line.
         if (!sg.items.length && !sg.steer) return;
 
@@ -1046,6 +1199,13 @@
         nt.style.top = top + '%';
         mm.appendChild(nt);
       }
+      // The minimap is how you cross a 1,300-message conversation, so the one boundary
+      // that changes what the agent knew belongs on it too.
+      if (m.compacted) {
+        const ct = el('div', 'mm-cut');
+        ct.style.top = top + '%';
+        mm.appendChild(ct);
+      }
     });
     const vbox = el('div', 'mm-view');
     vbox.id = 'mm-view';
@@ -1098,7 +1258,7 @@
     });
     const peak = Math.max(1, ...buckets);
     return '<span class="spark">' + buckets.map((n) =>
-      `<i style="height:${n ? Math.max(2, Math.round((n / peak) * 13)) : 1}px"` +
+      `<i style="height:${n ? Math.max(3, Math.round((n / peak) * 16)) : 1.5}px"` +
       `${n ? '' : ' class="z"'}></i>`).join('') + '</span>';
   }
 
@@ -1364,7 +1524,7 @@
       `<span class="cnt"><b>${g.total}</b>` +
       `${g.total !== g.items.length ? ` <i>· ${g.items.length} here</i>` : ''}</span>` +
       `<span class="when">${g.when || (from === to ? to : `${from} – ${to}`)}</span>` +
-      sparkline(g.items, 20);
+      sparkline(g.items, 12);
     head.querySelector('.nm').textContent = g.label;
     head.addEventListener('click', () => {
       if (open) state.expanded.delete(id); else state.expanded.add(id);
@@ -1784,24 +1944,31 @@
           render();
         })
       );
-      // Set a kind to a level directly — one click to any state.
-      document.querySelectorAll('#fid button[data-set]').forEach((b) =>
-        b.addEventListener('click', () => {
-          state.fidelity[b.dataset.kind] = b.dataset.set;
+      // Chip body: cycle. Shift reverses, so no transition costs two clicks.
+      document.querySelectorAll('#fid button[data-kind]').forEach((b) =>
+        b.addEventListener('click', (e) => {
+          cycleKind(b.dataset.kind, e.shiftKey);
+          state.zoomTouched = true;
+          state.overrides.clear();
+          render();
+        })
+      );
+      // Dot: visibility, straight there and back.
+      document.querySelectorAll('#fid button[data-vis]').forEach((b) =>
+        b.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleKind(b.dataset.vis);
           state.zoomTouched = true;
           state.overrides.clear();
           render();
         })
       );
 
+      const fold = document.querySelector('[data-tagfold]');
+      if (fold) fold.addEventListener('click', () => { state.pvTopics = !state.pvTopics; render(); });
+
       document.querySelectorAll('#fid-all button').forEach((b) =>
-        b.addEventListener('click', () => {
-          state.overrides.clear();
-          if (b.dataset.all !== 'clear') {
-            KINDS.forEach(({ k }) => { state.fidelity[k] = b.dataset.all; });
-          }
-          render();
-        })
+        b.addEventListener('click', () => { state.overrides.clear(); render(); })
       );
     }
     drawAnnotations();

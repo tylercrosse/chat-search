@@ -37,6 +37,23 @@ TOOL_CHARS = 120
 ERR_CHARS = 200
 
 KIND_CODE = {"prose": "p", "reasoning": "r", "tool_call": "c", "tool_result": "o"}
+
+# A compaction boundary: the point where the harness threw the earlier context away and
+# replaced it with a summary. Everything above it is no longer verbatim to the agent, so
+# it is a harder discontinuity than the >4h pause the ribbon already marks.
+#
+# Measured: 11 conversations, 12 boundaries, all claude-code, all mid-stream (seq 51-924,
+# never at the head — so this splits a conversation rather than starting one, and
+# forked_from is null on every one). Rare overall at 0.4% of the corpus, but 23% of
+# claude-code conversations over 600 messages and 0% of those under 100 — it appears
+# exactly where a reader is most lost.
+#
+# String-matching a harness sentence, which is what makes this a heuristic and not a
+# fact: it will drift when the wording changes, and it finds nothing for Codex even
+# though Codex compacts too. The durable version records the boundary in the importer.
+COMPACTED = re.compile(
+    r"This session is being continued from a previous conversation that ran out of context"
+    r"|The summary below covers the earlier portion of the conversation", re.I)
 ROLE_CODE = {"user": "u", "assistant": "a", "tool": "t", "system": "s"}
 
 # Stop words for the cluster proposals. Ordinary English plus the vocabulary this corpus
@@ -73,6 +90,12 @@ PATH_RE = re.compile(
 
 # Agent scaffolding, present in every repo and therefore distinguishing none of them.
 SCAFFOLD = {"SKILL.md", "CLAUDE.md", "AGENTS.md"}
+
+# Harness state, not project files. `~/.claude/plans/<slugified-first-message>.md` and
+# `~/Documents/Codex/<date>/<slug>/` both encode the conversation in the path, so they
+# read as a file the work touched when they are really the tooling talking about itself —
+# the same failure the MARKUP strip exists for, one layer down.
+HARNESS = re.compile(r"(^|/)\.(claude|codex)/|/Documents/Codex/|(^|/)\.git/")
 
 # Harness scaffolding. The importer strips this from *titles* (TUI-DESIGN §4, where it
 # polluted 24% of visible rows) but not from message text — so without stripping it here
@@ -203,7 +226,7 @@ def corpus_projects(conn):
         if kind == "tool_call":
             p = owner[cid]
             for path in PATH_RE.findall(text or ""):
-                if path.split("/")[-1] not in SCAFFOLD:
+                if path.split("/")[-1] not in SCAFFOLD and not HARNESS.search(path):
                     files[p][path] += 1
         else:
             bags[cid].update(tokens(text))
@@ -355,6 +378,8 @@ def load_conversations(conn, ids):
             m["s"] = 1
 
         text = (text or "").strip()
+        if COMPACTED.search(text):
+            m["z"] = 1
         if kind == "prose" or kind == "reasoning":
             m["x"] = text[:PROSE_CHARS]
         elif kind == "tool_call":
@@ -364,7 +389,18 @@ def load_conversations(conn, ids):
             head = text.splitlines()[0] if text else ""
             paths = FILE_RE.findall(text)
             m["x"] = (head + (" " + paths[0] if paths else ""))[:TOOL_CHARS]
-            if paths:
+            # Carried explicitly rather than re-parsed out of `x`, which is truncated at
+            # 120 chars and would lose the name on a long first line. It is what the act
+            # classification keys on: 47,479 calls run something, 9,460 change a file,
+            # 4,502 look at one — a distinction the single "tool" band cannot make.
+            m["c"] = head.split("(")[0].split()[0][:24] if head else "tool"
+            # Full paths, not basenames: `crates/cs-core/src/preview.rs` is a different
+            # fact from `preview.rs`, and the corpus holds four unrelated `README.md`s.
+            full = [p for p in PATH_RE.findall(text)
+                    if p.split("/")[-1] not in SCAFFOLD and not HARNESS.search(p)]
+            if full:
+                m["f"] = sorted(set(full))[:4]
+            elif paths:
                 m["f"] = sorted(set(paths))[:4]
         elif is_err:
             m["x"] = text[:ERR_CHARS]
@@ -674,6 +710,25 @@ def main():
     basenames = {p["path"].split("/")[-1]: p["path"] for p in projs}
     for c in convs:
         c["project"] = project_of(c.get("cwd"), basenames)
+        # Relativise and re-merge. The same file arrives both absolute and relative
+        # depending on how the tool was called, so `docs/DECISIONS.md` and
+        # `Users/…/docs/DECISIONS.md` were two entries for one file.
+        if c["project"]:
+            prefix = c["project"].rstrip("/") + "/"
+            merged = Counter()
+            for f in c["files"]:
+                for pre in (prefix, prefix.lstrip("/")):
+                    if f.startswith(pre):
+                        f = f[len(pre):]
+                        break
+                # A worktree is the project it was cut from, so its paths are the
+                # project's paths; leaving the prefix on made every chip open with
+                # `.claude/worktrees/...` and pushed the filename out of view.
+                f = re.sub(r"^\.?claude/worktrees/[^/]+/", "", f)
+                if HARNESS.search(f):
+                    continue
+                merged[f] += 1
+            c["files"] = list(merged)[:12]
     carried = Counter(c["project"] for c in convs if c["project"])
     for p in projs:
         p["sampled"] = carried.get(p["path"], 0)

@@ -89,6 +89,26 @@ topics for the conversational one; they are not competing taxonomies over one co
 subject-based grouping attempt was mediocre; every structural signal was strong and free.
 That is the opposite of the assumption the collections work started from.
 
+### Compaction
+
+11 conversations, 12 boundaries, **all claude-code, all mid-stream** (seq 51–924, never
+at the head) — so a compaction splits a conversation rather than starting one, and
+`forked_from` is null on every one of them. One 476-message conversation compacted twice.
+
+Rare overall at 0.4% of the corpus, but that is the wrong denominator:
+
+| claude-code length | conversations | with a compaction |
+| --- | --- | --- |
+| 600+ | 13 | **3 (23%)** |
+| 300–599 | 33 | 2 (6%) |
+| 100–299 | 92 | 5 (5%) |
+| under 100 | 243 | **0** |
+
+It appears exactly where a reader is most lost and nowhere else. Detection is a string
+match on a harness sentence, so it is a heuristic: it will drift when the wording changes
+and finds nothing for Codex, which also compacts. The durable version records the
+boundary in the importer.
+
 ### Topics
 
 Broad seeds (the organiser's nine) were too wide to explore: AI/ML reached **899 of
@@ -127,20 +147,84 @@ checking.**
   query-dependent, vanish with no query. Notches = pauses > 4h. Dots = agent asked you.
   Red = tool failed. Sharing an axis is the point: *was my hit in a steer, or buried in a
   40-message run?* is the discriminating read, and 66–85% of hits are in tool traffic.
+- **The four kind colours sit on a luminance ramp, not four hues.** Measured, the old
+  palette separated them by hue and not by luminance — `agent`/`reasoning` were 2.00
+  apart in dark and **1.12 in light**, i.e. the same colour — and hue is the channel that
+  degrades fastest at the 2px these bands are drawn at. §7 says nothing is encoded in
+  colour alone, and kind *is*, so the colour has to carry it on the strong channel. Now
+  2.2 / 4.0 / 7.2 / 13.0 against the track — an even ~1.8× per step, in both themes.
+  Order is agent brightest (the prose you are usually after) then user, reasoning, tool
+  (66–85% of the volume, so it must be quietest or the ribbon is a wall).
+- **The ribbon stays message-count weighted, and that is correct.** By bytes the corpus
+  is prose 42.3% / tool_result 34.7% / tool_call 20.7% / reasoning 2.4%, against message
+  shares of 23.6 / 34.0 / 34.5 / 7.8 — so a byte-weighted ribbon would look very
+  different. It would also stop being a *map*: positions have to agree with the match
+  ticks and the fold model, both of which index messages. Length is already encoded
+  where it belongs — `mapBands` varies bar height by `log10(len)` on a count axis.
+- **Tool calls carry an act, and the act is drawn.** `look / change / run / steer`, from
+  the tool name, which the harnesses spell differently for the same capability (codex
+  `exec_command`, claude-code `Bash`). Corpus: run 47,479 · change 9,460 · look 4,502 ·
+  steer 1,164. Ribbon runs break on act as well as kind, so a patch landing inside forty
+  exec calls is its own band. A `tool_result` inherits its call's act — one event.
+- **Act sub-shades are deliberately narrow** — 1.29× and 1.42× apart, all below
+  reasoning's 4.0 — because the primary read has to stay on the main ramp. They say
+  "something changed here", they are not independently decodable at 2px. The glyph in the
+  preview gutter carries the distinction where there is room for it.
+- **The ribbon's drawn width is the length cue.** It was a fixed 236px whether the
+  conversation held 10 messages or 2,553, so the one mark that could carry scale refused
+  to. Log-scaled with a 14% floor: linear would render everything under ~200 messages as
+  a stub. The *cell* keeps its full width so the columns either side stay on the grid.
 - **Hidden kinds are dimmed on the maps, not dropped from the axis.** Reversed mid-session
   — see §3.
 
 ### Preview
 
+- **The drawer says what the conversation *did*, not only what it was made of.** One line
+  of acts (`353 calls · run 47% · change 27% · look 24%`), one of files touched. Both are
+  free — the act is the tool name, the paths were already mined for the project rollup
+  and thrown away at conversation scale.
+- **Subagents share the acts line rather than owning one.** 57 conversations in the whole
+  corpus carry any, so a label blank on 98% of rows is not worth a row — but where it
+  appears it averages 52% of the conversation, so it earns a badge.
+- **Model sits in the meta line.** Whether it changes inside a conversation is
+  **unanswerable from the index** — see §3 #23. It is shown as a conversation-level fact
+  because that is the only shape the index has.
+- **The asked-you mark is the union of two signals.** `request_user_input` is exact and
+  rare (237 calls in 92 conversations); assistant prose ending in `?` is broad and noisy
+  (1,402 in 578). Neither alone is the fact.
+- **A compaction boundary is marked, and is not a pause.** A pause says you went away; a
+  compaction says the earlier half stopped being verbatim, so the agent past it knows
+  different things. Distinct mark on the ribbon and the minimap (doubled, full height,
+  against the notch's single partial stroke) and a rule in the transcript, because at
+  seq 924 of 1,323 you would never find it by scrolling.
 - **~602px (78ch)**, paid for by the title moving off the column grid. First time it has
   had a real reading measure.
 - **Gutter spine carries role and kind; text contrast is identical for user and agent.**
   `me9.1.1` records "do not privilege user turns; an assistant answer is often the thing
   being looked for", and the earlier mock violated it by dimming assistant prose.
 - **Per-kind fidelity is the model** (user / agent / reasoning / tools × hidden /
-  collapsed / expanded). The three preset names are presets over those four knobs. Direct
-  three-state controls, not a cycle — cycling forced you through `hidden` to get from
-  expanded back to collapsed.
+  collapsed / expanded). The preset names are presets over those four knobs.
+- **Visibility and detail are two axes, not three states on one.** Hiding a kind is "is
+  it on screen"; brief/full is "how much of it". Conflating them is why every arrangement
+  of this control felt wrong: with a single 3-cycle, one of the six transitions always
+  costs two clicks. One chip per kind carries both — the **body cycles** off → brief →
+  full → off (shift-click reverses), the **dot** toggles visibility and restores the
+  level that kind last had.
+- **The cycle order follows the path you actually walk**: peek at the tools, read them,
+  put them away. See §3 #22 — the earlier decision here optimised the rare transition.
+- **Label, state and dot live in one box.** The 2×2 grid that preceded it put `you`'s
+  control nearer to `agent`'s *label* than `agent`'s own control was, so proximity
+  pointed at the wrong thing on every read. That was most of the fiddliness, not the
+  cycling.
+- **The state is a word, not a glyph.** `○ ◐ ●` is a legend you have to learn, on an 18px
+  target; `off / brief / full` is neither.
+- **Four presets, no all-buttons.** There were three presets plus `expand all` and
+  `collapse all`, of which two were the same command — `outline` set every kind to
+  collapsed and so did `collapse all` — while `full` was *not* full (reasoning and tools
+  stayed collapsed) and `expand all` was. Now `segments · outline · read · everything`,
+  each distinct and named for what it does. 17 controls to 8.
+- **The drawer's topic chips fold to three.** Sixteen of them took four rows and pushed
+  the controls halfway down the drawer; the header went 242px → 172px.
 - **Segment is the coarse fold unit** — a steer plus the run it caused, summarised as
   `→ 34 calls · 2 failed · asked you 1×`. Per-message is 211 toggles on a 211-message
   conversation.
@@ -247,6 +331,16 @@ checking.**
   afternoon", which you ask *because* you want to read one of the answers.
 - **Timeline is a bottom drawer on Search**, filtering the same set. Hits above the
   baseline, sources below. Time is the only signal covering 100% of the corpus.
+- **The source badge lost its box.** It was the heaviest mark in a row — bordered, mono,
+  saturated — while carrying the least discriminating information: inside a project all
+  twenty rows show the identical badge. Colour now lives on the icon alone; shape, hue
+  and word remain three redundant channels, only the frame is gone.
+- **Five type sizes, not ten.** 13 / 12.5 / 11.5 / 10 / 9. There had been ten, with 313
+  of ~380 text nodes crammed into 10 / 9.5 / 9 — three steps inside one pixel, doing
+  different jobs, which reads as drift rather than hierarchy.
+- **`--ink-3` is 4.6:1 in both themes.** It was 3.64 in dark and **2.90 in light**, at
+  9–11px, on a tier carrying date spans, group counts, section labels, the stat line and
+  the footer. That is real information below the AA floor for text that size.
 - **Source marks are CSS masks tinted with the palette**, not full-colour logos: two of
   five ship white-on-transparent (invisible on light), one on an opaque white square, and
   optical weight ranged 17%–70% ink. Masking gives shape + hue + label as three redundant
@@ -313,6 +407,26 @@ published material.
 18. **Built Projects and Sittings as views.** They were `GROUP BY`, and treating them as
     destinations is what forced three copies of the list, left the rail inert in one of
     them, and made a run a divider in one place and a tab in another.
+20. **Dimmed hidden kinds to 0.22 opacity.** On the new ramp that took a dimmed tool
+    band to **1.15:1** against the track — invisible, which is "dropped from the axis"
+    by another name, and #6 above is the entry where I already learned that. 0.55 now.
+23. **Reported a measurement that could not have said anything.** I wrote "model never
+    changes inside a conversation — 0 of 3,057". `model` is a single column on
+    `conversation` and there is no per-message model in the index, so the query joined
+    one value onto every message and counted distinct: 1 by construction. The right
+    answer is that the index cannot say. Chasing it found a real defect — the two
+    importers collapse the archive's per-message model in opposite directions,
+    `claude_desktop` keeping the last and `chatgpt_export` the first, both silently and
+    neither tested. Filed as `chat-search-n58.25`.
+22. **Rejected a cycling control for the wrong reason.** The note said cycling forced
+    you through `hidden` to get from expanded back to collapsed — true, but that is the
+    *rare* transition. The common path is hidden → collapsed → expanded → hidden: peek
+    at the tools, read them, put them away. I optimised the transition nobody makes and
+    shipped twelve 18px targets to do it, then had to be told the result felt fiddly.
+    The deeper error was treating visibility and detail as one axis.
+21. **Claimed the selection fill ran under the ribbon and hurt it.** It does not:
+    `.rb-track` is opaque `--map-bg` and spans the cell, so the computed background is
+    identical on selected and unselected rows. Measured before fixing; nothing to fix.
 19. **Shipped Library drawing the rail beside it** — repeating, in the same pass, the
     exact inert-control defect the pass existed to fix. Caught in the screenshot.
 
@@ -330,6 +444,14 @@ published material.
 - **Automated sub-topic discovery** — vocabulary is not separable at that granularity.
 - **Auto-derived topic groups from member overlap** — max Jaccard 0.27 makes any grouping
   arbitrary. Hand-grouping is the honest tool.
+- **Time as the ribbon axis** — measured and rejected. On conversations over 80 messages
+  the single longest gap is **45% of the wall-clock span on average**, up to 99.9%, so a
+  time-weighted ribbon is one blank stripe with the work crushed at the edges. The notch
+  is the right way to show a pause.
+- **A retry/error-storm graphic** — measured and rejected. 822 runs of a single failure,
+  8 of two, nothing longer. A failure is a one-off, so the single red tick is right.
+- **Byte-weighting the ribbon** — see §2. It answers a composition question the ribbon is
+  not asking, and would break its correspondence with the ticks and the fold.
 - **Semantic topic segmentation** — deferred; needs `6eb.41` then `6eb.40`. The free
   structural boundaries (steers, >4h pauses, resumes) ship first and are the floor a model
   has to beat.

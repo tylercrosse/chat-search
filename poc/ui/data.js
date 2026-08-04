@@ -323,11 +323,22 @@ function adaptReal(data) {
         gapShown: gap > FOUR_H ? gap : 0,
         // No question-detection in the schema; '?' is the same cheap heuristic the
         // 4.6% measurement used, and it is honest about being one.
-        isQuestion: kind === 'prose' && role === 'asst' && /\?\s*$/.test(text),
+        // Two signals, one mark. `request_user_input` is the agent formally blocking on
+        // you — exact, and rare: 237 calls in 92 conversations. The '?' heuristic is
+        // broader and noisier (1,402 in 578) but catches the ordinary asked-a-question
+        // case that no tool records. The union is honest about both.
+        isQuestion: (kind === 'prose' && role === 'asst' && /\?\s*$/.test(text)) ||
+                    (kind === 'tool_call' &&
+                     /request_user_input|AskUserQuestion/.test(m.c || '')),
         tool: kind === 'tool_call' || kind === 'tool_result' ? (text || 'tool') : null,
+        // Carried from the export rather than parsed out of the truncated preview text.
+        call: m.c || null,
+        act: kind === 'tool_call' ? actOf(m.c) : null,
         onPath: true,
         err: Boolean(m.e),
         isSidechain: Boolean(m.s),
+        // The context was cut here: everything above is a summary from this point on.
+        compacted: Boolean(m.z),
         match: false, frag: null,
         text: text || (kind === 'tool_result' ? '' : '…'),
         textLong: kind === 'prose' && role !== 'user' ? text : null,
@@ -363,6 +374,12 @@ function adaptReal(data) {
       matches: [],
       msgs,
       segments: segmentize(msgs),
+      model: c.model || null,
+      files: c.files || [],
+      // Only 57 conversations in the corpus contain any subagent traffic — but where it
+      // appears it averages 52% of the conversation and reaches 100%. That is a fact
+      // about the whole conversation, not a tint on scattered messages.
+      sidechain: msgs.length ? msgs.filter((m) => m.isSidechain).length / msgs.length : 0,
       bestMatch: null,
     };
   });
@@ -394,6 +411,32 @@ function applyQuery(convs, q) {
   });
   return convs;
 }
+
+/* What a tool call was *for*, not which tool it was. Measured over the corpus: 47,479
+ * calls run something, 9,460 change a file, 4,502 look at one, 1,164 steer. "Was this
+ * exploring, editing or executing?" is a different question from "was this tool
+ * traffic", and the single tool band cannot answer it.
+ *
+ * Names, not capabilities: the same act wears a different name per harness — codex says
+ * `exec_command`, claude-code says `Bash`, and both mean run. */
+const ACTS = {
+  look:   ['Read', 'Glob', 'Grep', 'ToolSearch', 'WebFetch', 'WebSearch', 'view_image',
+           'ReadMcpResourceTool', 'ListMcpResourcesTool', 'NotebookRead'],
+  change: ['Edit', 'Write', 'apply_patch', 'NotebookEdit', 'MultiEdit'],
+  run:    ['exec_command', 'Bash', 'shell', 'exec', 'shell_command', 'write_stdin',
+           'wait', 'js', 'python', 'container.exec'],
+  steer:  ['update_plan', 'TodoWrite', 'request_user_input', 'AskUserQuestion',
+           'ExitPlanMode', 'Task'],
+};
+const ACT_OF = {};
+Object.entries(ACTS).forEach(([act, names]) => names.forEach((n) => { ACT_OF[n] = act; }));
+
+const ACT_GLYPH = { look: '◎', change: '✎', run: '›', steer: '⚑', other: '⚙' };
+
+/* Unrecognised tools fall to `run`, not to a fifth bucket: an unknown tool in an agent
+ * transcript is overwhelmingly something being executed, and a bucket called "other"
+ * on the ribbon would be a colour that means nothing. */
+const actOf = (name) => ACT_OF[(name || '').split(/[\s(]/)[0]] || 'run';
 
 const REAL = typeof window !== 'undefined' && window.REAL_DATA ? window.REAL_DATA : null;
 

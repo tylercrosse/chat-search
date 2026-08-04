@@ -22,7 +22,10 @@
   --panel-3:  #283335;
   --ink:      #e3e9e9;
   --ink-2:    #97a5a6;
-  --ink-3:    #6b7a7b;
+  /* 4.6:1 on --bg. Was 3.64 in dark and 2.90 in light, at 9-11px, on a tier that
+     carries date spans, group counts, section labels, the stat line and the footer —
+     real information, below the 4.5:1 AA floor for text that size. */
+  --ink-3:    #7a8b8e;
   --rule:     #2a3335;
   --rule-2:   #3a4547;
 
@@ -34,12 +37,32 @@
   --err:      #e2796c;
   --ok:       #6fc98a;
 
-  /* Four categories, four hues. Tools stay the quietest because they are 91% of the
-     volume; prose is the signal. Amber is reserved for match, red for failure. */
-  --k-user:   #4ec3c0;
-  --k-agent:  #cdd6d4;
-  --k-reason: #a58bc4;
-  --k-tool:   #46565a;
+  /* Four categories on a luminance ramp, with hue as the redundant second channel.
+     Measured: the previous palette separated the kinds by hue but not by luminance —
+     agent/reasoning were 2.00 apart in dark and 1.12 in light, i.e. the same colour —
+     and hue is the channel that degrades fastest at the 2px width these bands are drawn
+     at. §7's rule is "nothing encoded in colour alone"; kind *is* encoded in colour
+     alone here, so that colour has to carry it on the strong channel.
+
+     Ratios against --map-bg: tool 2.2, reasoning 4.0, user 7.2, agent 13.0 — an even
+     ~1.8x per step, which is the widest even spacing four levels fit into the range.
+     Tools stay quietest because they are 66-85% of the volume; agent prose is brightest
+     because it is what you are usually looking for. Amber stays reserved for match, red
+     for failure. Solved rather than picked; see NOTES §3. */
+  --k-user:   #2bb6b2;
+  --k-agent:  #d6dddc;
+  --k-reason: #9361bf;
+  --k-tool:   #425258;
+  /* Sub-shades inside the tool band, by what the call was *for*. Deliberately narrow —
+     1.29x and 1.42x apart — because the primary read (tool vs prose vs reasoning) has to
+     stay on the main ramp: these only need to say "something changed here", not be
+     independently decodable at 2px. `run` is the tool colour itself, so an ordinary
+     agentic run looks exactly as it did; `change` lifts, because a patch landing inside
+     a wall of exec is the event worth spotting. The glyph in the preview carries the
+     distinction where there is room for it. */
+  --act-look:   #354146;
+  --act-run:    #425258;
+  --act-change: #486d65;
   --k-tool-ink: #8fa0a3;
   --map-bg:   #10191a;
 
@@ -81,7 +104,7 @@
   --panel-3:  #dbe1e1;
   --ink:      #101a1c;
   --ink-2:    #55666a;
-  --ink-3:    #8a999b;
+  --ink-3:    #677779;
   --rule:     #dfe4e4;
   --rule-2:   #c4cdcd;
 
@@ -93,10 +116,15 @@
   --err:      #a3322a;
   --ok:       #2f7a3e;
 
-  --k-user:   #0b5d63;
-  --k-agent:  #55666a;
-  --k-reason: #7d5ba6;
-  --k-tool:   #c8d2d2;
+  /* The same ramp, achieved by going darker: on a light track, contrast is distance
+     from white. Ratios against --map-bg match the dark theme to two decimals. */
+  --k-user:   #145654;
+  --k-agent:  #202726;
+  --k-reason: #905dbd;
+  --k-tool:   #91a5ac;
+  --act-look:   #abbac0;
+  --act-run:    #91a5ac;
+  --act-change: #608f86;
   --k-tool-ink: #5d6d70;
   --map-bg:   #eaeeee;
 
@@ -158,7 +186,7 @@ button { font-family: inherit; }
 .lights i:nth-child(3) { background: #28c840; }
 
 .tbar-title {
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   color: var(--ink-2);
   letter-spacing: -0.005em;
@@ -233,7 +261,7 @@ button { font-family: inherit; }
   border-radius: 7px;
   box-shadow: inset 0 1px 2px rgba(0,0,0,0.14);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .caret { width: 1.5px; height: 14px; background: var(--sel); animation: blink 1.15s steps(1) infinite; }
@@ -268,7 +296,7 @@ button { font-family: inherit; }
   border: 0;
   background: transparent;
   color: currentColor;
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1;
   padding: 0 3px;
   cursor: pointer;
@@ -308,7 +336,7 @@ button { font-family: inherit; }
 
 .stat {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--ink-3);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -357,7 +385,7 @@ button { font-family: inherit; }
   background: transparent;
   border: 0;
   color: var(--ink-2);
-  font-size: 12px;
+  font-size: 12.5px;
   cursor: pointer;
   transition: background 0.12s var(--ease), color 0.12s var(--ease);
 }
@@ -381,14 +409,14 @@ button { font-family: inherit; }
 
 .tgroup { padding: 0 10px 8px; }
 .gname {
-  display: block; font-family: var(--mono); font-size: 8.5px;
+  display: block; font-family: var(--mono); font-size: 9px;
   letter-spacing: 0.12em; text-transform: uppercase;
   color: var(--ink-3); opacity: 0.72; margin: 5px 0 4px;
 }
 
 .tchip {
   display: inline-flex; align-items: baseline; gap: 5px;
-  font-family: var(--mono); font-size: 9.5px; line-height: 1.5;
+  font-family: var(--mono); font-size: 9px; line-height: 1.5;
   padding: 2.5px 7px; margin: 0 3px 3px 0;
   border: 1px solid var(--rule-2); border-radius: 11px;
   background: transparent; color: var(--ink-2); cursor: pointer;
@@ -404,7 +432,43 @@ button { font-family: inherit; }
 
 .srow.clearall { color: var(--hit); font-family: var(--mono); font-size: 10px; }
 
-.pv-tags { margin-top: 8px; }
+/* What the conversation did, and where it landed. Both are free: the act comes from the
+   tool name, and the paths were already mined for the project rollup and thrown away at
+   conversation scale. */
+.pv-work { margin-top: 9px; display: flex; flex-direction: column; gap: 4px; }
+.pv-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.pv-acts .gname { width: 46px; flex: none; margin: 0; }
+.pv-acts .n {
+  font-family: var(--mono); font-size: 9px; color: var(--ink-3);
+  margin-right: 4px; font-variant-numeric: tabular-nums;
+}
+.pv-acts .tchip { margin: 0; max-width: 200px; }
+
+.act {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.04em;
+  padding: 1.5px 7px; border-radius: 10px;
+  border: 1px solid var(--rule-2); color: var(--ink-2);
+}
+.act i { font-style: normal; font-size: 10px; line-height: 1; opacity: 0.8; }
+.act b { font-weight: 600; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.act.run    { border-color: var(--act-run); }
+.act.change { border-color: var(--act-change); color: var(--ink); }
+.act.look   { border-color: var(--act-look); }
+.act.steer  { border-color: var(--sel); color: var(--sel); }
+.act.sub    { border-color: var(--hit); color: var(--hit); }
+.act.sub b  { color: var(--hit); opacity: 0.75; }
+
+/* The same distinction in the gutter, where there is room for it to read. */
+.blk.a-look   .gut { background: var(--act-look); }
+.blk.a-run    .gut { background: var(--act-run); }
+.blk.a-change .gut { background: var(--act-change); }
+.blk.a-steer  .gut { background: var(--sel); }
+
+.pv-tags { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 3px; }
+.pv-tags .tchip { margin: 0; }
+.tchip.more { border-style: dashed; color: var(--ink-3); }
+.tchip.more:hover { color: var(--sel); border-color: var(--sel); }
 
 /* --------------------------------------------- timeline bottom drawer ---- */
 
@@ -415,7 +479,7 @@ button { font-family: inherit; }
 }
 .tld-h {
   display: flex; align-items: center; gap: 10px;
-  font-family: var(--mono); font-size: 9.5px; color: var(--ink-3);
+  font-family: var(--mono); font-size: 9px; color: var(--ink-3);
   margin-bottom: 6px;
 }
 .tld-h b { color: var(--ink-2); font-weight: 600; }
@@ -443,7 +507,7 @@ button { font-family: inherit; }
   background: color-mix(in srgb, var(--sel) 13%, transparent);
 }
 .tld-ax { display: flex; justify-content: space-between; font-family: var(--mono);
-          font-size: 8.5px; color: var(--ink-3); margin-top: 3px; }
+          font-size: 9px; color: var(--ink-3); margin-top: 3px; }
 
 /* ==================================================== view: search ======== */
 
@@ -477,7 +541,7 @@ button { font-family: inherit; }
    the eye can run down a column. */
 .row-meta {
   display: grid;
-  grid-template-columns: 84px 236px minmax(0, 1fr) 58px 30px 20px;
+  grid-template-columns: 92px 236px minmax(0, 1fr) 58px 30px 20px;
   align-items: center;
   gap: 10px;
   margin-bottom: 3px;
@@ -491,20 +555,27 @@ button { font-family: inherit; }
 }
 .ico.lg { width: 15px; height: 15px; }
 
+/* No border, no box. It was the heaviest mark in a row — bordered, mono, saturated —
+   while carrying the least discriminating information: inside a project every row shows
+   the identical badge, so twenty of them shout in unison and out-weigh the titles. The
+   border was also what clipped the label: `claude-code` needs 89px and the cell is 84,
+   so the last glyph collided with the box on every claude-code row.
+
+   Colour now lives on the icon alone. Shape, hue and word remain three redundant
+   channels per §7; only the frame is gone. */
 .badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   font-family: var(--mono);
-  font-size: 9.5px;
-  padding: 1.5px 5px;
-  border-radius: 4px;
-  border: 1px solid currentColor;
+  font-size: 10px;
   white-space: nowrap;
   overflow: hidden;
+}
+.badge > span {
+  color: var(--ink-2);
+  overflow: hidden;
   text-overflow: ellipsis;
-  text-align: center;
-  opacity: 0.92;
 }
 
 .dir, .msgs, .age {
@@ -561,7 +632,10 @@ button { font-family: inherit; }
 
 .rb-track {
   position: absolute;
-  left: 0; right: 0;
+  /* Width is set inline from the message count — see app.js::ribbonWidth. The cell
+     keeps its full 236px so the columns either side stay on the grid; only the drawn
+     track varies, which is what makes length legible down the column. */
+  left: 0;
   top: 6px;
   height: 9px;
   background: var(--map-bg);
@@ -573,11 +647,18 @@ button { font-family: inherit; }
 .rb-band.user   { background: var(--k-user); }
 .rb-band.agent  { background: var(--k-agent); }
 .rb-band.tool   { background: var(--k-tool); }
+.rb-band.a-look   { background: var(--act-look); }
+.rb-band.a-run    { background: var(--act-run); }
+.rb-band.a-change { background: var(--act-change); }
 .rb-band.reason { background: var(--k-reason); }
 .rb-band.off    { opacity: 0.35; }
 /* Hidden in the preview, still on the map — dimmed so the axis stays comparable
-   between rows. */
-.rb-band.dim    { opacity: 0.22; }
+   between rows. 0.55, not 0.22: on the new ramp tool already sits at 2.19 against the
+   track, so 0.22 opacity took a dimmed tool band to 1.15 — invisible, which is
+   "dropped from the axis" by another name, and that was §3's mistake #6. At 0.55 a
+   dimmed band reads at 1.48 against the track and still ranks well below the 2.19 of
+   an undimmed one, which is the whole signal. */
+.rb-band.dim    { opacity: 0.55; }
 
 .rb-tick { position: absolute; top: 0; width: 2px; height: 4px; background: var(--hit); border-radius: 1px; }
 
@@ -586,6 +667,18 @@ button { font-family: inherit; }
 .rb-mark.x { background: var(--err); }
 
 .rb-notch { position: absolute; top: 4px; bottom: 4px; width: 1px; background: var(--ink-2); opacity: 0.85; }
+/* Full height and doubled, against the notch's partial height and single stroke: a pause
+   interrupts a conversation, a compaction cuts it. Ink, not amber or red — those are
+   spoken for by match and failure (§7). */
+.rb-cut {
+  position: absolute; top: 3px; bottom: 3px; width: 3px;
+  background: linear-gradient(90deg, var(--ink) 1px, transparent 1px 2px, var(--ink) 2px);
+}
+
+/* The same event in the transcript. */
+.brk.cut { color: var(--ink-2); }
+.brk.cut::before, .brk.cut::after { background: var(--ink-3); }
+.brk.cut::before { max-width: 14px; }
 
 .ribbon-key {
   display: flex;
@@ -604,7 +697,7 @@ button { font-family: inherit; }
 /* ------------------------------------------------------------- preview --- */
 
 .pv-head { padding: 10px 12px; border-bottom: 1px solid var(--rule); }
-.pv-title { font-size: 13.5px; font-weight: 600; line-height: 1.3; letter-spacing: -0.005em; }
+.pv-title { font-size: 13px; font-weight: 600; line-height: 1.3; letter-spacing: -0.005em; }
 .pv-meta {
   font-family: var(--mono);
   font-size: 10px;
@@ -612,10 +705,10 @@ button { font-family: inherit; }
   margin-top: 5px;
   font-variant-numeric: tabular-nums;
 }
-.zoom { display: inline-flex; border: 1px solid var(--rule-2); border-radius: 6px; padding: 1.5px; margin-left: auto; }
+.zoom { display: inline-flex; border: 1px solid var(--rule-2); border-radius: 6px; padding: 1.5px; margin-top: 9px; }
 .zoom button {
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 9px;
   letter-spacing: 0.06em;
   padding: 2px 9px;
   border: 0;
@@ -632,43 +725,84 @@ button { font-family: inherit; }
 /* One explicit three-state control per kind, not a cycling chip: going from
    expanded back to collapsed used to require passing through hidden, so there was
    no direct "collapse all the tool calls" gesture. */
+/* Visibility and detail are two axes, so the chip has two targets — but they live in
+   one box, with the label, so proximity points at the right thing. The 2x2 grid this
+   replaces put `you`'s control nearer to `agent`'s label than `agent`'s own control
+   was, which is most of why it read as fiddly. */
 .fid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 10px;
-  margin-top: 8px;
+  gap: 5px 8px;
+  margin-top: 9px;
 }
 
-.fid-row { display: flex; align-items: center; gap: 6px; }
+.fid-chip {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--rule-2);
+  border-radius: 6px;
+  overflow: hidden;
+  background: transparent;
+  transition: border-color 0.13s var(--ease);
+}
+.fid-chip.on { border-color: var(--rule-2); background: var(--panel-2); }
+.fid-chip:hover { border-color: var(--ink-3); }
 
-.fid-row .nm {
-  display: inline-flex; align-items: center; gap: 5px;
-  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em;
+.fid-chip .dot {
+  flex: none;
+  width: 22px;
+  border: 0;
+  border-right: 1px solid var(--rule-2);
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+}
+.fid-chip .dot::before {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto 50%;
+  translate: -50% -50%;
+  width: 8px; height: 8px;
+  border-radius: 2px;
+  background: var(--k);
+  opacity: 0.28;
+  transition: opacity 0.13s var(--ease);
+}
+.fid-chip.on .dot::before { opacity: 1; }
+.fid-chip .dot:hover::before { opacity: 0.7; }
+.fid-chip.on .dot:hover::before { opacity: 0.55; }
+
+.fid-chip .lv {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
   color: var(--ink-3);
-  flex: 1; min-width: 0;
 }
-.fid-row .nm i { width: 7px; height: 7px; border-radius: 2px; flex: none; }
-.fid-row.on .nm { color: var(--ink-2); }
+.fid-chip.on .lv { color: var(--ink-2); }
+.fid-chip .lv:hover { color: var(--ink); }
+.fid-chip .lv .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The state is a word, not a glyph legend you have to learn. */
+.fid-chip .lv .st { flex: none; opacity: 0.7; }
+.fid-chip.on .lv .st { color: var(--sel); opacity: 1; font-weight: 600; }
 
-.fid-seg { display: inline-flex; border: 1px solid var(--rule-2); border-radius: 5px; padding: 1px; flex: none; }
-.fid-seg button {
-  font-family: var(--mono); font-size: 10px; line-height: 1;
-  width: 20px; height: 16px;
-  border: 0; border-radius: 3px;
-  background: transparent; color: var(--ink-3); cursor: pointer;
-  transition: background 0.13s var(--ease), color 0.13s var(--ease);
-}
-.fid-seg button:hover { color: var(--ink); }
-.fid-seg button[aria-pressed="true"] { background: var(--sel); color: var(--sel-ink); }
-
-.fid-all { display: flex; gap: 4px; margin-top: 6px; }
+.fid-all { display: flex; gap: 4px; margin-top: 7px; }
 .fid-all button {
-  font-family: var(--mono); font-size: 9.5px; letter-spacing: 0.04em;
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.04em;
   padding: 2.5px 9px;
   border: 1px solid var(--rule-2); border-radius: 5px;
-  background: transparent; color: var(--ink-3); cursor: pointer;
+  background: transparent; color: var(--hit); cursor: pointer;
 }
-.fid-all button:hover { border-color: var(--ink-3); color: var(--ink); }
+.fid-all button:hover { border-color: var(--hit); }
 
 /* A message whose level was overridden by clicking it directly. */
 .blk .txt { cursor: pointer; }
@@ -692,8 +826,8 @@ button { font-family: inherit; }
 
 /* Equal contrast. Neither role is demoted. */
 .blk.user .txt, .blk.agent .txt { color: var(--ink); }
-.blk.tool .txt, .blk.reason .txt { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
-.blk.err .txt { font-family: var(--mono); font-size: 10.5px; color: var(--err); }
+.blk.tool .txt, .blk.reason .txt { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.blk.err .txt { font-family: var(--mono); font-size: 10px; color: var(--err); }
 .blk.off { opacity: 0.42; }
 .blk.q .txt { color: var(--sel); }
 
@@ -728,7 +862,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   cursor: pointer;
   color: var(--ink-3);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 10px;
   align-items: baseline;
 }
 .seg-sum:hover { color: var(--ink-2); }
@@ -747,6 +881,12 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .mm-band.dim    { opacity: 0.22; }
 .mm-hit { position: absolute; right: 3px; width: 8px; height: 2.5px; background: var(--hit); border-radius: 1px; }
 .mm-notch { position: absolute; left: 0; right: 0; height: 1px; background: var(--ink-2); opacity: 0.7; }
+/* Doubled and full-strength against the notch's single faint line, matching the ribbon:
+   a pause interrupts, a compaction cuts. */
+.mm-cut {
+  position: absolute; left: 0; right: 0; height: 3px;
+  background: linear-gradient(180deg, var(--ink) 1px, transparent 1px 2px, var(--ink) 2px);
+}
 .mm-view {
   position: absolute; left: 0; right: 0;
   border: 1px solid var(--sel);
@@ -765,7 +905,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   gap: 10px;
   margin: 0 0 12px;
 }
-.ws-h h2 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.008em; }
+.ws-h h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.008em; }
 .ws-h .sub {
   font-family: var(--mono);
   font-size: 10px;
@@ -798,7 +938,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .card.proposal.going { opacity: 0; transform: scale(0.97); }
 
 .card-t { font-size: 13px; font-weight: 600; letter-spacing: -0.005em; line-height: 1.3; }
-.card-t .n { font-family: var(--mono); font-weight: 400; font-size: 10.5px; color: var(--ink-3); margin-left: 6px; }
+.card-t .n { font-family: var(--mono); font-weight: 400; font-size: 10px; color: var(--ink-3); margin-left: 6px; }
 
 /* the rule, stated rather than implied */
 .rule-line {
@@ -819,7 +959,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .compo { display: flex; height: 7px; border-radius: 4px; overflow: hidden; gap: 1.5px; }
 .compo i { display: block; }
 
-.compo-key { display: flex; flex-wrap: wrap; gap: 4px 11px; font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
+.compo-key { display: flex; flex-wrap: wrap; gap: 4px 11px; font-family: var(--mono); font-size: 9px; color: var(--ink-3); }
 .compo-key span { display: inline-flex; align-items: center; gap: 4px; }
 .compo-key i { width: 7px; height: 7px; border-radius: 2px; }
 .compo-key i.ico { width: 11px; height: 11px; border-radius: 0; }
@@ -827,7 +967,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .terms { display: flex; flex-wrap: wrap; gap: 4px; }
 .term {
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 9px;
   padding: 2px 6px;
   border-radius: 4px;
   background: var(--panel-2);
@@ -856,7 +996,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   padding: 22px;
   text-align: center;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 12.5px;
 }
 .empty b { display: block; color: var(--ink-2); font-weight: 600; margin-bottom: 4px; font-size: 12.5px; }
 
@@ -878,12 +1018,12 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   align-items: center;
   padding: 5px 12px;
   border-bottom: 1px solid var(--rule);
-  font-size: 12px;
+  font-size: 12.5px;
 }
 .member:last-child { border-bottom: 0; }
 .member .why {
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 9px;
   padding: 1.5px 5px;
   border-radius: 4px;
   text-align: center;
@@ -930,7 +1070,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 
 .pj-head .nm {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 600;
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -957,8 +1097,10 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 
 /* Activity, not volume: 26 weeks of the sample so a dormant project and a live one are
    distinguishable before you open either. */
-.spark { display: inline-flex; align-items: flex-end; gap: 1px; height: 14px; }
-.spark i { width: 2px; background: var(--k-agent); border-radius: 0.5px; opacity: 0.75; }
+/* 12 bars at 3px, not 20 at 2px: the finer version read as dust at 100% zoom, which is
+   the only zoom anyone uses. */
+.spark { display: inline-flex; align-items: flex-end; gap: 1px; height: 17px; }
+.spark i { width: 3px; background: var(--k-user); border-radius: 0.5px; opacity: 0.8; }
 .spark i.z { background: var(--ink-3); opacity: 0.25; }
 .pj.open .spark i { opacity: 1; }
 
@@ -985,7 +1127,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .pj-nums {
   gap: 14px;
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 9px;
   color: var(--ink-3);
   margin: 7px 0 0;
   padding-left: 44px;
@@ -1050,7 +1192,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
    cross-tool run, the untagged residue — where that changes how to read the count. */
 .pj-head .tag {
   font-family: var(--mono);
-  font-size: 8.5px;
+  font-size: 9px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   padding: 1.5px 5px;
@@ -1115,7 +1257,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .lib-row .acts { display: inline-flex; gap: 4px; }
 .lib-row .acts button {
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 9px;
   padding: 2.5px 8px;
   border-radius: 5px;
   border: 1px solid var(--rule-2);
@@ -1144,8 +1286,8 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   border-bottom: 1px solid var(--rule);
   margin-bottom: 12px;
 }
-.day-h b { font-size: 13.5px; font-weight: 600; letter-spacing: -0.008em; }
-.day-h .w { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); }
+.day-h b { font-size: 13px; font-weight: 600; letter-spacing: -0.008em; }
+.day-h .w { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
 .day-h .m { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
 .sit-row { display: grid; grid-template-columns: 46px 16px minmax(0, 1fr); gap: 10px; }
@@ -1199,7 +1341,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
   margin-top: 5px;
   font-family: var(--mono);
-  font-size: 9.5px;
+  font-size: 9px;
   color: var(--ink-3);
 }
 
@@ -1217,6 +1359,10 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 
 /* Shared map renderer at card scale, used by the sittings view. Restored here: the
    rule was lost when the search-view block was rewritten. */
+.micro i.cut {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--ink); opacity: 0.9;
+}
 .micro {
   position: relative;
   width: 76px; height: 13px;
@@ -1286,7 +1432,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   background: var(--hit);
   color: #221802;
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 700;
   display: flex; align-items: center; justify-content: center;
   transform: translate(-50%, -50%);
@@ -1317,7 +1463,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .note b {
   display: block;
   font-family: var(--serif);
-  font-size: 13.5px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 1.25;
   color: var(--ink);
@@ -1326,11 +1472,11 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .note p {
   margin: 0;
   font-family: var(--serif);
-  font-size: 12px;
+  font-size: 12.5px;
   line-height: 1.5;
   color: var(--ink-2);
 }
-.note code { font-family: var(--mono); font-size: 10.5px; color: var(--hit); }
+.note code { font-family: var(--mono); font-size: 10px; color: var(--hit); }
 
 .anno-hint {
   position: absolute;

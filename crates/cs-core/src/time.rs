@@ -6,7 +6,7 @@
 //! Local-ness is a presentation concern; storing it would make the index depend on where the
 //! machine was sitting when it was built.
 
-use chrono::{DateTime, Days, Local, Months, NaiveDateTime, TimeZone};
+use chrono::{DateTime, Days, Local, Months, NaiveDate, NaiveDateTime, TimeZone};
 
 /// Now, as epoch millis — the unit `message.ts` and `conversation.ended_at` are stored in.
 ///
@@ -55,6 +55,33 @@ pub fn day_start_in<Tz: TimeZone>(tz: &Tz, ms: i64) -> Option<i64> {
 /// [`day_start_in`] against the machine's own zone.
 pub fn local_day_start(ms: i64) -> Option<i64> {
     day_start_in(&Local, ms)
+}
+
+/// A wall clock a person typed, back to the instant it names.
+///
+/// Accepts `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM` and `YYYY-MM-DDTHH:MM:SS`, with a space accepted
+/// wherever the `T` goes. A bare date is the midnight opening that day, so a half-open
+/// `2026-08-04 .. 2026-08-05` is the whole of the 4th and consecutive days tile.
+///
+/// Local rather than UTC because what is being named is something that happened to the person
+/// typing it. "The morning I spent benchmarking" is a wall clock; nobody knows their own
+/// mornings in UTC.
+pub fn local_instant(text: &str) -> Option<i64> {
+    instant_in(&Local, text)
+}
+
+/// Zone-explicit form of [`local_instant`], for the same reason [`ymd_in`] has one.
+pub fn instant_in<Tz: TimeZone>(tz: &Tz, text: &str) -> Option<i64> {
+    let text = text.trim();
+    // Longest form first: `%Y-%m-%dT%H:%M` would accept `…T10:00:30` and silently drop the
+    // seconds, which is the wrong direction for a bound.
+    let naive = ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"]
+        .iter()
+        .find_map(|f| NaiveDateTime::parse_from_str(text, f).ok())
+        .or_else(|| {
+            NaiveDate::parse_from_str(text, "%Y-%m-%d").ok()?.and_hms_opt(0, 0, 0)
+        })?;
+    Some(resolve(tz, naive)?.timestamp_millis())
 }
 
 /// `ms` moved by whole civil days, keeping its wall-clock time of day.
@@ -198,6 +225,37 @@ mod tests {
         let start = day_start_in(&Havana, ms).unwrap();
         assert_eq!(ymd_in(&Havana, start).unwrap(), "2026-03-08", "stays inside its own day");
         assert!(start <= ms, "the day cannot start after noon on it");
+    }
+
+    #[test]
+    fn a_typed_bound_means_the_same_wall_clock_however_much_of_it_was_written() {
+        // The four accepted spellings of one instant, plus the bare date that opens its day.
+        let at_ten = Los_Angeles.with_ymd_and_hms(2026, 8, 4, 10, 0, 0).unwrap().timestamp_millis();
+        for text in ["2026-08-04T10:00", "2026-08-04 10:00", "2026-08-04T10:00:00", "2026-08-04 10:00:00"] {
+            assert_eq!(instant_in(&Los_Angeles, text), Some(at_ten), "{text}");
+        }
+        let midnight = day_start_in(&Los_Angeles, at_ten).unwrap();
+        assert_eq!(instant_in(&Los_Angeles, "2026-08-04"), Some(midnight));
+        assert_eq!(instant_in(&Los_Angeles, "  2026-08-04  "), Some(midnight), "surrounding space");
+    }
+
+    #[test]
+    fn a_bound_that_is_not_a_wall_clock_is_refused_rather_than_guessed_at() {
+        // Same rule as `date:` in the query language: a value nothing can be resolved against
+        // must not silently become one that can, because a bound off by a day silently changes
+        // what a span covers.
+        for text in ["", "today", "2026-08", "08/04/2026", "2026-13-01", "2026-08-04T25:00", "1785855660000"] {
+            assert_eq!(instant_in(&Los_Angeles, text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_typed_bound_survives_a_wall_clock_that_never_happened() {
+        // Havana springs forward at midnight, so 2026-03-08 has no 00:00. A bound that cannot
+        // be refused into thin air — it is the edge of a span — walks forward into the day.
+        use chrono_tz::America::Havana;
+        let got = instant_in(&Havana, "2026-03-08").unwrap();
+        assert_eq!(ymd_in(&Havana, got).unwrap(), "2026-03-08");
     }
 
     #[test]

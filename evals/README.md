@@ -6,6 +6,10 @@ This is how you find out whether the ranking is any good. You write down queries
 
 So `cs search` and `cs pick` now record what you actually search for and actually open, and the next set gets built from that (`chat-search-6eb.21`). `cs needs` shows what has accumulated. Roughly 50–100 picks across 20+ distinct queries is worth converting; below that this hand-written set is still the better of the two.
 
+**Read that trigger off `cs needs`, not off the size of the log.** Most of what accumulates in `queries.jsonl` is not a need, and the fold says so under the table — keystrokes on the way to a query, declared benchmark spans, picks made from the recent list with nothing typed (ADR 22). On 2026-08-04 the raw log read as 37 picks across 124 distinct query strings, which is nearly the trigger; folded, it was 19 judgements across 17 answered queries, which is about a third of the way there.
+
+**Set `CS_LOG_QUERIES=0` when you are timing something.** A query typed to measure `search_grouped` lands in the log as an ordinary unpicked search, indistinguishable by shape from one the ranking failed to answer, and it will be harvested as a real need. If you forget, `cs needs --driven FROM..UNTIL --why "…"` is how you say so afterwards.
+
 Everything below works and the harness is unchanged. The 24 seeded queries are a usable stopgap if you want numbers now — just know what they are.
 
 ```

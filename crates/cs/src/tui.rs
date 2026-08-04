@@ -23,7 +23,7 @@ pub fn run(
     // is still in raw mode, and re-reading the config there would be a filesystem hit inside
     // a keystroke path.
     let log_path = cfg.query_log();
-    let log_queries = cfg.log_queries;
+    let log_queries = cfg.recording_queries();
     let mut sink = |event: cs_core::querylog::Event| {
         // Same rule as everywhere else this is called: losing a log line costs a data point,
         // failing the action costs the thing that was asked for.

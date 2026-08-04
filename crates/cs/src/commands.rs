@@ -432,18 +432,7 @@ fn declare_driven(path: &Path, span: &str, why: Option<&str>) -> Result<()> {
     let why = why.context(
         "--driven needs --why: an exclusion with no reason is a silent one a week from now",
     )?;
-    let bound = |text: &str| {
-        cs_core::time::local_instant(text).with_context(|| {
-            format!("{text:?} is not a local date or time — try 2026-08-04 or 2026-08-04T10:30")
-        })
-    };
-    let (from, until) = span
-        .split_once("..")
-        .context("--driven takes a half-open span, as in 2026-08-04..2026-08-05")?;
-    let (from, until) = (bound(from)?, bound(until)?);
-    if until <= from {
-        anyhow::bail!("a driven span has to end after it starts");
-    }
+    let (from, until) = driven_span(span, cs_core::now_ms())?;
 
     let (events, _) = cs_core::querylog::load(path)?;
     let inside: Vec<&cs_core::querylog::Event> = events
@@ -468,6 +457,31 @@ fn declare_driven(path: &Path, span: &str, why: Option<&str>) -> Result<()> {
     }
     println!("  written as one line; delete it to take the exclusion back\n");
     Ok(())
+}
+
+/// `FROM..UNTIL` as two local wall clocks, half-open.
+///
+/// The last check is the one worth having. A span that ends in the future is not a statement
+/// about traffic that happened, it is a standing order to discard whatever gets typed next —
+/// and it would do that silently, since nothing about a search says it was meant to survive.
+/// Rounding an afternoon of benchmarking up to `..tomorrow` is the natural way to write one.
+fn driven_span(span: &str, now_ms: i64) -> Result<(i64, i64)> {
+    let bound = |text: &str| {
+        cs_core::time::local_instant(text).with_context(|| {
+            format!("{text:?} is not a local date or time — try 2026-08-04 or 2026-08-04T10:30")
+        })
+    };
+    let (from, until) = span
+        .split_once("..")
+        .context("--driven takes a half-open span, as in 2026-08-04..2026-08-05")?;
+    let (from, until) = (bound(from)?, bound(until)?);
+    if until <= from {
+        anyhow::bail!("a driven span has to end after it starts");
+    }
+    if until > now_ms {
+        anyhow::bail!("a driven span cannot end in the future — it would exclude searches nobody has made yet");
+    }
+    Ok((from, until))
 }
 
 fn trunc(s: &str, n: usize) -> String {
@@ -601,4 +615,48 @@ fn render_groups(
     }
     println!("{} conversations · {:.1} ms", groups.len(), ms);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 2026-08-04, some hours after any bound the tests below name.
+    const NOW: i64 = 1_785_880_000_000;
+
+    #[test]
+    fn a_driven_span_is_two_local_wall_clocks_around_a_double_dot() {
+        let (from, until) = driven_span("2026-08-04T08:00..2026-08-04T12:00", NOW).unwrap();
+        assert!(from < until);
+        assert_eq!(until - from, 4 * 3_600_000, "four hours, whatever zone it is read in");
+        // A bare date is the midnight opening its day, so a whole day is two dates.
+        let (from, until) = driven_span("2026-08-03..2026-08-04", NOW).unwrap();
+        assert!(until - from >= 23 * 3_600_000, "a civil day, short one across spring forward");
+    }
+
+    #[test]
+    fn a_driven_span_that_ends_in_the_future_is_refused() {
+        // The failure worth a guard. `..2026-08-05` is the natural way to round up an
+        // afternoon of benchmarking, and it would go on discarding real searches for a day
+        // without saying anything — nothing about a search says it was meant to survive.
+        let err = driven_span("2026-08-04..2026-08-05", NOW).unwrap_err().to_string();
+        assert!(err.contains("future"), "{err}");
+    }
+
+    #[test]
+    fn a_span_that_is_not_a_span_says_so_rather_than_covering_nothing() {
+        // Each of these would otherwise write a line that silently excludes zero events, or
+        // everything, and a wrong exclusion is invisible in a fold that only prints totals.
+        for bad in [
+            "2026-08-04",
+            "2026-08-04..",
+            "..2026-08-04",
+            "2026-08-04..2026-08-03",
+            "2026-08-04..2026-08-04",
+            "yesterday..today",
+            "1785855600000..1785870000000",
+        ] {
+            assert!(driven_span(bad, NOW).is_err(), "{bad:?}");
+        }
+    }
 }

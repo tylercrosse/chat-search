@@ -109,12 +109,28 @@ socket protocol and cache-staleness bugs. Rust clients link `cs-core`; everythin
 `cs search --json`. Still needs writing up in DECISIONS.md — `chat-search-me9.13`.
 
 
-| ADR | question                             | blocks                                                   |
-| ----- | -------------------------------------- | ---------------------------------------------------------- |
-| 15  | redact at import or at display       | sharing anything, or moving the archive off this machine |
-| 8   | in-app vs upstream rename precedence | title fold                                               |
-| 16  | work/personal account separation     | nothing now — effectively forced to "one source"        |
-| 17  | clone/restore re-key policy          | second machine                                           |
-| 18  | sync transport                       | second machine                                           |
-| 19  | hash strength                        | nothing now                                              |
-| 20  | compress per-file or per-bundle      | compression work                                         |
+ADR 8 (in-app vs upstream rename precedence) came off this list on 2026-08-01: authored wins
+unconditionally, because last-write-wins depends on two sources' clocks being comparable and
+nothing establishes that. Written up in DECISIONS.md; `chat-search-6eb.15` carries the test.
+
+| ADR | question                             | blocks                                                   | bead waiting on it |
+| ----- | -------------------------------------- | ---------------------------------------------------------- | -------------------- |
+| 15  | redact at import or at display       | sharing anything, or moving the archive off this machine | `4ar.4`, and `a7k.15` transitively |
+| 16  | work/personal account separation     | nothing now — effectively forced to "one source"        | `n58.12` |
+| 17  | clone/restore re-key policy          | second machine                                           | `a7k.17` |
+| 18  | sync transport                       | second machine                                           | `a7k.15` |
+| 19  | hash strength                        | nothing now                                              | `a7k.16` |
+| 20  | compress per-file or per-bundle      | compression work                                         | `a7k.14` |
+
+The last column was added on 2026-08-01, when a triage found that every one of these ADRs had
+a bead sitting in `bd ready` with an empty description — empty *because* the decision above it
+was open, not because nobody had written it up. Those beads are now deferred and each records
+its gate, so they leave the ready queue without leaving the backlog. Reopening them is a
+consequence of deciding the ADR, and this column is what makes that consequence visible from
+the decision rather than only from the bead.
+
+A second class was deferred the same day against a threshold rather than a decision: `6eb.16`
+(ADR 10's rebuild-duration trigger), `a7k.14` (ADR 20's growth trigger) and `a7k.16` (ADR 19's
+mutate-in-place trigger). Those thresholds are three of the four `chat-search-4ar.2` would
+mechanise, which is what makes that bead worth more than its P3 suggests — until it exists,
+a threshold-gated bead stays deferred because nobody checked, not because the condition is false.

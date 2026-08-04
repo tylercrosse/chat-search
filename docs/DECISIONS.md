@@ -142,7 +142,11 @@ Do not re-litigate this without first repricing the BM25 scoring, because that i
 
 **Why.** Claude Code already models renames as append-only `custom-title` events (re-emitted on every save, observed up to 44× in one session), so rename history is fully recoverable and rebuild-safe. Ignoring `custom-title` loses the most useful titles — 35 sessions carry one, and manual renaming is a primary organising habit here.
 
-**Open sub-question.** If a conversation is renamed both in-app and upstream, authored currently wins. Last-write-wins by timestamp is the alternative.
+**Sub-question, settled 2026-08-01.** If a conversation is renamed both in-app and upstream, **authored wins**, unconditionally — the fold order above is the whole rule, with no timestamp comparison anywhere in it.
+
+Last-write-wins was the alternative and is rejected. It depends on two independent sources' clocks being comparable, which nothing here establishes: an in-app rename is stamped by this tool and an upstream one by the vendor, and a fold that silently prefers whichever clock ran fast is worse than one that is merely opinionated. The opinion is also the right one — an in-app rename is a deliberate act by the user, while an upstream rename is usually the vendor regenerating a title from the conversation's own content. Preferring the vendor's regeneration over a name the user chose is the failure mode worth designing against, and it is the one last-write-wins would produce every time the vendor re-titled after a rename.
+
+Consequence for the fold: `authored override` is unconditional, so `custom-title` and below are only ever consulted when no override exists. `chat-search-6eb.15` implements this and carries the test.
 
 ---
 

@@ -17,6 +17,10 @@ poc/rust/target/
 !/evals/example.toml
 !/evals/README.md
 
+# The UI prototype's real-data export. Transcript text by another name, same rule as
+# above — the script that makes it is committed, the data it makes never is.
+/poc/ui/real-data.js
+
 # Beads / Dolt files (added by bd init)
 .dolt/
 .beads-credential-key

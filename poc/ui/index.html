@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>chat-search</title>
+<meta name="description" content="Interface prototype for chat-search: a dense native surface over a personal AI conversation archive." />
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+<div class="app">
+
+  <header class="tbar">
+    <div class="lights"><i></i><i></i><i></i></div>
+    <span class="tbar-title">chat-search</span>
+
+    <!-- Two places, not four. Projects and Sittings were GROUP BY over the same set, so
+         they became a control on the list; Library is the only genuinely different
+         thing here, because it is the only part not derived from the index. -->
+    <div class="views" id="views" role="group" aria-label="View" data-anno="views">
+      <button type="button" data-view="search" aria-pressed="true">Search</button>
+      <button type="button" data-view="library" aria-pressed="false">Library</button>
+    </div>
+
+    <div class="tbar-right">
+      <button class="chip" id="btn-offpath" type="button" aria-pressed="false">off-path</button>
+      <button class="chip warm" id="btn-anno" type="button" aria-pressed="false">notes</button>
+      <button class="chip" id="btn-theme" type="button">light</button>
+    </div>
+  </header>
+
+  <div class="sbar" id="sbar">
+    <div class="qbox" id="qbox"></div>
+    <div class="group" id="group" role="group" aria-label="Group by"></div>
+    <div class="stat" id="stat"></div>
+  </div>
+
+  <div class="body">
+    <aside class="sidebar" id="side"></aside>
+    <main class="main" id="main"></main>
+  </div>
+
+  <footer class="fbar" id="fbar"></footer>
+
+</div>
+
+<div class="anno" id="anno" hidden></div>
+
+<!-- Optional: written by export.py, gitignored. Absent by default; the prototype
+     falls back to fixtures. A 404 here is expected and harmless. -->
+<script src="real-data.js"></script>
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

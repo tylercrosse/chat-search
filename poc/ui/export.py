@@ -2,15 +2,20 @@
 """Export a slice of the real index for the UI prototype.
 
 Throwaway measurement instrument, not product code — the same status as poc/rust and
-poc/ts. It exists so the prototype can be judged against real conversations without
-waiting for `cs show`, and so that decisions about the ribbon, the segment fold and
-cluster proposals are made against the corpus rather than against fixtures I invented.
+poc/ts. It exists so decisions about the ribbon, the segment fold and cluster proposals
+are made against the corpus rather than against fixtures I invented.
 
     python3 poc/ui/export.py                 # ~/.chat-archive/index.db -> real-data.json
     python3 poc/ui/export.py --limit 300
+    python3 poc/ui/export.py --cs ./target/release/cs
 
 Opens the index READ-ONLY. Writes poc/ui/real-data.json, which is gitignored: it is
 conversation text, and .gitignore's existing rule about transcripts covers it.
+
+It also spawns `cs show --json` once per exported conversation, for the one line each
+message collapses to. It used to derive that itself; `cs-core` owns the rule now, and a
+prototype judging a reader ought to be judging what a reader can actually get
+(chat-search-me9.20). Needs `cs` on PATH, or `--cs`.
 
 What it does NOT do: rank. There is no BM25 here. The prototype searches the exported
 text by substring in the browser, which is enough to place match ticks and pick a best
@@ -23,6 +28,7 @@ import math
 import os
 import re
 import sqlite3
+import subprocess
 import sys
 from collections import Counter, defaultdict
 
@@ -111,57 +117,87 @@ MARKUP = re.compile(
 # The name is the first line; everything after it is the arguments, as JSON for most
 # harnesses and as a patch body for `apply_patch`. The preview drew only the name, so a
 # `Bash` line said "Bash" and nothing else — the one thing you actually want to read.
-#
-# Argument names differ per harness for the same idea (`command` vs `cmd`), so this is a
-# lookup rather than a single key.
-ARG_KEYS = ("command", "cmd", "file_path", "path", "pattern", "query", "url", "uri",
-            "prompt", "description", "notebook_path", "plan")
 ARG_CHARS = 400
 
 
-def call_detail(text):
-    """(one-line argument summary, [removed, added]) for a tool_call body."""
+def collapsed_lines(cs_bin, db, ids):
+    """{msg_id: the one line that stands in for this message}, from `cs show --json`.
+
+    Which argument identifies a call used to be answered here, by a `call_detail()` that
+    was a second implementation of `cs-core`'s `tool_summary` — and the two had already
+    drifted on the argv shape. `cs_core::blocks` owns it now and puts the answer on the
+    wire, so this asks rather than derives (chat-search-me9.20).
+
+    That makes this script a client of the contract instead of a rival implementation of
+    it, which is the useful part: if `cs show --json` cannot feed a reader, the prototype
+    it feeds is measuring something no real client could reproduce.
+
+    One spawn per conversation — 0.10 s on the corpus's largest, so a few seconds over a
+    default export. A conversation `cs` cannot show is skipped rather than fatal: this is
+    a measurement instrument, and a missing argument line degrades one row.
+    """
+    out = {}
+    for cid in ids:
+        try:
+            done = subprocess.run([cs_bin, "show", cid, "--json", "--db", db],
+                                  capture_output=True, text=True, check=True)
+            for m in json.loads(done.stdout)["messages"]:
+                out[m["msg_id"]] = m["collapsed"]["text"]
+        except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as why:
+            print(f"  ! no collapsed lines for {cid}: {why}", file=sys.stderr)
+    return out
+
+
+def call_argument(text, collapsed):
+    """The argument alone, out of `cs show`'s `<name> <argument>` line.
+
+    The prototype draws the name in its own glyph slot, so it wants the remainder. This
+    unpicks the concatenation `tool_summary` made rather than re-deriving which argument
+    mattered — undoing a join is not a second copy of the rule that chose it.
+    """
+    if not collapsed:
+        return None
+    name = text.splitlines()[0].strip() if text else ""
+    arg = collapsed[len(name):] if name and collapsed.startswith(name) else collapsed
+    return " ".join(arg.split())[:ARG_CHARS] or None
+
+
+def diff_counts(text):
+    """[removed, added] for a call that edits a file, or None.
+
+    The half of the old `call_detail()` with no counterpart in `cs-core`: the preview
+    shows a call's size as well as its argument, and nothing in the index records it.
+    Kept here because it is the prototype asking a question `cs show` does not answer,
+    rather than answering one it does.
+    """
     body = text.split("\n", 1)[1].strip() if "\n" in text else ""
     if not body:
-        return None, None
+        return None
 
-    # apply_patch carries a unified patch rather than JSON, so the counts are exact and
-    # the summary is the file it targets.
-    if body.startswith("*** Begin Patch") or body.startswith("***"):
+    # apply_patch carries a unified patch rather than JSON, so the counts are exact.
+    if body.startswith("***"):
         minus = sum(1 for l in body.splitlines() if l.startswith("-") and not l.startswith("---"))
         plus = sum(1 for l in body.splitlines() if l.startswith("+") and not l.startswith("+++"))
-        target = ""
-        for l in body.splitlines():
-            if l.startswith("*** ") and " File: " in l:
-                target = l.split(" File: ", 1)[1].strip()
-                break
-        return (target or "patch")[:ARG_CHARS], [minus, plus] if (minus or plus) else None
+        return [minus, plus] if (minus or plus) else None
 
     try:
         args = json.loads(body)
     except Exception:
-        return " ".join(body.split())[:ARG_CHARS], None
+        return None
     if not isinstance(args, dict):
-        return None, None
+        return None
 
     # An Edit is a replacement, so its line counts are the difference between the two
     # strings — the same +/- a diff would show, without needing the file.
-    diff = None
     if "old_string" in args or "new_string" in args:
         old_s = args.get("old_string") or ""
         new_s = args.get("new_string") or ""
         minus = len(old_s.splitlines()) if old_s else 0
         plus = len(new_s.splitlines()) if new_s else 0
-        if minus or plus:
-            diff = [minus, plus]
-    elif "content" in args and isinstance(args["content"], str):
-        diff = [0, len(args["content"].splitlines())]
-
-    for k in ARG_KEYS:
-        v = args.get(k)
-        if isinstance(v, str) and v.strip():
-            return " ".join(v.split())[:ARG_CHARS], diff
-    return None, diff
+        return [minus, plus] if (minus or plus) else None
+    if "content" in args and isinstance(args["content"], str):
+        return [0, len(args["content"].splitlines())]
+    return None
 
 
 def strip_markup(text):
@@ -404,7 +440,8 @@ def pick(conn, limit, projects=None, per_project=0):
     return out
 
 
-def load_conversations(conn, ids):
+def load_conversations(conn, ids, collapsed=None):
+    collapsed = collapsed or {}
     cur = conn.cursor()
     qmarks = ",".join("?" * len(ids))
     meta = {
@@ -420,11 +457,14 @@ def load_conversations(conn, ids):
     msgs = defaultdict(list)
     # Same ordering the TUI uses: seq is per-thread, so ordering by it alone interleaves
     # every strand at once and a 9-thread conversation reads as nonsense.
+    # `id` is selected only to key the collapsed lines `cs show --json` returned. Joining
+    # on it rather than zipping by position: both orderings agree today, and a join that
+    # stops matching is loud where a zip that slips by one is silent.
     for r in cur.execute(
-        f"""SELECT conv_id, role, kind, seq, is_error, is_sidechain, ts, on_head_path, text
+        f"""SELECT conv_id, role, kind, seq, is_error, is_sidechain, ts, on_head_path, text, id
             FROM message WHERE conv_id IN ({qmarks}) AND on_head_path = 1
             ORDER BY conv_id, is_sidechain, thread_key, seq""", ids):
-        conv_id, role, kind, seq, is_err, side, ts, on_path, text = r
+        conv_id, role, kind, seq, is_err, side, ts, on_path, text, msg_id = r
         m = {"k": KIND_CODE.get(kind, "p"), "r": ROLE_CODE.get(role, "a"), "n": len(text or "")}
         if ts:
             m["t"] = ts
@@ -450,9 +490,10 @@ def load_conversations(conn, ids):
             # classification keys on: 47,479 calls run something, 9,460 change a file,
             # 4,502 look at one — a distinction the single "tool" band cannot make.
             m["c"] = head.split("(")[0].split()[0][:24] if head else "tool"
-            arg, diff = call_detail(text)
+            arg = call_argument(text, collapsed.get(msg_id))
             if arg:
                 m["a"] = arg
+            diff = diff_counts(text)
             if diff:
                 m["d"] = diff
             # Full paths, not basenames: `crates/cs-core/src/preview.rs` is a different
@@ -760,13 +801,15 @@ def main():
     ap.add_argument("--per-project", type=int, default=24,
                     help="depth to sample from each of the ten largest projects")
     ap.add_argument("--out", default=OUT)
+    ap.add_argument("--cs", default="cs",
+                    help="the cs binary to ask for collapsed lines; ./target/release/cs works")
     a = ap.parse_args()
 
     conn = connect(a.db)
     projs = corpus_projects(conn)
     biggest = sorted(projs, key=lambda p: -p["n"])
     ids = pick(conn, a.limit, biggest, a.per_project)
-    convs = load_conversations(conn, ids)
+    convs = load_conversations(conn, ids, collapsed_lines(a.cs, a.db, ids))
 
     basenames = {p["path"].split("/")[-1]: p["path"] for p in projs}
     for c in convs:

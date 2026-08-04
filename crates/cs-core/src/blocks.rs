@@ -326,19 +326,39 @@ pub fn recognition_line(block: &Block) -> (usize, String) {
 /// A `tool_call` body is the tool name on its own line followed by a JSON argument object, so
 /// the name is free and the useful part is picking the one argument a human would use to
 /// recognise the call — the command for a shell, the path for a read.
+///
+/// Measured over all 66,417 `tool_call` messages in this corpus: 80.1% carry a JSON object,
+/// 6.6% an `apply_patch` body, and 13.3% something neither. The keys below are the string-valued
+/// arguments that actually appear, in the order a reader would recognise the call by.
 pub fn tool_summary(text: &str) -> String {
     let mut lines = text.lines();
     let name = lines.next().unwrap_or("tool").trim().to_string();
     let rest: String = lines.collect::<Vec<_>>().join("\n");
+
+    // `apply_patch` carries a unified patch instead of JSON, and its `*** Update File: <path>`
+    // header names what the call touched. All 4,366 patch bodies in this corpus have one, and
+    // without it every one of them collapses to a bare `apply_patch`.
+    if rest.trim_start().starts_with("***") {
+        let target = rest
+            .lines()
+            .filter(|l| l.starts_with("*** "))
+            .find_map(|l| l.split_once(" File: "));
+        return match target {
+            Some((_, path)) => format!("{name} {}", path.trim()),
+            None => name,
+        };
+    }
+
     let Ok(json) = serde_json::from_str::<serde_json::Value>(&rest) else {
         return name;
     };
 
-    // `command` is spelled differently by each tool and both spellings are common here: Codex
-    // writes an argv array, Claude Code a single string. Handling only the array meant every
-    // Claude Code `Bash` call collapsed to a bare `Bash` — the name with the one piece of
-    // information stripped out.
-    if let Some(cmd) = json.get("command") {
+    // The command is spelled differently by each tool and all the spellings are common here:
+    // Codex writes `cmd` (25,790 calls — the most frequent argument of any name in the corpus),
+    // Claude Code writes `command` (10,623), as an argv array in one and a single string in the
+    // other. Handling one of them meant the rest collapsed to a bare name — the tool with the
+    // one piece of information a reader wanted stripped out.
+    if let Some(cmd) = json.get("command").or_else(|| json.get("cmd")) {
         if let Some(line) = cmd.as_str() {
             return format!("{name} {}", line.replace('\n', " "));
         }
@@ -353,9 +373,15 @@ pub fn tool_summary(text: &str) -> String {
             return format!("{name} {shown}");
         }
     }
-    for key in ["path", "file_path", "pattern", "query", "url"] {
+    // Paths first, because a call that names a file is recognised by the file. `description`
+    // and `prompt` come last: they identify the calls that have nothing better — `Task`,
+    // `AskUserQuestion` — but they are prose a tool wrote about itself, so anything concrete
+    // beats them.
+    for key in ["file_path", "path", "notebook_path", "pattern", "query", "url", "uri", "prompt",
+                "description", "plan"]
+    {
         if let Some(v) = json.get(key).and_then(|v| v.as_str()) {
-            return format!("{name} {v}");
+            return format!("{name} {}", v.replace('\n', " "));
         }
     }
     name
@@ -746,9 +772,65 @@ mod tests {
     #[test]
     fn an_unparseable_body_still_yields_the_tool_name() {
         // Argument shapes vary per tool and per version; the name alone is always better
-        // than a raw JSON fragment wrapped into the pane.
+        // than a raw JSON fragment wrapped into the pane. 13.3% of this corpus's calls land
+        // here, so it is the fallback, not the edge case.
         assert_eq!(tool_summary("update_plan\nnot json at all"), "update_plan");
         assert_eq!(tool_summary("bare_name"), "bare_name");
+    }
+
+    #[test]
+    fn codexs_spelling_of_a_command_reads_the_same_as_claude_codes() {
+        // `cmd` is the most frequent argument name in this corpus at 25,790 calls, more than
+        // `command` itself, and it went unread — so every Codex `exec_command` drew as a bare
+        // tool name. Found by folding the prototype's second implementation back into this one:
+        // it knew about `cmd` and this did not.
+        assert_eq!(
+            tool_summary("exec_command\n{\"cmd\":[\"bash\",\"-lc\",\"cargo test\"],\"workdir\":\".\"}"),
+            "exec_command cargo test"
+        );
+        assert_eq!(tool_summary("exec\n{\"cmd\":\"ls -la\"}"), "exec ls -la");
+        // And `command` still wins where a call carries both spellings.
+        assert_eq!(
+            tool_summary("Bash\n{\"command\":\"git status\",\"cmd\":\"nonsense\"}"),
+            "Bash git status"
+        );
+    }
+
+    #[test]
+    fn a_patch_collapses_to_the_file_it_edits() {
+        // `apply_patch` is 6.6% of this corpus's calls and carries a unified patch rather than
+        // JSON, so it fell through to the bare name — 4,366 rows reading `apply_patch` and
+        // nothing else. Every one of them has this header.
+        let patch = "apply_patch\n*** Begin Patch\n*** Update File: crates/cs-core/src/blocks.rs\n@@\n-a\n+b\n*** End Patch";
+        assert_eq!(tool_summary(patch), "apply_patch crates/cs-core/src/blocks.rs");
+        // Add and Delete name their file the same way; the verb is not the identifying part.
+        assert_eq!(
+            tool_summary("apply_patch\n*** Begin Patch\n*** Add File: docs/NEW.md\n+hello"),
+            "apply_patch docs/NEW.md"
+        );
+        // A patch with no header at all is still better as a name than as a diff fragment.
+        assert_eq!(tool_summary("apply_patch\n*** Begin Patch\n+stray"), "apply_patch");
+    }
+
+    #[test]
+    fn a_call_whose_only_argument_is_prose_uses_it_rather_than_drawing_a_bare_name() {
+        // `description` and `prompt` are what identify the calls with nothing concrete — a
+        // subagent task, a question put to the user. Ranked below every path and pattern,
+        // because a tool's prose about itself is the weakest thing a reader can recognise.
+        assert_eq!(
+            tool_summary("Task\n{\"description\":\"Find the outline spec\",\"subagent_type\":\"x\"}"),
+            "Task Find the outline spec"
+        );
+        assert_eq!(
+            tool_summary("Read\n{\"file_path\":\"/x/schema.rs\",\"description\":\"look at it\"}"),
+            "Read /x/schema.rs",
+            "something concrete beats the tool's own prose"
+        );
+        // Multi-line prose still occupies exactly one row, the same as a multi-line script.
+        assert_eq!(
+            tool_summary("Task\n{\"prompt\":\"do this\\nthen that\"}"),
+            "Task do this then that"
+        );
     }
 
     #[test]

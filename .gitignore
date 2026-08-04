@@ -33,3 +33,6 @@ poc/swift/.build/
 .beads/.auto-import-issues.jsonl
 # bd's pre-migration backup of the whole workspace, embedded Dolt DB and all.
 .beads.bak/
+
+# Bytecode from poc/ui/palette.py and export.py, which run in place.
+__pycache__/

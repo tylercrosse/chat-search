@@ -405,6 +405,60 @@ checking.**
 - **Inlined as data URIs** — Chrome refuses `file://` subresources, same constraint that
   made the export a script rather than JSON.
 
+### Visual directions
+
+The information design here was argued from measurements and the *look* never was — the
+faces are system defaults and the palette is one nobody chose. `DESIGN-BRIEF.md` says so
+and asks for several distinct directions rather than one refinement. Four exist now, in
+[`directions.css`](./directions.css), shown on the row and the ribbon at real size in
+both themes by [`directions.html`](./directions.html).
+
+- **A direction is a set of token values, not a fork of `styles.css`.** That is the whole
+  reason the surface layer exists: the five type sizes, six chrome radii, the row's
+  rhythm and the ribbon's geometry came out of the rules and into `:root` so a direction
+  can be ~40 declarations. Anything that cannot be said in tokens is out of scope for a
+  visual pass by construction, which is a cheaper fence than remembering to hold one.
+- **The tokens record what was there rather than rationalise it.** The radii really did
+  grow ad hoc across six values. Imposing a scale on them in the token layer would have
+  made one direction's answer the default for all four; `blueprint` squares every corner
+  and `ink` softens all six, and those are now arguments rather than the baseline.
+- **Marks under 3px, the 50% dots and the 10–11px pills stay literal.** They are geometry,
+  not style. Squaring a dot is a bug, not a direction.
+- **`.theme-dark` / `.theme-light` joined `:root` / `:root.light`.** The theme living only
+  on the root is why the gallery needs two iframes to show both at once, and why nothing
+  could measure a direction without opening eight windows. As sibling subtrees, both
+  themes render in one document and the page can read every token in both.
+- **The kind ramp is generated, not picked.** `palette.py` takes a hue per kind and solves
+  the lightness that lands it at 2.2 / 4.0 / 7.2 / 13.0 against that direction's own
+  track. Holding the *ratios* constant across all four is what makes the finding survive
+  by construction: however different they look at 200px they read identically at 2px.
+  The colours are not sacred and the ramp is, so the ramp is the generated part.
+- **The generator agrees with the incumbent.** Given only hue and target ratio it
+  reproduces the ramp that was hand-solved earlier to within one part in 255 — `#2bb6b2`
+  exactly for the user band, `#415358` against `#425258` for tools. That agreement is the
+  reason to trust it on the three new directions, and it is the only reason.
+- **`terminal` declares nothing.** The control has to be `styles.css` as it stands.
+  Nudging it to match the generator would have moved the baseline the other three are
+  measured against, to make a table look tidier.
+
+The four, and what each is betting:
+
+| | bet | row | rows / 800px |
+| --- | --- | --- | --- |
+| `terminal` | the incumbent, and the control | 66.3px | 12 |
+| `paper` | an archive reads like documents, not a process listing | 64.9px | 12 |
+| `blueprint` | the terminal register taken seriously, not apologised for | 60.6px | 13 |
+| `ink` | this product has no business being colourful | 65.3px | 12 |
+
+Row heights are measured off the rendered page, not summed from the tokens — a row's
+height is a line box's opinion. The incumbent measures 66.3px against the 66px reported
+in the brief, which is the check that the harness is looking at the real thing.
+
+`ink` is the one worth watching: it strips almost all the hue the ramp has been leaning
+on as a redundant second channel, so if its four kinds are still tellable apart, then
+luminance really was doing the work and the finding is stronger than the measurement
+that produced it.
+
 ---
 
 ## 3. Things I got wrong
@@ -437,7 +491,24 @@ published material.
    when ChatGPT is two thirds of the corpus. Every cross-tool claim was untestable.
 9. **Sittings chained transitively.** A ≤2h gap rule merged 18 conversations across a
    whole day. Needs a total-span bound too.
-10. **Reveal-on-scroll hid all content** when the observer did not fire. Never hide
+10. **`--ink-3` was fixed against the wrong ground.** Taking the quiet tier from 2.90 to
+    4.60 measured it against `--bg`, and in the light theme `--bg` is the *easier* of the
+    two grounds it lands on: `--panel` is darker, and `.pv-meta` plus every tool and
+    reasoning line in the transcript sit on the drawer. The tier was still at **4.23:1**
+    there — under the AA floor, on the ground where most of that text actually is, which
+    is the same failure the fix was for. Found by `palette.py --verify`, which re-reads
+    the stylesheets rather than trusting what the generator meant to write. All four
+    directions now solve against whichever ground is worse, and the incumbent's light
+    `--ink-3` moved `#677779` → `#617175`. Two lessons, and the second is the bigger one:
+    a contrast claim needs the ground named, and a measurement taken on one surface is
+    not a measurement of the token.
+11. **The gallery's "four lines" row was rendering three.** The fourth line is gated on
+    `hasQuery()`, which reads state that is empty unless you have typed something, so the
+    caption described a row the page was not drawing. A gallery exists to stop the app
+    and the picture of it drifting, and it had drifted inside one file. Specimens of
+    stateful components have to *pose* the state, the way `rib()` already posed
+    `state.fidelity`.
+12. **Reveal-on-scroll hid all content** when the observer did not fire. Never hide
     content behind an animation hook.
 11. **The row cap was applied after the run dividers were drawn**, so a divider announced
     "26 conversations" above a run the cap had truncated to 20 — the list contradicting
@@ -578,6 +649,22 @@ published material.
 - ~~File extraction keeps basenames~~ — fixed for the project rollup (`PATH_RE` keeps the
   path, `SCAFFOLD` drops `SKILL.md`/`CLAUDE.md`/`AGENTS.md`). Per-conversation `files`
   still uses basenames.
+- **No direction has been chosen, and choosing is not a measurement.** All four hold
+  every fenced number, which is what the fencing was for and is exactly why it cannot
+  decide between them. What the table cannot say: whether `blueprint`'s extra row per
+  screen is worth setting a 78-character reading measure of prose in a mono face, and
+  whether `paper`'s serif still works at 350 rows rather than the four on the specimen
+  page. Both want `index.html?dir=` against the real sample and a person looking.
+- Observed costs, from the live pages rather than the specimens: `paper`'s serif is wide
+  enough to wrap the left rail's `WHEN ENDED_AT · EVERY CONVERSATION` heading onto two
+  lines, and `blueprint` sets the entire drawer transcript in mono, which is the one pane
+  where the product stops being a list.
+- The directions restyle the whole app through colour tokens but only the list through
+  geometry tokens — the rest of the panes still hardcode their spacing. Enough to judge
+  the row and the ribbon, which is what the brief asked for; not enough to judge a
+  direction whole.
+- `DIR_CHARS` is 17, sized to the grid track at the incumbent's 10px mono. A direction
+  that changes `--fs-meta` changes the budget, and nothing recomputes it.
 - Two published artifacts still carry the `Blocks::load` error.
 
 ---
@@ -610,7 +697,15 @@ What is still needed to feed this prototype from the real index, in order:
 python3 poc/ui/export.py            # sample + topics + projects + lineages -> real-data.js
 python3 poc/ui/export.py --limit 400 --per-project 30
 python3 poc/ui/icons.py --rebuild   # re-inline source marks
+
+python3 poc/ui/palette.py           # solve every direction's ramp, print as CSS
+python3 poc/ui/palette.py --verify  # re-measure what directions.css actually says
 ```
+
+`palette.py` exits non-zero if any direction misses the kind ramp or drops a text tier
+below 4.5:1, so it is a check and not only a generator. `--verify` reads the stylesheets
+back rather than trusting `DIRECTIONS`, because solving a colour and pasting it into a
+file are two events and only one of them was checked before.
 
 The sample is stratified three ways — by source, by size, and by project. The third
 stratum exists because source-stratified sampling alone gave 9 projects, six of them with

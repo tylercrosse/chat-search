@@ -108,6 +108,20 @@
     return c;
   }
 
+  /* Borrow a piece of app state for the length of one specimen and put it back, the
+     same bargain `rib()` makes with state.fidelity. Rendering the app's own functions
+     means rendering them against the app's own state, so the states a component has
+     have to be posed rather than described. */
+  function withQuery(on, build) {
+    const keep = UI.state.query.free;
+    UI.state.query.free = on ? 'text_hash' : '';
+    try {
+      return build();
+    } finally {
+      UI.state.query.free = keep;
+    }
+  }
+
   /* Repeat a shape to a length. The ribbon's log scaling only shows itself across a
      real spread, and the corpus spans 4 to 2,553 messages. */
   const rep = (unit, times) => new Array(times).fill(unit.trim()).join(' ');
@@ -237,7 +251,11 @@
         rows.appendChild(specimen(cap, r));
       };
       add(base, 'three lines — meta, title, topics');
-      add(withQ, 'four lines — the best-match line appears only when there is a query');
+      // The fourth line is gated on `hasQuery()`, which reads state, so a specimen of
+      // it has to put the state there. Without this the caption described a row the
+      // page was not rendering — a gallery drifting from the app inside one file.
+      withQuery(true, () =>
+        add(withQ, 'four lines — the best-match line appears only when there is a query'));
       add(bare, 'two lines — no topics matched, no edits, a chat surface with no cwd');
 
       const sel = UI.conversationRow(base);
@@ -572,6 +590,17 @@
       root.appendChild(sec);
     });
   }
+
+  /* The fixtures, exported for the same reason window.CS_UI exists: directions.html
+     shows the row and the ribbon under four palettes, and building it a second set of
+     conversations would let the two pages disagree about what a specimen is. A shape
+     written as `u c o c* o a` is also the most compact way anyone has found to say
+     what a ribbon is being asked to draw. */
+  window.CS_FIXTURES = { msg, conv, rep, specimen, caseOf, stack, rib, withQuery };
+
+  // Everything below builds the gallery's own page, so it only runs on it. Without the
+  // guard, loading this file for its fixtures throws on the first getElementById.
+  if (!$('gal-body')) return;
 
   const params = new URLSearchParams(location.search);
   const pane = params.get('pane');

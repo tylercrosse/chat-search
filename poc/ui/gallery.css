@@ -133,3 +133,97 @@ html, body {
 
 /* A forced state the DOM cannot be put into by hovering a headless browser. */
 .gal-force-hover { background: var(--panel-2) !important; }
+
+/* ---------------------------------------------------- visual directions --- */
+/* Chrome for directions.html, under the same rule as everything above: it may lay out
+   and label, and may not restyle a component. A direction is judged on what styles.css
+   and directions.css do to the row and the ribbon, so anything here that touched one
+   would be putting a thumb on the scale.
+
+   `.vd-pane` is the one exception that is not an exception: it re-declares the four
+   things `body` declares, because a direction is a subtree here rather than a document
+   and body's rules do not reach it. They are the same declarations, reading the same
+   tokens. */
+
+.gal-body.wide { max-width: none; }
+
+.vd-pair {
+  display: grid;
+  grid-template-columns: repeat(2, 706px);
+  gap: 24px;
+  margin-top: 14px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+/* 706px is the list column at a 1560px window, so the row is drawn at the width it is
+   actually read at. Anything narrower and the path cell starts eliding for a reason
+   that is the page's fault rather than the direction's. */
+.vd-pane {
+  width: 706px;
+  padding: 0 0 14px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--ui);
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  border: 1px solid var(--rule-2);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.vd-pane-h {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 7px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+}
+
+.vd-cap {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--ink-3);
+  padding: 12px 12px 5px;
+}
+.vd-cap:empty { padding: 0; }
+
+.vd-ribs { padding: 0 12px; }
+
+.vd-tbl {
+  border-collapse: collapse;
+  margin-top: 14px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-2);
+}
+.vd-tbl th {
+  text-align: left;
+  font-weight: 400;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border-bottom: 1px solid var(--rule-2);
+}
+.vd-tbl th, .vd-tbl td {
+  padding: 4px 14px 4px 0;
+  white-space: pre;
+  vertical-align: baseline;
+}
+.vd-tbl td { border-bottom: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
+.vd-name { color: var(--ink); }
+.vd-ok { color: var(--ok); }
+/* Loud on purpose. A table of eight rows where one has quietly failed is a table you
+   read as eight passes. */
+.vd-bad { color: var(--err); font-weight: 600; }
+
+.gal-top code {
+  font-family: var(--mono);
+  background: var(--panel-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+}

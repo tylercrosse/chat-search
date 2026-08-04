@@ -721,6 +721,7 @@ mod tests {
             score: -1.0,
             match_count: 1,
             match_seqs: vec![2],
+            kind_runs: Vec::new(),
             native_id: "c1".into(),
             destinations: Vec::new(),
             deleted_upstream: false,

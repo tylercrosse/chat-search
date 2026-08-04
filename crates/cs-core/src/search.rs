@@ -162,6 +162,19 @@ pub struct SearchOptions {
     /// argument to [`search_grouped`], which put one of the ten options somewhere the other
     /// nine could not be read from.
     pub nested: usize,
+    /// Fill [`Group::kind_runs`] — what each conversation is made of, for a client that draws
+    /// it as a strip.
+    ///
+    /// Off by default because it is the one field whose cost scales with the *conversations*
+    /// returned rather than with the matches in them: it reads every head-path message of
+    /// every row. Measured against the real index, it adds 4–30 ms at the 20–50 rows a
+    /// terminal holds and 205 ms at 354 rows for a broad prefix — and the TUI, which is the
+    /// caller that runs this on every keystroke, draws [`match_density`] rather than a band
+    /// strip and would be paying that for nothing.
+    ///
+    /// A covering index would make it close to free and let this flag go away; that is
+    /// chat-search-me9.26, filed with these numbers.
+    pub shape: bool,
 }
 
 impl SearchOptions {
@@ -180,6 +193,7 @@ impl SearchOptions {
             repeat_weight: REPEAT_WEIGHT,
             decay: DECAY,
             nested: 0,
+            shape: false,
         }
     }
 }
@@ -865,8 +879,61 @@ pub struct Group {
     /// cannot answer "is this conversation about my query": 58% of conversations over 15
     /// turns span more than four hours, so most of them are several sittings.
     pub match_seqs: Vec<i64>,
+    /// What the conversation is made of, in reading order, run-length encoded:
+    /// `[["user",1],["agent",1],["tool",34]]`.
+    ///
+    /// The shape a client draws as a strip on every result row. It answers the question a
+    /// title and a match count cannot — whether this was a question and an answer, or six
+    /// hours of an agent running tools — and it answers it for 354 rows at once, which is why
+    /// it is here rather than left to `cs show`: that is one process and one whole transcript
+    /// per conversation, against a list that redraws on a keystroke.
+    ///
+    /// **The positions are [`crate::blocks::READING_ORDER`], and only what a reader draws.**
+    /// Successful tool results are omitted ([`crate::blocks::drawn`]) rather than counted,
+    /// because a strip position a reader cannot click on is a lie about where they are. So the
+    /// run lengths sum to the drawn message count, which is *not* [`Group::msg_count`] and not
+    /// the denominator [`Group::match_seqs`] uses — see chat-search-me9.25, which is the gap
+    /// between those two coordinate spaces.
+    ///
+    /// **Empty unless [`SearchOptions::shape`] asked for it**, which is not the same thing as
+    /// a conversation with nothing in it, and a client that cannot tell those apart will draw
+    /// an empty strip and believe it. Filling it costs a read of every message in every row
+    /// returned; the flag carries the numbers.
+    ///
+    /// Once asked for, it is a property of the conversation rather than of the query, so it
+    /// survives the query being cleared — the strip is what makes the no-query list
+    /// triageable in the first place.
+    pub kind_runs: Vec<crate::blocks::Run>,
     pub deleted_upstream: bool,
     pub hits: Vec<Hit>,
+}
+
+/// One conversation's shape — see [`Group::kind_runs`].
+///
+/// Three narrow columns and no `text`. That matters more than it looks: `message` stores its
+/// body inline, so a `SELECT` naming `text` walks the whole 324 MB of it, and the top 354
+/// results for a broad query hold 108k messages between them.
+///
+/// One prepared statement reused across the page, for the same reason [`hydrate`] does it —
+/// an `IN (...)` list sized to the result count would be a new statement per query and would
+/// lose the cache on every keystroke.
+fn kind_runs(conn: &Connection, conv_id: &str) -> rusqlite::Result<Vec<crate::blocks::Run>> {
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT role, kind, is_error FROM message
+         WHERE conv_id = ?1 AND on_head_path = 1
+         {}",
+        crate::blocks::READING_ORDER
+    ))?;
+    let rows = stmt
+        .query_map(params![conv_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? != 0))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(crate::blocks::runs(
+        rows.iter()
+            .filter(|(_, kind, is_error)| crate::blocks::drawn(kind, *is_error))
+            .map(|(role, kind, _)| crate::blocks::band(role, kind)),
+    ))
 }
 
 /// How much a conversation's *additional* matches count beyond its best one.
@@ -899,6 +966,7 @@ pub fn recent(
     query: &Query,
     now_ms: i64,
     limit: i64,
+    shape: bool,
 ) -> rusqlite::Result<Vec<Group>> {
     let mut binds = vec![Value::Integer(limit)];
     let filters = filter_sql(query, now_ms, &mut binds);
@@ -928,15 +996,34 @@ pub fn recent(
             cwd: r.get(9)?,
             score: 0.0,
             match_count: 0,
-            // No query, so nothing matched and there is no shape to draw.
+            // No query, so nothing matched and there is nowhere to put a mark.
             match_seqs: Vec::new(),
+            // Filled below, once the statement holding this row is done with.
+            kind_runs: Vec::new(),
             native_id: r.get(5)?,
             destinations: crate::destinations(&r.get::<_, String>(1)?, &r.get::<_, String>(5)?),
             deleted_upstream: r.get::<_, Option<i64>>(6)?.is_some(),
             hits: Vec::new(),
         })
     })?;
-    rows.collect()
+    let mut groups = rows.collect::<rusqlite::Result<Vec<Group>>>()?;
+    drop(stmt);
+    // The shape is a property of the conversation rather than of a query, so a client that
+    // asked for it gets it here too. Without that, clearing the query would blank the one
+    // column that made the list triageable — backwards, since this list is exactly where a
+    // reader has no query to sort by.
+    if shape {
+        fill_shape(conn, &mut groups)?;
+    }
+    Ok(groups)
+}
+
+/// Give every group its [`Group::kind_runs`].
+fn fill_shape(conn: &Connection, groups: &mut [Group]) -> rusqlite::Result<()> {
+    for group in groups {
+        group.kind_runs = kind_runs(conn, &group.conv_id)?;
+    }
+    Ok(())
 }
 
 /// Conversations matching `q`, best-first, each carrying up to [`SearchOptions::nested`]
@@ -952,7 +1039,7 @@ pub fn search_grouped(
     // of the two it is showing; the routing is the same, and doing it here is what lets the
     // TUI stop blanking its own query text to force this branch.
     if !query.is_searchable() {
-        return recent(conn, query, q.now_ms, q.limit);
+        return recent(conn, query, q.now_ms, q.limit, q.shape);
     }
     let (ranked, _) = rank(conn, query, q)?;
     best_of(conn, query, q, ranked)
@@ -1001,7 +1088,7 @@ pub fn search_grouped_counted(
     q: &SearchOptions,
 ) -> rusqlite::Result<Counted> {
     if !query.is_searchable() {
-        let groups = recent(conn, query, q.now_ms, q.limit)?;
+        let groups = recent(conn, query, q.now_ms, q.limit, q.shape)?;
         // Always exact, and always cheap enough to take here: this branch ranks nothing, so
         // the count is a scan of `conversation` — thousands of rows, not the millions of
         // postings a term matches. Nothing to defer.
@@ -1028,7 +1115,7 @@ fn best_of(
     mut ranked: Vec<Ranked>,
 ) -> rusqlite::Result<Vec<Group>> {
     ranked.truncate(q.limit as usize);
-    hydrate(conn, query, q.field, ranked)
+    hydrate(conn, query, q.field, q.shape, ranked)
 }
 
 /// How many conversations hold a message this query matches, `limit` ignored.
@@ -1236,6 +1323,7 @@ fn hydrate(
     conn: &Connection,
     query: &Query,
     field: Field,
+    shape: bool,
     ranked: Vec<Ranked>,
 ) -> rusqlite::Result<Vec<Group>> {
     let mut meta = conn.prepare_cached(
@@ -1326,6 +1414,8 @@ fn hydrate(
             score,
             match_count,
             match_seqs: seqs,
+            // Filled below, with `meta` and `msg` released.
+            kind_runs: Vec::new(),
             hits: Vec::new(),
         });
     }
@@ -1335,6 +1425,10 @@ fn hydrate(
     // whoever adds the third.
     drop(msg);
     drop(meta);
+
+    if shape {
+        fill_shape(conn, &mut groups)?;
+    }
 
     // Order within a group survives because `pending` was built in `shown` order and this
     // walks it in the same order — and that order is load-bearing, since the first hit is the
@@ -1417,11 +1511,11 @@ mod group_tests {
             )
             .unwrap();
         }
-        let got = recent(&conn, &Query::exact("agent:codex"), NO_DECAY, 10).unwrap();
+        let got = recent(&conn, &Query::exact("agent:codex"), NO_DECAY, 10, false).unwrap();
         assert_eq!(got.len(), 2);
         assert!(got.iter().all(|g| g.source == "codex"));
 
-        let capped = recent(&conn, &Query::exact(""), NO_DECAY, 1).unwrap();
+        let capped = recent(&conn, &Query::exact(""), NO_DECAY, 1, false).unwrap();
         assert_eq!(capped.len(), 1);
     }
 
@@ -1480,6 +1574,165 @@ mod group_tests {
             conn.execute("INSERT INTO fts_prose(rowid, text) VALUES (?1, ?2)", params![rowid, text])
                 .unwrap();
         }
+    }
+
+    /// One message of a hand-shaped conversation: thread, sidechain, seq, role, kind, error.
+    type Shaped<'a> = (&'a str, bool, i64, &'a str, &'a str, bool, &'a str);
+
+    /// A conversation whose *structure* is the fixture, rather than its text.
+    ///
+    /// Everything the seeder above hard-codes — one thread, one role, one kind — is what the
+    /// shape is made of, so it has to be spelled out here.
+    fn seed_shaped(conn: &Connection, conv_id: &str, msgs: &[Shaped]) {
+        conn.execute(
+            "INSERT INTO conversation(id, source, native_id, title, ended_at, user_turns,
+                                      msg_count)
+             VALUES (?1, 'claude-code', ?1, ?1, 1000, 1, ?2)",
+            params![conv_id, msgs.len() as i64],
+        )
+        .unwrap();
+        for (i, (thread, side, seq, role, kind, is_error, text)) in msgs.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO message(id, conv_id, thread_key, is_sidechain, seq, role, kind,
+                                     is_error, ts, text)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1000, ?9)",
+                params![
+                    format!("{conv_id}:m{i}"), conv_id, thread, *side as i64, seq, role, kind,
+                    *is_error as i64, text
+                ],
+            )
+            .unwrap();
+            // Prose postings only, which is where the indexer puts prose (ADR 5). A fixture
+            // that indexed everything would rank rows the real thing never returns.
+            if *kind == "prose" {
+                let rowid = conn.last_insert_rowid();
+                conn.execute(
+                    "INSERT INTO fts_prose(rowid, text) VALUES (?1, ?2)",
+                    params![rowid, text],
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn the_shape_is_read_in_the_same_order_the_transcript_is() {
+        use crate::blocks::{Band, Run};
+        // A conversation with a subagent in it — 4.2% of this corpus, and the only case where
+        // the two possible orders disagree. `seq` restarts at 0 per thread (ADR 4), so a strip
+        // ordered by `seq` alone would open with both threads' first turns side by side and
+        // every position after that would name a different message than `cs show` does.
+        let conn = crate::open(":memory:").unwrap();
+        seed_shaped(&conn, "c:1", &[
+            ("main", false, 0, "user", "prose", false, "the borrow checker"),
+            ("main", false, 1, "assistant", "prose", false, "here is what I found"),
+            ("main", false, 2, "assistant", "tool_call", false, "Read(schema.rs)"),
+            ("sub-a", true, 0, "user", "prose", false, "check the tests too"),
+            ("sub-a", true, 1, "assistant", "reasoning", false, "planning the check"),
+        ]);
+
+        let opts =
+            SearchOptions { limit: 5, nested: 1, shape: true, ..SearchOptions::new(NO_DECAY) };
+        let groups = search_grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
+        let shape = &groups[0].kind_runs;
+
+        // Main thread entire, then the sidechain entire.
+        assert_eq!(
+            shape,
+            &[Run(Band::User, 1), Run(Band::Agent, 1), Run(Band::Tool, 1), Run(Band::User, 1),
+              Run(Band::Reasoning, 1)]
+        );
+        assert_ne!(shape[0], Run(Band::User, 2), "by `seq` alone the two openings merge");
+
+        // And pinned against the transcript rather than only against a literal, because the
+        // requirement is that these two agree — not that either matches something written
+        // down once. If `blocks::load` reorders, this fails with it.
+        let blocks = crate::blocks::load(&conn, "c:1", &[]).unwrap();
+        assert_eq!(
+            shape,
+            &crate::blocks::runs(blocks.iter().filter(|b| b.drawn()).map(|b| b.band()))
+        );
+    }
+
+    #[test]
+    fn the_shape_counts_only_the_messages_a_reader_can_point_at() {
+        use crate::blocks::Run;
+        // Successful tool results are 34% of this corpus and are not drawn, so counting them
+        // as strip positions would put every mark after the first tool call a third of the way
+        // from where it belongs. A failed one stays, because it is a row.
+        let conn = crate::open(":memory:").unwrap();
+        seed_shaped(&conn, "c:1", &[
+            ("main", false, 0, "user", "prose", false, "the borrow checker"),
+            ("main", false, 1, "assistant", "tool_call", false, "Read(schema.rs)"),
+            ("main", false, 2, "tool", "tool_result", false, "1.2 KB"),
+            ("main", false, 3, "assistant", "tool_call", false, "Read(missing.rs)"),
+            ("main", false, 4, "tool", "tool_result", true, "error: no such file"),
+        ]);
+
+        let opts =
+            SearchOptions { limit: 5, nested: 1, shape: true, ..SearchOptions::new(NO_DECAY) };
+        let groups = search_grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
+        let group = &groups[0];
+
+        let drawn = crate::blocks::load(&conn, "c:1", &[])
+            .unwrap()
+            .iter()
+            .filter(|b| b.drawn())
+            .count();
+        assert_eq!(group.kind_runs.iter().map(|Run(_, n)| n).sum::<usize>(), drawn);
+        assert_eq!(drawn, 4, "one of the five results is a failure and stays");
+        assert!(
+            drawn < group.msg_count as usize,
+            "`msg_count` counts what the strip deliberately does not — a client that used it \
+             as the denominator would draw the shape short"
+        );
+    }
+
+    #[test]
+    fn a_search_that_did_not_ask_for_the_shape_does_not_pay_for_it() {
+        // The one field that is off by default, and the reason is a measurement: filling it
+        // reads every head-path message of every row returned, which is 4–30 ms at the 20–50
+        // rows a terminal holds and 205 ms at 354 rows for a broad prefix. The TUI runs this
+        // on every keystroke and draws `match_density` rather than a band strip.
+        //
+        // Pinned because the failure is silent in both directions — a default-on flag costs
+        // the typeahead nothing visible, and an empty `kind_runs` reads exactly like a
+        // conversation with no messages.
+        let conn = crate::open(":memory:").unwrap();
+        seed_shaped(&conn, "c:1", &[
+            ("main", false, 0, "user", "prose", false, "the borrow checker"),
+        ]);
+        let opts = SearchOptions { limit: 5, nested: 1, ..SearchOptions::new(NO_DECAY) };
+        let quiet = search_grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
+        assert!(quiet[0].kind_runs.is_empty(), "nobody asked for it");
+
+        let asked = search_grouped(
+            &conn,
+            &Query::exact("borrow"),
+            &SearchOptions { shape: true, ..opts },
+        )
+        .unwrap();
+        assert_eq!(asked[0].kind_runs.len(), 1, "and asking is all it takes");
+    }
+
+    #[test]
+    fn a_conversation_carries_its_shape_with_no_query_to_go_with_it() {
+        // The difference between the two positional fields: `match_seqs` is a property of the
+        // query and empties when there is none, while the shape is a property of the
+        // conversation. The no-query list is exactly where a reader has nothing else to sort
+        // on, so blanking the strip there would be backwards.
+        let conn = crate::open(":memory:").unwrap();
+        seed_shaped(&conn, "c:1", &[
+            ("main", false, 0, "user", "prose", false, "what did I do yesterday"),
+            ("main", false, 1, "assistant", "tool_call", false, "Bash(git log)"),
+        ]);
+
+        let groups = recent(&conn, &Query::exact(""), NO_DECAY, 10, true).unwrap();
+        assert!(groups[0].match_seqs.is_empty(), "nothing was searched for");
+        assert_eq!(
+            serde_json::to_value(&groups[0].kind_runs).unwrap(),
+            serde_json::json!([["user", 1], ["tool", 1]])
+        );
     }
 
     #[test]

@@ -169,6 +169,11 @@ pub fn search(
         field: if tools { cs_core::Field::Tools } else { cs_core::Field::Prose },
         include_off_path,
         nested,
+        // The shape rides on the JSON and nothing else, because nothing else draws it: the
+        // terminal listing prints a title, a date and a snippet. It is not free — see
+        // `SearchOptions::shape` for what it costs — so the surface that cannot use it does
+        // not pay for it.
+        shape: json,
         ..cs_core::SearchOptions::new(cs_core::now_ms())
     };
 

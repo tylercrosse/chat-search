@@ -248,6 +248,42 @@ enum Bench {
         }
     }
 
+    // MARK: - Snapshot
+
+    /// Draw the window to a PNG from inside the process.
+    ///
+    /// Not a nicety: `screencapture` needs a screen-recording grant that a background shell does
+    /// not have, and without one there is no way to check that a measured "frame" contained
+    /// anything. `cacheDisplay` asks the view to draw into a bitmap, so it proves the rows
+    /// rendered rather than that a timer fired.
+    ///
+    /// It draws the list faithfully and the chrome unreliably — the text field and footer come out
+    /// blank, because they are not drawn by the same path. Good enough for the thing it is for.
+    @MainActor
+    static func snapshot(model: SearchModel, window: NSWindow, query: String, to path: String) async {
+        model.query = query
+        try? await Task.sleep(for: .seconds(2))
+        guard let view = window.contentView,
+              let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+        else {
+            print("could not make a bitmap for the window")
+            return
+        }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else {
+            print("could not encode the bitmap")
+            return
+        }
+        try? png.write(to: URL(fileURLWithPath: path))
+        print("\(model.conversations.count) rows for \"\(query)\" → \(path) (\(png.count) bytes)")
+        for conv in model.conversations.prefix(3) {
+            print("  \(conv.source) · \(conv.endedDate ?? "no date") · \(conv.title ?? "«null»")")
+            if let hit = conv.hits.first {
+                print("    \(hit.kind)/\(hit.role) \(hit.snippetSpans.count) marks: \(hit.snippet.prefix(90))")
+            }
+        }
+    }
+
     // MARK: - List size
 
     /// Question 2. Three containers, the same rows, the same window: how much does SwiftUI do for

@@ -30,7 +30,12 @@ swift run -c release cs-spike states      # what a client can tell apart when th
 swift run -c release cs-spike rebuild --db /tmp/scratch.db   # query an index while it is rebuilt
 swift run -c release cs-spike typing --interval 100          # keystroke → frame, windowed
 swift run -c release cs-spike list --rows 4000               # 3,059 rows through three containers
+swift run -c release cs-spike snapshot --query "borrow checker" --out /tmp/shot.png
 ```
+
+`snapshot` draws the window to a PNG from inside the process, because `screencapture` needs a
+screen-recording grant a background shell does not have — and without one there is no way to check
+that a measured frame contained anything. It renders the list faithfully and the chrome not at all.
 
 `transport` and `states` are headless. `typing` and `list` open a window as an accessory app, so
 they do not steal focus, and quit when they are done. `rebuild` runs `cs index` against the

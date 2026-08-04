@@ -20,6 +20,8 @@ struct Options {
     /// Hold a `beginActivity` assertion. Also opt-in, because whether one is needed is one of the
     /// things being measured.
     var activity = false
+    var snapshotQuery = "borrow checker"
+    var snapshotPath = "/tmp/cs-spike.png"
 }
 
 func parse(_ argv: [String]) -> Options {
@@ -38,6 +40,8 @@ func parse(_ argv: [String]) -> Options {
         case "--limit": if let v = next(), let n = Int(v) { o.limit = n }
         case "--rows": if let v = next(), let n = Int(v) { o.rows = n }
         case "--interval": if let v = next(), let n = Int(v) { o.interval = .milliseconds(n) }
+        case "--query": if let v = next() { o.snapshotQuery = v }
+        case "--out": if let v = next() { o.snapshotPath = v }
         case "--front": o.front = true
         case "--activity": o.activity = true
         case "--help", "-h":
@@ -50,6 +54,7 @@ func parse(_ argv: [String]) -> Options {
                   rebuild     headless: query a scratch index while `cs index` rewrites it
                   typing      windowed: keystroke → frame, at --interval ms per character
                   list        windowed: --rows rows through List / LazyVStack / VStack
+                  snapshot    windowed: draw --query to --out as a PNG, from inside the process
                 """)
             exit(0)
         default: if !a.hasPrefix("-") { o.command = a }
@@ -119,6 +124,13 @@ final class Host: NSObject, NSApplicationDelegate {
             Task { @MainActor in
                 print("typing — hardware keystroke to the frame that shows the answer\n")
                 await Bench.typing(model: model, recorder: recorder, interval: options.interval)
+                NSApp.terminate(nil)
+            }
+        case "snapshot":
+            Task { @MainActor in
+                await Bench.snapshot(
+                    model: model, window: window, query: options.snapshotQuery,
+                    to: options.snapshotPath)
                 NSApp.terminate(nil)
             }
         case "list":

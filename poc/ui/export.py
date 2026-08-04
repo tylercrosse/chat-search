@@ -114,8 +114,7 @@ MARKUP = re.compile(
     re.S | re.M | re.I)
 
 
-# The name is the first line; everything after it is the arguments, as JSON for most
-# harnesses and as a patch body for `apply_patch`. The preview drew only the name, so a
+# How much of a call's argument the row carries. The preview drew only the tool name, so a
 # `Bash` line said "Bash" and nothing else — the one thing you actually want to read.
 ARG_CHARS = 400
 

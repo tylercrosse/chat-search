@@ -122,6 +122,36 @@ impl Config {
     pub fn query_log(&self) -> PathBuf {
         self.archive_root.join("queries.jsonl")
     }
+
+    /// Whether this run should record what it searched for.
+    ///
+    /// The config setting, unless `CS_LOG_QUERIES` overrides it. The override exists because
+    /// benchmarks share the log with real searching, and a driven run pollutes it in a way no
+    /// later rule can undo: a query typed to measure latency looks exactly like one typed to
+    /// find something, right down to going unpicked. `CS_LOG_QUERIES=0` wraps a whole
+    /// measurement session, subprocesses included, which is what `--config` pointing at a
+    /// scratch file does not.
+    ///
+    /// A convenience rather than the mechanism, though. Forgetting it stays recoverable —
+    /// `cs_core::querylog::Event::Driven` says afterwards what should not have been recorded.
+    pub fn recording_queries(&self) -> bool {
+        recording_queries_with(self.log_queries, std::env::var("CS_LOG_QUERIES").ok().as_deref())
+    }
+}
+
+/// [`Config::recording_queries`] against an explicit environment.
+///
+/// Split out for the same reason [`expand_tilde_with`] is: the rule is worth testing, and
+/// setting a process-global variable to test it would race every other test in the binary.
+///
+/// Off wins ties. An unrecognised value reads as "somebody meant to turn this off and
+/// mistyped it", which loses a few data points; the other reading loses a benchmark into the
+/// log, and that is the failure this whole flag exists to prevent.
+fn recording_queries_with(configured: bool, env: Option<&str>) -> bool {
+    match env {
+        None => configured,
+        Some(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"),
+    }
 }
 
 /// Every location this project knows how to watch, in the order they should be archived,
@@ -197,6 +227,28 @@ fn expand_tilde_with(s: &str, home: Option<PathBuf>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_environment_can_switch_query_logging_off_for_a_driven_run() {
+        // The lever a benchmark reaches for, so its queries never become information needs.
+        for off in ["0", "false", "no", "off", "OFF", " 0 "] {
+            assert!(!recording_queries_with(true, Some(off)), "{off:?}");
+        }
+        for on in ["1", "true", "yes", "on", "ON"] {
+            assert!(recording_queries_with(false, Some(on)), "{on:?}");
+        }
+        assert!(recording_queries_with(true, None), "unset leaves the config in charge");
+        assert!(!recording_queries_with(false, None));
+    }
+
+    #[test]
+    fn a_mistyped_override_stops_logging_rather_than_starting_it() {
+        // Off wins ties deliberately. Reading `fasle` as "on" loses a whole benchmark into the
+        // log, which is the failure the flag exists to prevent; reading it as "off" loses a
+        // handful of real searches, which is recoverable by searching again.
+        assert!(!recording_queries_with(true, Some("fasle")));
+        assert!(!recording_queries_with(true, Some("")));
+    }
 
     #[test]
     fn rejects_ids_that_would_pollute_conversation_ids() {

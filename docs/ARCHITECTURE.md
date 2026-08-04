@@ -84,8 +84,9 @@ is a loop back:
   whenever stdout is not one.
 - **The query log flows back into the ranking, by hand.** `cs search`, `cs pick` and `cs tui`
   append what was searched for and what was opened; `cs needs` folds it into one entry per
-  query. Nothing reads it automatically — converting it into an eval set is `6eb.21`, and until
-  then the eval set in `evals/ranking.toml` is written by hand.
+  *need* — not per query string, which counted every keystroke of a slowly typed query as its
+  own need (ADR 22). Nothing reads it automatically — converting it into an eval set is
+  `6eb.21`, and until then the eval set in `evals/ranking.toml` is written by hand.
 - **The manifest feeds change detection and nothing else.** The dotted edge into the importer
   is the fold ADR 9 describes, and it does not exist yet — see "Built in part" under
   [What exists](#what-exists).
@@ -236,9 +237,9 @@ carries what would falsify it, so a doubtful reader settles it in about a second
 | `library.db`, authored events | nothing authored is written yet and the index holds none of it. The ADR 3 invariant is cheap to hold now and unpleasant to retrofit. `queries.jsonl` is the first authored file and sits deliberately outside the index | `grep -rn library.db crates/` — doc comments only, no code |
 | Embeddings / vectors | ADR 6 reserves `sqlite-vec` for the same file when embeddings arrive; ADR 1 warns they must be cached outside the rebuild path, or the disposable index stops being disposable | `grep -rn sqlite-vec crates/ Cargo.toml` — nothing |
 | OpenCode capture, and any OpenCode importer | bundle layout (ADR 18) is unimplemented, so the configured `opencode` source is skipped by `cs scan` and `cs archive` alike, and `import_source` has no arm for it | `grep -rn "Layout::Bundle" crates/` — skips and a reserved id, no capture path |
-| Incremental indexing | ADR 10 — full rebuild is ~10.6s, and patching an FTS index through deletes is where the bugs live | `cs index` opens with `open_fresh`; nothing else in `cs` writes to `index.db` |
+| Incremental indexing | ADR 10 — full rebuild is ~10.6s, and patching an FTS index through deletes is where the bugs live | `cs index` builds through `cs_core::IndexBuild` and swaps the finished file in; nothing else in `cs` opens `index.db` for writing |
 | A daemon | rejected on measurement 2026-07-29 (ADR 14): ~3 ms of spawn-and-open, against a socket protocol, a lifecycle, and a stale-cache failure mode over a database designed to be deleted | — |
-| Raycast, VS Code, menu-bar surfaces | ADR 12's JSON contract exists precisely so these stay a weekend rather than a refactor | `cs --help` lists the surfaces that exist |
+| Raycast, VS Code, menu-bar surfaces | ADR 12's JSON contract exists precisely so these stay a weekend rather than a refactor, and [JSON-CONTRACT.md](./JSON-CONTRACT.md) is what one decodes | `cs --help` lists the surfaces that exist |
 | Redaction | ADR 15, still `open`, and it gates anything leaving this machine | — |
 
 ### Built in part — the state neither a table nor the code admits to

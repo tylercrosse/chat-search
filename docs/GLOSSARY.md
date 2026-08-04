@@ -63,6 +63,17 @@ This shared session id is why per-file message ordinals collide (7,637 messages,
 
 **Index** **[`index.db`]** Disposable. A pure function of _(raw archive, importer version)_. Deleting and rebuilding it must always be safe; a full rebuild is ~7s for 1.8 GB. Anything that cannot survive `rm index.db` is in the wrong file.
 
+**Index state** **[wire: `index_state`, `error.code`]** What a reader found at the index path — the only thing a client is meant to branch on, since the sentence beside it is prose and free to change. Four values, and each says what to do next:
+
+| state | how it arrives | what it means |
+| --- | --- | --- |
+| `no_index` | `error.code`, exit 1 | nothing at the path. Run `cs index` |
+| `building` | `error.code`, exit 1 | nothing to answer with **yet**, and a build is running. Wait, do not start another |
+| `rebuilding` | `index_state`, exit 0 | a complete answer from the previous build, with a newer index on the way |
+| `ready` | `index_state`, exit 0 | a complete answer, nothing running |
+
+`rebuilding` never means partial. A rebuild is assembled in a sibling file (`index.db.building`) and renamed over the target, so a reader sees the whole old index or the whole new one and never a half-written one — which is what the states are worth naming for. The build holds a lock on `index.db.building.lock` for its lifetime, so a rebuild killed halfway leaves litter that reads as `ready` rather than as a build that never ends; the next `cs index` clears it (ADR 14, `chat-search-me9.28`).
+
 **Library** **[`library.db`]** Precious, tiny, backed up. Holds only **authored** data as an append-only event log. Merging two machines is concatenate-and-fold with last-write-wins per key.
 
 **Derived** vs **Authored** The central invariant: every mutable thing is one or the other, never both and never neither. Derived state is recomputed on rebuild and never merged. Authored state is appended and never overwritten.
@@ -126,6 +137,10 @@ Repeated tokens of one facet **union** — `agent:codex agent:claude-code` selec
 **Date arithmetic** Civil, not fixed-width. `d`/`w`/`mo`/`y` are calendar steps and `m`/`h` are durations, because across a DST boundary a day really is 23 or 25 hours — a fixed 86,400,000 ms step makes yesterday's last hour vanish from a filter claiming to include it, twice a year. A wall clock that never happened resolves forward into its own day rather than failing.
 
 **Mode** Whether a query can be run — `Empty` (nothing searchable typed), `TooShort` (a lone term below the prefix floor), or `Searchable`. `cs-core` owns the fact, a client owns what to show for it. The distinction is a measured ranking cost rather than a matter of taste: `h*` is 2510 ms against `hov*` at 16 ms, because BM25 scores every matching row before it can sort.
+
+**Need** **[`queries.jsonl`]** One thing somebody went looking for, which is what the query log folds down to — deliberately not one distinct query string. `l`, `la`, `lau` … `launchd` typed in under two seconds is one need; the same query run three times to take a median is one need searched once; a pick made with nothing typed is no need at all, because nothing was asked. The unit `chat-search-6eb.21` harvests an eval set in, and the reason its "20+ distinct queries" trigger cannot be read off a count of distinct strings (ADR 22).
+
+**Driven span** **[`queries.jsonl`]** An authored assertion that a stretch of the query log was machine-driven — a benchmark, a smoke test — rather than typed by somebody who wanted an answer. Authored rather than detected because nothing in a search event separates the two: a query typed to measure latency is ordinary text and goes unpicked, which is also exactly what an abandoned search looks like. Appended, never rewritten, and deletable if it was wrong.
 
 ---
 

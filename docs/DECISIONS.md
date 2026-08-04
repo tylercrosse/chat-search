@@ -178,6 +178,8 @@ The indexes were `content=''` until 2026-08-01. External content stores no more 
 
 **Why.** This is the un-boxing move — it lets the daemon question stay open and makes a core rewrite contained. Measured: the query is 1–3 ms in every runtime and the entire spread between runtimes is process startup, so the seam choice matters more than the language.
 
+**Where it is written down.** [JSON-CONTRACT.md](./JSON-CONTRACT.md), field by field, for `cs search --json`. It was not, for the first week of the seam being real, and "one JSON contract" turned out not to mean the same thing to the code and to a client: the first surface to decode it without reading the Rust structs typed a nullable field as non-optional and threw at row 54 of a 60-row page (chat-search-me9.27). A contract nobody wrote down is a contract each client reconstructs by observation, and observation only ever reaches the states that happen to be common.
+
 **Revisit when.** A transport other than argv is actually needed. Decision 14 settled daemon vs subprocess in favour of subprocess (2026-07-29), so argv is the only transport in play; `--stdio` is the next one up, and a socket only after that.
 
 ---
@@ -257,6 +259,8 @@ _C. Ship `cs-core` as a C-ABI shared library for non-Rust clients_
 **The cheap middle step, if it comes to it.** Before a daemon there is `cs serve --stdio`: one long-lived process per client, requests on stdin, responses on stdout, the same JSON contract. It removes the spawn cost while leaving socket discovery, daemon lifecycle and cross-client cache coherence out of it, because the client owns the process's lifetime and its death. Try that before anything resident.
 
 **Consequence — the JSON contract is now load-bearing for real.** Argv in, JSON on stdout, and a nonzero exit is part of the interface. Clients must treat "no index yet" and "index being rebuilt" as first-class states, not as transport errors, because they will hit both.
+
+_2026-08-04, `chat-search-me9.28`:_ the contract now carries the distinction, because a client could not draw it — a rebuild in place made queries return silently partial result sets for ~5s, with exit 0 and nothing in the body saying so. A rebuild is assembled in a sibling file and renamed over the target, so a reader sees the whole old index or the whole new one, and the four states travel as names a client can branch on: `no_index` and `building` as an `error.code` beside the nonzero exit, `ready` and `rebuilding` as `index_state` on a body that is complete either way. See `cs_core::build`.
 
 **Revisit when.** Spawn-plus-open p95 passes ~20 ms — far enough above today's ~3 ms that the per-keystroke path stops leaving room for the client to render, most plausibly reached as the index grows well past 293 MB or as `cs` accumulates startup work. Or when a client needs state that only a resident process can hold: a warm embedding model, a live tail of the running session, or an incremental writer that must not be re-established per keystroke. Reaching either means starting with `--stdio`, not with a socket.
 
@@ -683,3 +687,67 @@ an empty one. Claude.ai degrades to A when B breaks, which is a worse day, not a
 **Revisit when.** An official conversation-history API appears for any of the three surfaces —
 that collapses B and D into a supported route and this ADR should be rewritten, not amended. Or
 B breaks twice in one quarter, at which point C stops being theoretical.
+
+---
+
+## 22. A search the log cannot vouch for is excluded by hand, not by a rule
+
+`accepted` · 2026-08-04
+
+**Context.** `queries.jsonl` is the only record of real information needs this project has, and
+`chat-search-6eb.21` plans to harvest an eval set straight out of it: each folded query becomes
+a `[[query]]`, each picked conversation a grade-3. Measured on 2026-08-04, the log held 2,720
+events and 136 distinct query strings — and almost none of that was a need.
+
+Three ways the log lies about itself, all of which would have survived into the generated set:
+
+| what is in the log | what it looks like to a harvester | what it actually is |
+| --- | --- | --- |
+| `l`, `la`, `lau` … `launchd`, ~100 ms apart | seven distinct queries | one query, typed |
+| `borrow checker` ×96, no pick | a query the ranking failed | a latency benchmark |
+| a pick with `q = ""` | a grade-3 | the recent list, browsed |
+
+The first and third are decidable from the events. The second is not, and that is the whole
+difficulty: a query typed to measure `search_grouped` is ordinary text and goes unpicked, which
+is exactly what an abandoned search — the signal 6eb.21 most wants to keep — also looks like.
+
+**Decision.** Two rules over the events, and one thing authored.
+
+_Over the events._ A search collapses into whatever followed it when the follower repeated or
+extended its text under the same filter within `UNREAD_MS`, because nobody read the first one.
+A pick never collapses, so the judgement it carries cannot be folded away. A pick with no query
+is set aside as browsing rather than becoming a need.
+
+_Authored._ `Event::Driven { from, until, why }` declares a half-open span of the log as
+machine-driven. `cs needs --driven FROM..UNTIL --why TEXT` appends one. It is a line in the log
+rather than a constant in the harvester, which is the same shape ADR 3 gives every other piece
+of authored data: appended, never rewritten, deletable if it was wrong, and it travels with the
+log when the log is synced.
+
+**Why not detect it instead.** Every automatic rule proposed here separated benchmarks from real
+searches by proxy — volume, repetition rate, absence of a pick — and every one of them also
+catches a real search somebody gave up on. There is no evidence in a search event that says
+which it was, because the only difference is the intent of the person typing. Asking them once
+costs a line; guessing costs the abandonment signal, silently, forever.
+
+**`UNREAD_MS` = 2 s, measured.** Of the 2,072 prefix-adjacent pairs in the log on 2026-08-04,
+the slowest inside a typed ladder was 1,328 ms apart and the next one up was 10.9 s. The
+boundary therefore sits in the middle of a gap eight times wider than the constant, and moving
+it anywhere inside that range changes nothing. What it *means* is that two seconds is not long
+enough to read a result list and decide it was wrong.
+
+**`CS_LOG_QUERIES=0` is a convenience, not the mechanism.** It keeps a driven run out of the log
+in the first place, and wraps a whole measurement session including subprocesses — which
+`--config` pointing at a scratch file does not. It is not the answer on its own because it is
+retroactively useless, and because forgetting it has to stay recoverable. That is what the span
+is for.
+
+**What it measured, 2026-08-04.** 2,720 events → 93 needs on the fold alone; six declared spans
+covering 2,641 events took that to **35 needs, 19 judgements across 17 answered queries**. No
+judgement was excluded by any span. The raw log had read as 37 picks across 124 distinct
+queries, which is most of the way to 6eb.21's "50-100 picks across 20+ distinct queries"
+trigger; the honest figure is about a third of the way, and the trigger has not been met.
+
+**Revisit when.** A client appears that logs genuinely per keystroke — the TUI does not, it
+writes one event per session — since then the ladders arrive inside one process and a session
+id would be cheaper and more exact than a timing rule.

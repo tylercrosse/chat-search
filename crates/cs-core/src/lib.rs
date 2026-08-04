@@ -16,6 +16,12 @@
 //! `answer` is `blocks` for the other half of the interface: the reply to a search, owned here
 //! so that clients adapt to it rather than each assembling one (ADR 23). `search` ranks; the
 //! envelope, its totals and its routing are `answer`'s.
+//!
+//! `sittings` is the one thing here that is not a fact about the archive: Google Takeout
+//! exports an activity log with no conversation key at all, so what the index holds is one
+//! conversation per turn, and reading them back as the chats they were is a heuristic. It is
+//! computed at read time and joined into `search` precisely so that being wrong about it
+//! costs a rebuild of nothing.
 
 pub mod answer;
 pub mod blocks;
@@ -29,6 +35,7 @@ pub mod query;
 pub mod querylog;
 pub mod schema;
 pub mod search;
+pub mod sittings;
 pub mod time;
 
 // `Group` at the root is the answer's, now that no client reads the ranked row directly. The two
@@ -47,7 +54,7 @@ pub use model::{Conversation, Kind, Message, Role, Titles};
 pub use query::{Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection, Window};
 pub use schema::IMPORTER_VERSION;
 pub use search::{
-    explain, match_density, snippet_marked, Explain, Field, Hit, SearchOptions, DECAY,
+    explain, match_density, snippet_marked, Explain, Field, Hit, SearchOptions, Sitting, DECAY,
     REPEAT_WEIGHT,
 };
 pub use time::{

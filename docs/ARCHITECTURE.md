@@ -258,13 +258,16 @@ missing edge rather than a missing file.
   "nothing has vanished yet" — and that is the failure mode. When a source file does disappear,
   the archive keeps the content and the search says nothing, so reopening fails at the one
   moment the flag existed to warn about.
-- **ChatGPT is a configured source, not a detected one.** Every id in the archiver's candidate
+- **Exports are configured sources, not detected ones.** Every id in the archiver's candidate
   list is a directory some running agent writes to, and detection is `path.is_dir()` over that
   list. An export is not written by anything — it is mailed, downloaded and unpacked wherever
   you happen to put it — so `chatgpt-export` cannot be detected and is not in the list
   (`grep -n chatgpt crates/cs-archive/src/config.rs` returns nothing). The importer, the source
   id and its permanence (ADR 16) are all real; the `[[sources]]` block is hand-written, which
   means `cs init` on a second machine writes a config silently missing 69% of this corpus.
+  `google-takeout` (chat-search-o1i) is the second source with this shape and inherits the same
+  gap — the recommended `[[sources]]` block is in the module doc of
+  `crates/cs-import/src/google_takeout.rs` so it is at least recoverable from the code.
 - **Compressed Codex rollouts are captured and cannot be read.** The `codex` source globs
   `**/rollout-*.jsonl.zst` as well as `.jsonl`, because Codex zstd-compresses rollouts older
   than about a week and everything older would otherwise stop being captured. Capture stores

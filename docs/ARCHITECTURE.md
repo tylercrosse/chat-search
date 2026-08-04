@@ -84,8 +84,9 @@ is a loop back:
   whenever stdout is not one.
 - **The query log flows back into the ranking, by hand.** `cs search`, `cs pick` and `cs tui`
   append what was searched for and what was opened; `cs needs` folds it into one entry per
-  query. Nothing reads it automatically — converting it into an eval set is `6eb.21`, and until
-  then the eval set in `evals/ranking.toml` is written by hand.
+  *need* — not per query string, which counted every keystroke of a slowly typed query as its
+  own need (ADR 22). Nothing reads it automatically — converting it into an eval set is
+  `6eb.21`, and until then the eval set in `evals/ranking.toml` is written by hand.
 - **The manifest feeds change detection and nothing else.** The dotted edge into the importer
   is the fold ADR 9 describes, and it does not exist yet — see "Built in part" under
   [What exists](#what-exists).

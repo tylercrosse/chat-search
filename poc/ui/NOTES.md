@@ -3,7 +3,10 @@
 Work in progress, kept because the *decisions and measurements* are the durable asset and
 the code is not. The prototype is throwaway; this file should survive it.
 
-Companion to [`README.md`](./README.md), which says what the thing currently does. This
+Companion to [`README.md`](./README.md), which says what the thing currently does, and
+to [`DESIGN-BRIEF.md`](./DESIGN-BRIEF.md), which is the short pasteable version for a
+design tool — what each mark must encode, and which constraints are settled by
+measurement rather than taste. This
 says why, what was measured to get there, and what was got wrong on the way.
 
 Status: **still iterating.** Nothing here is a product decision. `docs/DECISIONS.md` and
@@ -138,6 +141,20 @@ checking.**
 
 - **Three lines with a query, two without.** Line 1 metadata + ribbon, line 2 title full
   width, line 3 the best match. The third is spent only when there is something to show.
+- **The row is two clusters with a gutter.** Agent, model, size, change and shape on the
+  left; directory, forks and age on the right. `cwd` left the flexible middle to join the
+  date, because both answer *which of my worlds was this* rather than *what is it*.
+- **The agent badge is icon-only in the row.** Forced, not chosen: the list column is
+  706px (1560 − 252 rail − 602 drawer) and the row now carries nine cells, so the word
+  cost 66px — exactly what `cwd` needed to stop collapsing to zero width. §7's three
+  redundant channels become two here; the name is on `title` and in the drawer.
+- **Total edit lines on the row.** Summed from per-call diffs, blank on 194 of 354 —
+  most agent work runs and reads without changing a line — so the column has to vanish
+  when empty rather than sit there.
+- **Topics are the third line, as plain text, not chips.** A `.row` is a `<button>` and
+  a nested button is invalid; 354 rows of pills is also a lot of furniture. They stay
+  clickable in the rail and the drawer. Cost: the row went 53px → 66px, a 25% taller
+  list.
 - **Line 3 is the *true* best match, framed with provenance** (`⚙ Bash(cargo test) › "…"`).
   Not "prefer prose": if the ribbon's strongest tick is 80% along and line 3 shows prose
   from 12% along, the row contradicts itself. The frame is what stops a tool hit reading
@@ -192,6 +209,20 @@ checking.**
 - **The asked-you mark is the union of two signals.** `request_user_input` is exact and
   rare (237 calls in 92 conversations); assistant prose ending in `?` is broad and noisy
   (1,402 in 578). Neither alone is the fact.
+- **A tool line shows its argument, not its name.** `Bash` told you nothing; the
+  `command` is the line. 87% of tool calls carry one, and the harnesses name the same
+  argument differently (`command` vs `cmd`), so extraction is a lookup. Collapsed
+  truncates at 84 chars, expanded gives the whole thing — which is what makes expanding
+  a tool line worth doing instead of a no-op.
+- **Edits carry their own diff.** An Edit is a replacement, so the line counts of
+  `old_string` and `new_string` are the same ± a real diff would show, without needing
+  the file; `apply_patch` counts its patch body directly. 2,278 calls in the sample.
+- **Nothing disappears under a click.** The kind-level default may omit a successful
+  tool_result — the call implies it — but a message the reader has touched always
+  renders. Clicking one used to delete it with no way back.
+- **Both scrollers survive a re-render.** `render()` rebuilds `#main` wholesale, so
+  clicking a line 4,000px into a conversation threw you back to its first message. The
+  preview position is restored only while the same conversation is open.
 - **A compaction boundary is marked, and is not a pause.** A pause says you went away; a
   compaction says the earlier half stopped being verbatim, so the agent past it knows
   different things. Distinct mark on the ribbon and the minimap (doubled, full height,
@@ -292,6 +323,22 @@ checking.**
 - **A view that facets do not narrow does not draw the facets.** Sittings drew the rail
   and ignored it — including topic counts that moved when you filtered a list it was not
   showing. Library hides them instead.
+- **The group control leads the search bar.** It sat to the right of the query, which put
+  it between the query and the count and read as one more piece of status. On the left it
+  reads in the order it applies: group by project, *then* narrow with the query.
+- **Every axis opens folded, including one you have opened before.** The first group used
+  to open itself, on the theory that nothing open reads as an empty screen. It does not:
+  thirteen headers carrying count, span, sources and a sparkline are a project index, and
+  one open group buried the other twelve under twenty rows. Switching axes clears the
+  accordion rather than restoring it, because groups are *ranked* — the set you left open
+  is rarely the set at the top when you come back. Clicking the axis you are already on
+  is inert, so the reset is a consequence of switching and never a surprise.
+  - The cost, stated: `source` has four groups, so collapsed it is four rows and a lot of
+    empty column. That is honest about the axis rather than a fault of the fold.
+  - This puts weight on an affordance that is drawn but not wired: the footer offers
+    <kbd>→</kbd> to expand and no key is bound. Expanding is now the required first
+    action on every grouped view, so the keyboard model stops being optional polish
+    (§5).
 
 ### Views
 
@@ -327,6 +374,16 @@ checking.**
   agentic project, so it distinguishes none of them.
 - **The overflow hands off rather than nesting a scroller.** 20 rows, then `open in
   search →` sets `dir:` — one list implementation, and the handoff is a real query.
+- **The gallery renders the app's functions, never a copy of its markup.** `app.js`
+  exports its renderers on `window.CS_UI` and guards its own boot on the app shell being
+  present; `gallery.js` drives them against synthetic fixtures. A second copy of the
+  markup would drift, and a drifted gallery is worse than none — you would be making
+  polish decisions against something that is not what ships. Its own CSS may only lay
+  out and label; every component on the page is styled by `styles.css`.
+- **The gallery's colour section computes its contrast live** from the stylesheet, so
+  the numbers cannot go stale the way a written-down ratio can.
+- **Fixtures are synthetic and built in `gallery.js`**, so the page is committable —
+  none of the archive's text is in it, unlike `real-data.js`.
 - **Sittings share the drawer too.** A sitting answers "what else was I doing that
   afternoon", which you ask *because* you want to read one of the answers.
 - **Timeline is a bottom drawer on Search**, filtering the same set. Hits above the
@@ -410,6 +467,22 @@ published material.
 20. **Dimmed hidden kinds to 0.22 opacity.** On the new ramp that took a dimmed tool
     band to **1.15:1** against the track — invisible, which is "dropped from the axis"
     by another name, and #6 above is the entry where I already learned that. 0.55 now.
+24. **"Why do some lines flash?"** — they did not. `render()` rebuilt `#main` from
+    scratch on every interaction, so both scrollers reset to the top; clicking a line
+    deep in a conversation repainted the pane at scroll 0. I had looked for an animation
+    and found only the annotation overlay's, which is the wrong place to look when the
+    complaint is about a repaint.
+26. **Sized a grid against a width I never measured.** I laid out nine columns assuming
+    ~958px and the list column is **706** — I had forgotten the 252px rail. The fixed
+    tracks summed past the container, so `cwd` resolved to 0px and vanished while still
+    holding its text. Then two more of the same class: `RIBBON_W` and the `.ribbon`
+    width were two numbers for one measurement and had drifted, so the track spilled
+    into the gutter; and `DIR_CHARS` was budgeting 20 characters for a 17-character
+    cell, so CSS tail-elided the path and threw away the leaf — the exact failure
+    `elidePath()` was written to prevent, reintroduced through a mismatched constant.
+25. **Made a click destructive.** A successful `tool_result` renders only when expanded,
+    so clicking one set it to collapsed and `block()` returned null — the line vanished,
+    and could not be clicked back because it was gone. 2,042 → 2,041, verified.
 23. **Reported a measurement that could not have said anything.** I wrote "model never
     changes inside a conversation — 0 of 3,057". `model` is a single column on
     `conversation` and there is no per-message model in the index, so the query joined
@@ -452,6 +525,16 @@ published material.
   8 of two, nothing longer. A failure is a one-off, so the single red tick is right.
 - **Byte-weighting the ribbon** — see §2. It answers a composition question the ribbon is
   not asking, and would break its correspondence with the ticks and the fold.
+- **Syncing to claude.ai/design** — the `DesignSync` tool and `/design-sync` skill exist
+  and work, but need a JS package: `pkg` + `globalName`, a built `dist/`, a `.d.ts` tree,
+  and a bundle exposing *functional* components at `window.<globalName>.*` so the design
+  agent can build new UI from them. This repo has no `package.json` anywhere, no
+  lockfile, no Storybook — 47 `.rs`, and a prototype whose own header says "plain script,
+  no modules, no build". The skill's off-script path keeps the same gates, so static HTML
+  would fail validation and render nothing for the agent. Making it fit means extracting
+  a maintained React package, which contradicts the throwaway premise and targets the
+  wrong runtime — the client is native or VS Code. `gallery.html` delivers the same
+  value locally.
 - **Semantic topic segmentation** — deferred; needs `6eb.41` then `6eb.40`. The free
   structural boundaries (steers, >4h pauses, resumes) ship first and are the floor a model
   has to beat.
@@ -476,7 +559,9 @@ published material.
   with the reason on the band. Still unanswered in the rail, where the topic chips are
   the only thing shown and the residue is invisible.
 - **Two views are gone; their keyboard model went with them.** `⌘\` panes, `→` expand and
-  arrow navigation are drawn in the footer and wired nowhere.
+  arrow navigation are drawn in the footer and wired nowhere. `→` is the urgent one now
+  that every grouped view opens folded: expanding went from an optional extra to the
+  first thing you do, and the only way to do it is with the mouse.
 - **Grouping and ranking interact and nobody has decided how.** With `group: none` the
   list is recency-ordered; grouped, the groups are ordered by recency and the rows inside
   by recency. A real query would want BM25 in both places, and "the best group" is not
@@ -499,14 +584,23 @@ published material.
 
 ## 6. What to build next, and why
 
-**`cs show` + the core move.** It is largely the same work as `me9.1.1` (P1, in progress),
-which is the fold model, tool collapsing and outline mode — exactly what would move to
-`cs-core`. It unblocks the preview pane here, `me9.8`'s reader, and the VS Code client
-(`me9.9`). Three surfaces, one method, and it improves the TUI you use daily.
+~~**`cs show` + the core move.**~~ Done — `me9.17`, 2026-08-04. `Block`, `Fold`, `Density`,
+`drawn()`, the SELECT and the marking pass are now `cs_core::blocks`; `cs show --json` emits a
+conversation with `drawn` and `mark_kind` already answered, so no client re-derives either.
+That deletes a real duplication: this prototype's `app.js` carried its own copy of §8's
+"a successful `tool_result` is omitted", citing the same spec as the Rust one.
 
-Cheaper first step, no Rust: `Group` already carries `match_seqs`, `user_turns`,
-`msg_count`, `prose_count`, `cwd`, `ended_date`, `title` and `destinations` — so the row
-is feedable from `cs search --json` today. Only the preview pane actually needs `cs show`.
+What is still needed to feed this prototype from the real index, in order:
+
+1. **Kind runs in search results.** The ribbon draws user/agent/reason/tool bands positionally,
+   and `cs search --json` carries `match_seqs` but no per-message kinds. `cs show` is the wrong
+   tool at 354 rows — this is a smaller, search-side addition (`me9.19`).
+2. **The collapsed forms.** `tool_summary` and `recognition_line` are still in `cs-tui`, and
+   `export.py`'s `call_detail()` is a second implementation of the first one. Moving them is
+   what makes outline mode reproducible by any client (`me9.20`).
+3. The rest of the row is feedable from `cs search --json` today: `Group` already carries
+   `match_seqs`, `user_turns`, `msg_count`, `prose_count`, `cwd`, `ended_date`, `title` and
+   `destinations`. Still missing there: model, topics and diff counts.
 
 ---
 

@@ -9,6 +9,7 @@ scrolls except the panes that would scroll in the real thing.
 
 ```bash
 open poc/ui/index.html          # no server, no build, no dependencies
+open poc/ui/gallery.html        # every component, every state, both themes
 ```
 
 Sits beside `poc/rust` and `poc/ts` for the same reason they do: an instrument for answering a
@@ -78,6 +79,8 @@ face and it stops telling the truth about density, which is the only reason it e
 | file | holds |
 | --- | --- |
 | `index.html` | the window shell |
+| `DESIGN-BRIEF.md` | what the mockup is and what its marks must encode — for handing to a design tool with a screenshot |
+| `gallery.html` · `gallery.js` · `gallery.css` | the component gallery — renders the app's own functions, so it cannot drift from what ships |
 | `styles.css` | tokens, the three views, the annotation layer |
 | `data.js` | mock conversations, collections, sittings, annotation copy |
 | `app.js` | rendering, the collection rule evaluator, interaction |

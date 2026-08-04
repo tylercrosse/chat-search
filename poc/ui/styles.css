@@ -305,7 +305,8 @@ button { font-family: inherit; }
 .tok .x:hover { opacity: 1; }
 
 /* Grouping sits beside the query it modifies, not with the views: it is a property of
-   this list, not a place to go. */
+   this list, not a place to go. It leads the bar so the line reads in the order it
+   applies — group by project, then narrow with the query. */
 .group { display: inline-flex; align-items: center; gap: 2px; flex: none; }
 .group[hidden] { display: none; }
 .group-l {
@@ -537,15 +538,63 @@ button { font-family: inherit; }
 .row[aria-selected="true"] { background: var(--sel-bg); }
 .row[aria-selected="true"] .row-title { color: var(--sel); }
 
-/* A grid, not a flex row: dir / msgs / age must sit at the same x on every row so
-   the eye can run down a column. */
+/* A grid, not a flex row: every cell must sit at the same x on every row so the eye can
+   run down a column.
+
+   Two clusters with a gutter between them — agent, model, size, shape on the left;
+   directory, forks, age on the right. The `sp` column is the gutter, and it is the only
+   flexible one, so everything else holds its position as the pane resizes. */
 .row-meta {
   display: grid;
-  grid-template-columns: 92px 236px minmax(0, 1fr) 58px 30px 20px;
+  grid-template-columns:
+    22px             /* agent   */
+    96px             /* model   */
+    52px             /* msgs    */
+    58px             /* +/-     */
+    200px            /* ribbon  */
+    26px             /* gutter  */
+    minmax(0, 1fr)   /* cwd     */
+    18px             /* forks   */
+    30px;            /* age     */
   align-items: center;
-  gap: 10px;
+  gap: 9px;
   margin-bottom: 3px;
 }
+
+.model {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Empty on more rows than not, so it has to disappear rather than sit there as a gap. */
+.edits {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.edits i { font-style: normal; }
+.edits .m { color: var(--err); opacity: 0.85; }
+.edits .p { color: var(--ok); opacity: 0.85; margin-left: 4px; }
+
+/* The third line: what is true of the conversation, as opposed to what is true of this
+   query. Deliberately the quietest thing in the row. */
+.row-topics {
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row[aria-selected="true"] .row-topics { color: var(--ink-2); }
 
 .ico {
   width: 12px; height: 12px; flex: none; display: inline-block;
@@ -577,6 +626,13 @@ button { font-family: inherit; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Icon only in the row. The list column is 706px and the row now carries nine cells;
+   the word cost 66px, which is exactly what `cwd` needed to stop collapsing to zero.
+   The mark is still a distinct shape per source and the name is one hover or one click
+   into the drawer away, so §7's three channels become two here rather than one. */
+.row-meta > .badge { gap: 0; }
+.row-meta > .badge > span { display: none; }
 
 .dir, .msgs, .age {
   font-family: var(--mono);
@@ -628,12 +684,14 @@ button { font-family: inherit; }
 /* One graphic, two channels. Body is shape and is query-independent; ticks are
    matches and vanish when there is no query. Notches are >4h pauses or resumes. */
 
-.ribbon { position: relative; width: 236px; height: 18px; }
+/* Width comes from the grid track, not from a second number that has to be kept in
+   sync with it — they had already drifted, and the track spilled into the gutter. */
+.ribbon { position: relative; width: 100%; height: 18px; }
 
 .rb-track {
   position: absolute;
   /* Width is set inline from the message count — see app.js::ribbonWidth. The cell
-     keeps its full 236px so the columns either side stay on the grid; only the drawn
+     keeps its full width so the columns either side stay on the grid; only the drawn
      track varies, which is what makes length legible down the column. */
   left: 0;
   top: 6px;
@@ -822,6 +880,15 @@ button { font-family: inherit; }
 .blk.err    .gut { background: var(--err); }
 
 .blk .sig { font-family: var(--mono); font-size: 10px; color: var(--ink-3); padding-top: 1px; }
+
+/* The tool name is the label; the argument is the content, so the name is the quieter of
+   the two. Reverses what the pane did before, where the name was all there was. */
+.blk .cmd { font-weight: 600; color: var(--ink-2); font-style: normal; }
+.blk .kb { color: var(--ink-3); opacity: 0.7; }
+.dif { display: inline-flex; gap: 4px; margin-left: 2px; }
+.dif i { font-style: normal; font-weight: 600; }
+.dif .m { color: var(--err); }
+.dif .p { color: var(--ok); }
 .blk .txt { min-width: 0; padding-bottom: 7px; line-height: 1.5; }
 
 /* Equal contrast. Neither role is demoted. */

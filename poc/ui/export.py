@@ -108,6 +108,62 @@ MARKUP = re.compile(
     re.S | re.M | re.I)
 
 
+# The name is the first line; everything after it is the arguments, as JSON for most
+# harnesses and as a patch body for `apply_patch`. The preview drew only the name, so a
+# `Bash` line said "Bash" and nothing else — the one thing you actually want to read.
+#
+# Argument names differ per harness for the same idea (`command` vs `cmd`), so this is a
+# lookup rather than a single key.
+ARG_KEYS = ("command", "cmd", "file_path", "path", "pattern", "query", "url", "uri",
+            "prompt", "description", "notebook_path", "plan")
+ARG_CHARS = 400
+
+
+def call_detail(text):
+    """(one-line argument summary, [removed, added]) for a tool_call body."""
+    body = text.split("\n", 1)[1].strip() if "\n" in text else ""
+    if not body:
+        return None, None
+
+    # apply_patch carries a unified patch rather than JSON, so the counts are exact and
+    # the summary is the file it targets.
+    if body.startswith("*** Begin Patch") or body.startswith("***"):
+        minus = sum(1 for l in body.splitlines() if l.startswith("-") and not l.startswith("---"))
+        plus = sum(1 for l in body.splitlines() if l.startswith("+") and not l.startswith("+++"))
+        target = ""
+        for l in body.splitlines():
+            if l.startswith("*** ") and " File: " in l:
+                target = l.split(" File: ", 1)[1].strip()
+                break
+        return (target or "patch")[:ARG_CHARS], [minus, plus] if (minus or plus) else None
+
+    try:
+        args = json.loads(body)
+    except Exception:
+        return " ".join(body.split())[:ARG_CHARS], None
+    if not isinstance(args, dict):
+        return None, None
+
+    # An Edit is a replacement, so its line counts are the difference between the two
+    # strings — the same +/- a diff would show, without needing the file.
+    diff = None
+    if "old_string" in args or "new_string" in args:
+        old_s = args.get("old_string") or ""
+        new_s = args.get("new_string") or ""
+        minus = len(old_s.splitlines()) if old_s else 0
+        plus = len(new_s.splitlines()) if new_s else 0
+        if minus or plus:
+            diff = [minus, plus]
+    elif "content" in args and isinstance(args["content"], str):
+        diff = [0, len(args["content"].splitlines())]
+
+    for k in ARG_KEYS:
+        v = args.get(k)
+        if isinstance(v, str) and v.strip():
+            return " ".join(v.split())[:ARG_CHARS], diff
+    return None, diff
+
+
 def strip_markup(text):
     return MARKUP.sub(" ", text or "")
 
@@ -394,6 +450,11 @@ def load_conversations(conn, ids):
             # classification keys on: 47,479 calls run something, 9,460 change a file,
             # 4,502 look at one — a distinction the single "tool" band cannot make.
             m["c"] = head.split("(")[0].split()[0][:24] if head else "tool"
+            arg, diff = call_detail(text)
+            if arg:
+                m["a"] = arg
+            if diff:
+                m["d"] = diff
             # Full paths, not basenames: `crates/cs-core/src/preview.rs` is a different
             # fact from `preview.rs`, and the corpus holds four unrelated `README.md`s.
             full = [p for p in PATH_RE.findall(text)

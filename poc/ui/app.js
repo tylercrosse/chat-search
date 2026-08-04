@@ -116,7 +116,11 @@
     }
     return `…/${leaf}`;
   }
-  const DIR_CHARS = 20;
+  // Sized to the grid track, not guessed. At 20 the string was 120px in a 108px cell, so
+  // CSS tail-elided it to `/Users/…/chat-sear` — discarding the leaf, which is the whole
+  // failure elidePath() exists to prevent. Reintroducing it by mismatched budget is
+  // exactly how that bug comes back.
+  const DIR_CHARS = 17;
 
   const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
                   'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -274,7 +278,13 @@
       b.title = x.note;
       b.setAttribute('aria-pressed', state.group === x.k ? 'true' : 'false');
       b.addEventListener('click', () => {
+        if (state.group === x.k) return;
         state.group = x.k;
+        // Every axis starts folded, including one you have opened before. Returning to
+        // `project` and finding it in whatever shape you left it is worse than it
+        // sounds: the groups are ranked, so the set you left open is rarely the set at
+        // the top now.
+        state.expanded.clear();
         state.uncapped.clear();
         render();
       });
@@ -534,7 +544,9 @@
 
   /* ================================================ view: search ========== */
 
-  const RIBBON_W = 236;
+  // Matches the grid track. When these drifted apart the track overflowed its cell and
+  // spilled into the gutter, which is the one column whose whole job is to be empty.
+  const RIBBON_W = 200;
   const FOUR_HOURS = 4 * 3600000;
 
   /* The ribbon used to draw 236px whether the conversation held 10 messages or 2,553,
@@ -724,14 +736,24 @@
     b.setAttribute('role', 'option');
     b.setAttribute('aria-selected', c.id === state.selected ? 'true' : 'false');
 
+    // Two clusters with a gutter between them: who and how big on the left, where and
+    // when on the right. `cwd` moved out of the flexible middle to join the date,
+    // because both answer "which of my worlds was this" rather than "what is it".
+    const ed = c.edits || [0, 0];
     let html =
       '<div class="row-meta">' +
       sourceBadge(c.src) +
-      `<span class="ribbon">${ribbon(c, q)}</span>` +
-      '<span class="dir"></span>' +
+      '<span class="model"></span>' +
       `<span class="msgs">${c.n} msgs</span>` +
-      `<span class="age">${c.age}</span>` +
+      // Blank on 194 of 354 sampled conversations — most agent work runs and reads
+      // without changing a line — so the column has to be quiet when it is empty.
+      `<span class="edits">${ed[0] || ed[1]
+        ? `<i class="m">−${ed[0]}</i><i class="p">+${ed[1]}</i>` : ''}</span>` +
+      `<span class="ribbon">${ribbon(c, q)}</span>` +
+      '<span class="sp"></span>' +
+      '<span class="dir"></span>' +
       `<span class="fork">${c.forks > 1 ? '⑂' + c.forks : ''}</span>` +
+      `<span class="age">${c.age}</span>` +
       '</div>' +
       '<div class="row-title"></div>';
 
@@ -746,7 +768,19 @@
         '<span class="frag"></span></div>';
     }
 
+    // Topics last, because they are the only line that is true of the conversation
+    // rather than about this query. Plain text, not chips: a `.row` is a <button> and a
+    // nested button is invalid, and 354 rows of pills is a lot of furniture. They stay
+    // clickable in the rail and the drawer.
+    if (c.topics && c.topics.length) {
+      html += '<div class="row-topics"></div>';
+    }
+
     b.innerHTML = html;
+    if (c.topics && c.topics.length) {
+      b.querySelector('.row-topics').textContent = c.topics.join('  ·  ');
+    }
+    b.querySelector('.model').textContent = c.model || '';
     // Inside a project the run divider above already names the day, so the cell spends
     // itself on the hour instead — which is the one thing the divider cannot say, and
     // makes the rhythm of an afternoon's work visible down the column.
@@ -910,13 +944,25 @@
       // distinction to be legible, which is where the ribbon's sub-shades cannot be.
       sig = ACT_GLYPH[m.act] || '⚙';
       d.classList.add('a-' + (m.act || 'run'));
-      text = level === 'expanded' ? `${m.tool}  ·  ${(m.len / 1024).toFixed(1)} KB` : m.tool;
+      // The argument, not the tool name. `Bash` told you nothing; `ls -la && echo …`
+      // is the line. Collapsed truncates it, expanded gives the whole thing — which is
+      // now a reason to expand a tool line rather than a no-op.
+      const name = m.call || m.tool;
+      const arg = m.arg || '';
+      const shown = level === 'expanded' ? arg : arg.slice(0, 84) + (arg.length > 84 ? '…' : '');
+      html = true;
+      text = `<b class="cmd">${esc(name)}</b>${arg ? ' ' + esc(shown) : ''}` +
+             (m.diff ? diffBadge(m.diff) : '') +
+             (level === 'expanded' ? `  <span class="kb">${(m.len / 1024).toFixed(1)} KB</span>` : '');
     } else {
       // tool_result omitted: the call implies it. A failure is not — a tool breaking
       // is recognition information. TUI-DESIGN §8.
       // A successful result is omitted unless tools are fully expanded — the call
       // already implies it. A failure always survives. TUI-DESIGN §8.
-      if (!m.err && level !== 'expanded') return null;
+      // Never disappear under a click. The kind-level default may omit a successful
+      // result — the call implies it — but a message the reader has touched directly
+      // always renders, or clicking it deletes it with no way back.
+      if (!m.err && level !== 'expanded' && !state.overrides.has(ovrKey(m))) return null;
       if (m.err) { sig = '✕'; text = 'Error: no such column: message.text_hash'; }
       else { sig = '↳'; text = `${(m.len / 1024).toFixed(1)} KB`; }
     }
@@ -950,6 +996,17 @@
       'from here on</span>';
     return b;
   }
+
+  const esc = (t) => String(t).replace(/[&<>]/g, (ch) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[ch]));
+
+  /* Edits carry their own diff: an Edit is a replacement, so the line counts of
+     old_string and new_string are the same +/- a diff would show without needing the
+     file. apply_patch counts the patch body directly. 2,278 calls in the sample. */
+  const diffBadge = ([minus, plus]) =>
+    '  <span class="dif">' +
+    (minus ? `<i class="m">−${minus}</i>` : '') +
+    (plus ? `<i class="p">+${plus}</i>` : '') + '</span>';
 
   function hours(ms) {
     const h = ms / 3600000;
@@ -1580,12 +1637,6 @@
       return;
     }
 
-    // Nothing open reads as an empty screen, so the first group opens itself. Once you
-    // have touched the accordion it is yours.
-    if (!groups.some((g) => state.expanded.has(state.group + ':' + g.key))) {
-      state.expanded.add(state.group + ':' + groups[0].key);
-    }
-
     const big = groups.filter((g) => !g.small);
     const small = groups.filter((g) => g.small);
     big.forEach((g) => list.appendChild(
@@ -1910,9 +1961,24 @@
     if (!lib) drawSidebar();
     drawFooter();
 
+    // render() rebuilds #main from scratch, so both scrollers reset to the top. Clicking
+    // a line 4,000px into a conversation threw you back to its first message — which is
+    // what read as the pane flashing: it was not an animation, it was the whole thing
+    // being rebuilt and repainted at scroll 0.
+    const keep = { pv: $('pv-body'), list: $('list') };
+    const at = { pv: keep.pv ? keep.pv.scrollTop : 0, list: keep.list ? keep.list.scrollTop : 0 };
+    const same = state.selected;
+
     const main = $('main');
     main.textContent = '';
     main.appendChild(state.view === 'library' ? viewLibrary() : viewSearch());
+
+    // Restored only when the pane is still showing the same conversation; opening a
+    // different one should start at its beginning.
+    const pv = $('pv-body');
+    if (pv && at.pv && same === state.selected) pv.scrollTop = at.pv;
+    const list = $('list');
+    if (list && at.list) list.scrollTop = at.list;
 
     // A chip anywhere is the same filter as a chip in the rail, not a second mechanism —
     // TUI-DESIGN §5, and `me9.16` for the shipped version of the same rule. Wired once
@@ -2033,6 +2099,25 @@
     state.selected = CONVERSATIONS[0].id;
     state.fidelity = defaultZoomFor(CONVERSATIONS[0]);
   }
-  render();
-  wire();
+
+  /* The gallery renders the same functions this app does, against the same state, so a
+     component cannot look one way there and another way here. Duplicating the markup
+     into a second file is the drift this whole session kept finding — two numbers for
+     one measurement — and a gallery that has drifted is worse than none, because you
+     make polish decisions against something that is not what ships. */
+  window.CS_UI = {
+    state, render,
+    conversationRow, ribbon, block, breakRule, cutRule, segmentize: null,
+    groupSection, projectBand, runBand, topicBand, sourceBand, untaggedBand,
+    workSummary, sparkline, runsOf, statsOf, previewCol,
+    KINDS, LEVELS, LEVEL_WORD, PRESETS, GROUPINGS, ACT_ORDER,
+    el, elidePath, dayLabel, clockOf, diffBadge,
+  };
+
+  // The app shell is absent in the gallery, so booting it would throw on the first
+  // getElementById. Everything above is already exported by then.
+  if ($('main')) {
+    render();
+    wire();
+  }
 })();

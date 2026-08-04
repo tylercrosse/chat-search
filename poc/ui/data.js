@@ -33,7 +33,10 @@ const SOURCES = {
  * images off, in greyscale, or for a colourblind reader. TUI-DESIGN §7. */
 function sourceBadge(src, cls) {
   const s = SOURCES[src] || {};
-  return `<span class="badge ${cls || ''}" style="color:${s.hue || 'var(--ink-3)'}">` +
+  // title, because the row hides the word to buy back width — the name has to stay
+  // reachable without opening the conversation.
+  return `<span class="badge ${cls || ''}" title="${src}" ` +
+         `style="color:${s.hue || 'var(--ink-3)'}">` +
          (s.ico ? `<i class="ico" style="--ico:${s.ico}"></i>` : '') +
          `<span>${src}</span></span>`;
 }
@@ -333,6 +336,10 @@ function adaptReal(data) {
         tool: kind === 'tool_call' || kind === 'tool_result' ? (text || 'tool') : null,
         // Carried from the export rather than parsed out of the truncated preview text.
         call: m.c || null,
+        // What the call actually was. A `Bash` line used to say "Bash" and nothing else,
+        // which is the one thing you do not need to be told.
+        arg: m.a || null,
+        diff: m.d || null,
         act: kind === 'tool_call' ? actOf(m.c) : null,
         onPath: true,
         err: Boolean(m.e),
@@ -380,6 +387,10 @@ function adaptReal(data) {
       // appears it averages 52% of the conversation and reaches 100%. That is a fact
       // about the whole conversation, not a tint on scattered messages.
       sidechain: msgs.length ? msgs.filter((m) => m.isSidechain).length / msgs.length : 0,
+      // Summed over the conversation: how much of the file tree this actually moved.
+      // 160 of 354 sampled conversations changed a line; the rest only ran and read.
+      edits: msgs.reduce((a, m) => (m.diff ? [a[0] + m.diff[0], a[1] + m.diff[1]] : a), [0, 0]),
+      topics: TOPICS_BY_CONV.get(c.id) || [],
       bestMatch: null,
     };
   });
@@ -447,6 +458,17 @@ const PROJECTS = (REAL && REAL.projects) || [];
 const PROJECT_BY_PATH = new Map(PROJECTS.map((p) => [p.path, p]));
 
 const AGENTIC_SOURCES = new Set(['claude-code', 'codex', 'gemini-cli']);
+
+/* Topic membership, inverted once. The topics arrive as member lists, and asking
+ * "which topics is this conversation in" per row over 354 rows against 26 lists is a
+ * scan nobody needs to repeat. */
+const TOPICS_BY_CONV = new Map();
+((REAL && REAL.topics) || []).forEach((t) => {
+  t.members.forEach((id) => {
+    if (!TOPICS_BY_CONV.has(id)) TOPICS_BY_CONV.set(id, []);
+    TOPICS_BY_CONV.get(id).push(t.name);
+  });
+});
 
 const CONVERSATIONS = REAL
   // Export order is stratified by source, which put every ChatGPT conversation first.

@@ -146,6 +146,10 @@ pub fn snippet_marked_at(
 
 /// How to run a search, as distinct from what was asked. The query text itself moves to
 /// [`crate::query::Query`]; what remains here is tuning the caller chooses.
+///
+/// `Clone` because [`crate::answer::Answer`] keeps the whole of it, `now_ms` included, as half
+/// of the receipt it settles against — see [`crate::answer::Answer::settle`].
+#[derive(Debug, Clone)]
 pub struct SearchOptions {
     pub limit: i64,
     pub field: Field,

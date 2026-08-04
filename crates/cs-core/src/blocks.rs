@@ -334,10 +334,8 @@ pub struct Transcript {
     pub count: usize,
     /// How many of those a reader draws. The difference is successful tool results.
     pub drawn: usize,
-    /// How to read `marks`. `"utf8-bytes"` today; a client indexing UTF-16 must convert.
-    /// Named on the wire rather than only in documentation because it is the one place the
-    /// reader's language leaks into the contract, and a silently wrong offset highlights the
-    /// wrong word rather than failing.
+    /// How to read `marks` — [`highlight::OFFSETS`], which is where the reasoning lives and
+    /// which `cs search --json` reads the same answer out of.
     pub mark_offsets: &'static str,
     pub messages: Vec<WireBlock>,
 }
@@ -364,7 +362,7 @@ impl Transcript {
             threads: thread_count(&blocks),
             count: blocks.len(),
             drawn: blocks.iter().filter(|b| b.drawn()).count(),
-            mark_offsets: "utf8-bytes",
+            mark_offsets: highlight::OFFSETS,
             messages: blocks
                 .into_iter()
                 .map(|block| WireBlock {

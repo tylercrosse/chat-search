@@ -95,6 +95,20 @@ pub struct Span {
     pub end: usize,
 }
 
+/// How a [`Span`] is expressed wherever one reaches a client: **UTF-8 byte offsets**.
+///
+/// Named on the wire rather than only in documentation, because this is the one place the
+/// reader's language leaks into the contract — a JavaScript string is UTF-16 and Swift's
+/// `String` is not integer-indexed at all — and an offset read in the wrong unit marks the
+/// wrong word rather than failing. The Swift spike read spans as character offsets and
+/// mis-highlighted every snippet containing an em-dash, which in this corpus is most of them.
+///
+/// One constant rather than a literal per envelope, so `cs show --json` and `cs search --json`
+/// cannot answer it differently. Both spell the key `mark_offsets` and both read its value from
+/// here, which is what makes changing the encoding a change to *both* contracts or to neither
+/// (chat-search-me9.33).
+pub const OFFSETS: &str = "utf8-bytes";
+
 /// Every span of `text` whose token matches one of `terms`.
 ///
 /// Ascending by `start`, non-overlapping. Empty when nothing matched, which is a fact worth

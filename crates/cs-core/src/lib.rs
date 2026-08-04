@@ -12,7 +12,12 @@
 //! rule for naming the local day an instant fell on. `blocks` is the same idea one level up:
 //! which messages a reader draws and which matches may claim to have ranked the conversation,
 //! answered once for the TUI, `cs show --json`, and everything downstream of that JSON.
+//!
+//! `answer` is `blocks` for the other half of the interface: the reply to a search, owned here
+//! so that clients adapt to it rather than each assembling one (ADR 23). `search` ranks; the
+//! envelope, its totals and its routing are `answer`'s.
 
+pub mod answer;
 pub mod blocks;
 pub mod build;
 pub mod destination;
@@ -26,6 +31,11 @@ pub mod schema;
 pub mod search;
 pub mod time;
 
+// `answer::Group` is deliberately not re-exported yet: `search::Group` still holds that name at
+// the root, and will until the clients stop reading the ranked row directly
+// (chat-search-me9.36.2, chat-search-me9.36.3). Until then the wire type is `cs_core::answer::Group`,
+// and the two are one `From` apart rather than two names for one shape.
+pub use answer::{answer, Answer, FlatAnswer, Match, Reason, Refusal};
 pub use blocks::{Block, Density, Fold, MarkKind, Transcript, WireBlock};
 pub use build::{open_for_read, IndexBuild, IndexState, Reader, Unreadable};
 pub use destination::{destinations, Destination};

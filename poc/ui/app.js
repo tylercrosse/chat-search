@@ -711,6 +711,18 @@
 
   const hasQuery = () => Boolean(state.query.free);
 
+  const root = document.documentElement;
+
+  /* `index.html?dir=paper` renders the whole prototype in one of the visual directions
+     in directions.css. A URL rather than a control in the title bar on purpose: the
+     title bar is part of what is being judged, and a chooser sitting in it would be
+     furniture that ships in none of the four. */
+  function applyDirection() {
+    root.classList.add(root.classList.contains('light') ? 'theme-light' : 'theme-dark');
+    const name = new URLSearchParams(location.search).get('dir');
+    if (name && /^[a-z]+$/.test(name)) root.classList.add('dir-' + name);
+  }
+
   function ribbonKey() {
     const k = el('div', 'ribbon-key');
     k.innerHTML =
@@ -2060,6 +2072,13 @@
 
     $('btn-theme').addEventListener('click', (e) => {
       const light = document.documentElement.classList.toggle('light');
+      // Two classes for one theme, which is not duplication: `light` is what
+      // styles.css and the annotation layer have always keyed off, and `theme-light`
+      // is what a direction in directions.css keys off, because a direction has to be
+      // able to scope to a subtree. directions.html renders both themes at once on
+      // exactly that difference.
+      root.classList.toggle('theme-light', light);
+      root.classList.toggle('theme-dark', !light);
       e.currentTarget.textContent = light ? 'dark' : 'light';
       if (state.annotations) drawAnnotations();
     });
@@ -2117,6 +2136,7 @@
   // The app shell is absent in the gallery, so booting it would throw on the first
   // getElementById. Everything above is already exported by then.
   if ($('main')) {
+    applyDirection();
     render();
     wire();
   }

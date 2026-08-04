@@ -2,6 +2,13 @@
 
 Paste this alongside a screenshot of `poc/ui/index.html`.
 
+> **Four directions already answer this brief.** `poc/ui/directions.html` shows
+> `terminal` (the incumbent, and the control), `paper`, `blueprint` and `ink` on the row
+> and the ribbon at real size in both themes, with a measured table of what each costs;
+> `poc/ui/index.html?dir=paper` puts one of them on the whole prototype. They are worked
+> answers rather than the answer — the brief below is still the ask, and a fifth
+> direction that ignores all four is a better outcome than a refinement of one.
+
 **The visual language here has never had a designer look at it.** It was built by
 working outward from measurements of the data, which is why the information design is
 well-argued and the *look* is not. Treat the current appearance as one working answer,
@@ -172,5 +179,8 @@ Short list, and all functional rather than aesthetic:
 - Making the four message kinds indistinguishable at small size — the specific failure
   that was measured and fixed once already.
 - Making the quiet text tier illegible; it carries dates, counts and labels, not
-  decoration, and currently sits at 4.6:1 in both themes.
+  decoration, and currently sits at 4.6:1 in both themes. Note *both grounds*: it lands
+  on the page and on the drawer, `--panel` is the darker of the two in the light theme,
+  and checking only the page is how it stayed at 4.23:1 in the drawer through one fix
+  already.
 - Encoding anything in colour alone.

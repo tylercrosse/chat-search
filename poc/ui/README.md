@@ -10,6 +10,8 @@ scrolls except the panes that would scroll in the real thing.
 ```bash
 open poc/ui/index.html          # no server, no build, no dependencies
 open poc/ui/gallery.html        # every component, every state, both themes
+open poc/ui/directions.html     # four visual directions, measured against each other
+open "poc/ui/index.html?dir=paper"   # the whole prototype in one of them
 ```
 
 Sits beside `poc/rust` and `poc/ts` for the same reason they do: an instrument for answering a
@@ -74,6 +76,19 @@ rewrite it, because that is the behaviour worth demonstrating.
 It renders in the system UI face at native metrics on purpose. Set a native app mock in a display
 face and it stops telling the truth about density, which is the only reason it exists.
 
+## Visual directions
+
+The information design here was argued from measurements; the *look* never was. Four directions
+answer that — `terminal` (the incumbent, and the control), `paper`, `blueprint` and `ink` — and
+`directions.html` shows each on the row and the ribbon at real size in both themes, beside a table
+of what it costs. The table is measured off the rendered page rather than read from the tokens,
+because a row's height is a line box's opinion and not a sum of the padding you asked for.
+
+Three things are fenced and all four directions hold them: the four message kinds stay on an even
+~1.8× luminance ramp against the ribbon track, the quiet text tier clears 4.5:1 on **both** grounds
+it lands on, and rows-per-screen does not drop. `python3 poc/ui/palette.py --verify` re-measures the
+stylesheets and exits non-zero if one stops holding.
+
 ## Layout
 
 | file | holds |
@@ -81,6 +96,9 @@ face and it stops telling the truth about density, which is the only reason it e
 | `index.html` | the window shell |
 | `DESIGN-BRIEF.md` | what the mockup is and what its marks must encode — for handing to a design tool with a screenshot |
 | `gallery.html` · `gallery.js` · `gallery.css` | the component gallery — renders the app's own functions, so it cannot drift from what ships |
+| `directions.html` · `directions.js` | four visual directions on the row and the ribbon at real size, in both themes, with what each costs |
+| `directions.css` | those four as token sets — palette, faces, sizes, rhythm, radii; nothing structural |
+| `palette.py` | solves each direction's luminance ramp, and re-measures the stylesheets with `--verify` |
 | `styles.css` | tokens, the three views, the annotation layer |
 | `data.js` | mock conversations, collections, sittings, annotation copy |
 | `app.js` | rendering, the collection rule evaluator, interaction |

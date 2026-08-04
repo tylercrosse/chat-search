@@ -334,10 +334,10 @@ fn mb(bytes: u64) -> f64 {
 /// (chat-search-a7k.5). So the table is printed only when the run recorded something, and
 /// `--verbose` brings it back for debugging.
 ///
-/// Suppression stops at the table. Errors propagate to stderr as they always did, the
-/// source-drift report prints on its own throttle (chat-search-a7k.12), and the
-/// export-staleness nag will do the same (chat-search-a7k.10) — a warning quiet mode can
-/// swallow is worse than the noise quiet mode removes.
+/// Suppression stops at the table. Errors propagate to stderr as they always did, and the
+/// source-drift report (chat-search-a7k.12) and the export-staleness nag (chat-search-a7k.10)
+/// each print on their own throttle — a warning quiet mode can swallow is worse than the noise
+/// quiet mode removes.
 fn archive(
     config_path: &PathBuf,
     only: Option<&str>,
@@ -349,7 +349,9 @@ fn archive(
         .with_context(|| format!("reading {}", config_path.display()))?;
     let m = machine::load_or_create(&cfg.archive_root, cfg.machine_alias.as_deref())?;
     let machine_dir = m.dir(&cfg.archive_root);
-    let manifest = Manifest::load(&machine_dir).context("loading manifest")?;
+    // Mutable because this run's own events are folded back in below, before the staleness
+    // check reads it.
+    let mut manifest = Manifest::load(&machine_dir).context("loading manifest")?;
     let writer = (!dry_run)
         .then(|| ManifestWriter::new(&machine_dir))
         .transpose()
@@ -448,6 +450,15 @@ fn archive(
         if let Some(w) = &writer {
             w.append(&events).context("appending manifest events")?;
         }
+        // Fold this run's events into the in-memory manifest, so the staleness check below
+        // sees an export that landed moments ago as fresh. Without this, `cs archive` run by
+        // hand straight after unpacking one would nag about the very export it just captured
+        // — the worst possible moment to be wrong, because it is the moment the user did the
+        // right thing. On a dry run nothing is written but the files are on disk all the same,
+        // and it is their existence, not their capture, that closes the gap.
+        for e in events {
+            manifest.apply(e);
+        }
 
         tot_cloned += cloned;
         tot_copied += copied;
@@ -472,6 +483,23 @@ fn archive(
         }));
     }
 
+    // After the loop, so the manifest already carries what this run captured. Every source is
+    // asked, not just the one `--source` selected: an export left to rot is exactly as lost
+    // whether or not this invocation happened to be scanning it.
+    let stale = cs_archive::staleness::detect(
+        &cfg.sources,
+        |id| manifest.newest_mtime_ms(id),
+        cs_archive::manifest::now_ms(),
+    );
+    // Same split as the drift report: a dry run is somebody asking a question, so it answers
+    // unthrottled and records nothing, and scheduled runs go through the throttle.
+    let show_stale = if dry_run {
+        !stale.is_empty()
+    } else {
+        cs_archive::staleness::claim(&machine_dir, &stale, cs_archive::manifest::now_ms())
+            .context("recording the export-staleness nag")?
+    };
+
     if json {
         println!("{:#}", serde_json::json!({
             "dry_run": dry_run, "archive": machine_dir, "sources": reports,
@@ -480,6 +508,7 @@ fn archive(
             // that silently empties for 24 h after the first sighting.
             "unconfigured": drift.unconfigured,
             "missing": drift.missing,
+            "stale": stale,
             "cloned": tot_cloned, "copied": tot_copied,
             "bytes": tot.apparent,
             "apparent_bytes": tot.apparent,
@@ -515,19 +544,48 @@ fn archive(
             }
             println!("  archive: {}", machine_dir.display());
         }
+        // Each block separates itself from whatever printed above it, and prints nothing when
+        // it is first: on a quiet run one of these is the entire output and must not open with
+        // a stray newline. Tracking what has printed rather than testing `show_table` is what
+        // keeps that true now there are two of them — the nag has to be able to stand alone,
+        // below a table, or below a drift report it has never heard of.
+        //
+        // `--verbose` is deliberately not wired into either throttle: restoring the old table
+        // is all it claims to do, and `--dry-run` is already the unthrottled view of both.
+        let mut printed = show_table;
         if show_drift {
-            // The blank line separates the report from the table, so it belongs to the table
-            // and not to the report: on a quiet run the report is the entire output and must
-            // not open with a stray newline. `--verbose` is deliberately not wired into the
-            // drift throttle — restoring the old table is all it claims to do, and `--dry-run`
-            // is already the unthrottled view of drift.
-            if show_table {
+            if printed {
                 println!();
             }
             print_drift(&drift, config_path);
+            printed = true;
+        }
+        if show_stale {
+            if printed {
+                println!();
+            }
+            print_stale(&stale);
         }
     }
     Ok(())
+}
+
+/// Exports that have stopped happening (chat-search-a7k.10).
+///
+/// Exempt from quiet mode for the reason the drift report is: a staleness warning that quiet
+/// mode can suppress is a warning that vanishes exactly when you stop reading the logs, which
+/// is the same failure shape as the Claude Code 30-day prune — silent, and only noticed once
+/// the data is gone.
+fn print_stale(stale: &[cs_archive::Stale]) {
+    for s in stale {
+        println!("  stale         {:<14} {} days since its newest archived file", s.source, s.days);
+    }
+    // Restated every time, because the remedy is not obvious from the line and the cost of
+    // not knowing it is unrecoverable. The threshold is a week, so this prints at most once a
+    // day and only while something is actually rotting.
+    println!(
+        "\n  Nothing accrues in a manual export between runs, so each of those days is a gap no\n  later export can fill (ADR 21). Re-export and unpack into the watched directory."
+    );
 }
 
 /// The two ways a config stops describing the machine it runs on (chat-search-a7k.12).

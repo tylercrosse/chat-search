@@ -268,6 +268,11 @@ missing edge rather than a missing file.
   `google-takeout` (chat-search-o1i) is the second source with this shape and inherits the same
   gap — the recommended `[[sources]]` block is in the module doc of
   `crates/cs-import/src/google_takeout.rs` so it is at least recoverable from the code.
+  **This paragraph is now load-bearing.** `cs-archive`'s staleness nag (chat-search-a7k.10)
+  derives "export-shaped" from exactly this — absence from the candidate list — so adding an
+  export id to `candidate_sources()` would silently switch its nag off rather than fail.
+  `staleness::the_real_candidate_list_classifies_the_two_export_sources_it_ships_with` is the
+  test that turns that from a silence into a failure.
 - **Compressed Codex rollouts are captured and cannot be read.** The `codex` source globs
   `**/rollout-*.jsonl.zst` as well as `.jsonl`, because Codex zstd-compresses rollouts older
   than about a week and everything older would otherwise stop being captured. Capture stores

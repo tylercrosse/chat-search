@@ -236,6 +236,147 @@ impl Block {
             crate::Kind::ALL.iter().any(|k| !k.is_indexed() && k.as_str() == self.kind);
         if unranked { MarkKind::Unranked } else { MarkKind::Ranked }
     }
+
+    /// The one line that stands in for this whole message when it is folded shut.
+    ///
+    /// Outline mode is every message reduced to this, and §8's table of collapsed forms is the
+    /// spec: prose is the matching line else the first non-empty one, a `tool_call` is its name
+    /// plus the argument that identifies it, and a failed result keeps its error text. Because
+    /// the prose case prefers the *matching* line, a wholly folded conversation is a map of
+    /// where the query landed, in conversation order — which is what makes outline mode worth
+    /// more than a density knob.
+    ///
+    /// Content only. Which glyph fronts the row — the gear, the ellipsis, the cross, the
+    /// speaker — is the client's business, the same line [`Block::mark_kind`] draws: core says
+    /// what the line reads, the client says how it looks.
+    pub fn collapsed(&self) -> Collapsed {
+        let quoted = |(at, text): (usize, String)| Collapsed { text, at: Some(at) };
+        // Asked before `kind`, because a failed result is the one result that survives
+        // ([`Block::drawn`]), and it is the failure rather than the tool that earned the row.
+        if self.is_error {
+            return quoted(recognition_line(self));
+        }
+        // Resolved through [`crate::Kind`] rather than matched as strings, so a new kind has to
+        // say which collapsed form it takes instead of inheriting the quoted one in silence.
+        match crate::Kind::ALL.into_iter().find(|k| k.as_str() == self.kind) {
+            // Reasoning opens with its own bolded summary — `**Planning README creation**` — so
+            // where nothing matched, the model has already written the one-line version. Use it
+            // rather than counting lines at the reader, which is what §8 first specced.
+            Some(crate::Kind::Reasoning) => {
+                let (at, line) = recognition_line(self);
+                // The asterisks are the model's emphasis syntax rather than content, and
+                // dropping them moves the offset every mark is rebased against.
+                let text = line.trim_matches('*').to_string();
+                let dropped = line.find(&text).unwrap_or(0);
+                Collapsed { text, at: Some(at + dropped) }
+            }
+            // The one collapsed form that is *synthesised* rather than quoted, and therefore the
+            // one with no offset to give.
+            Some(crate::Kind::ToolCall) => Collapsed { text: tool_summary(&self.text), at: None },
+            Some(crate::Kind::Prose | crate::Kind::ToolResult) | None => {
+                quoted(recognition_line(self))
+            }
+        }
+    }
+}
+
+/// One line standing in for a whole message, and where in the message it came from.
+///
+/// Built by [`Block::collapsed`]. Nothing here is styled: no sigil, no width, no colour.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Collapsed {
+    /// What the row says.
+    pub text: String,
+    /// Byte offset of `text` within [`Block::text`], so a caller can rebase [`Block::marks`]
+    /// onto the line: a mark lying wholly inside `at .. at + text.len()` belongs at
+    /// `start - at`, and one straddling either edge is dropped rather than clamped — a clamped
+    /// mark highlights a word fragment that no term actually matched.
+    ///
+    /// `None` when the line was *synthesised* from the message's fields instead of quoted out
+    /// of its text, which today means a `tool_call`: `Bash ls -la` is a name taken from one line
+    /// and an argument from inside the JSON on another, so it is a slice of nothing and no
+    /// offset would be true. A caller reading a missing offset as zero would mark whatever byte
+    /// happened to sit there, which is why this is an absence rather than a default — and why
+    /// it is the one thing `cs show --json` emits as null.
+    pub at: Option<usize>,
+}
+
+/// The one line of a message worth standing in for all of it, with its byte offset.
+///
+/// The line the query hit, when there is one. §8 specs this, and it is the whole reason outline
+/// mode is worth more than a density knob: with every message reduced to the line that matched,
+/// the pane becomes a map of where the query landed across the conversation, in conversation
+/// order — complementary to the top-3 hit rows in the results list rather than a duplicate of
+/// them. Falling back to the first non-empty line makes a non-matching message a table of
+/// contents entry, which is all it can honestly be.
+///
+/// The offset is of the line *as returned*, so a caller rebasing marks onto that string does not
+/// have to account for the leading whitespace this trimmed off.
+pub fn recognition_line(block: &Block) -> (usize, String) {
+    let marked = offset_lines(&block.text)
+        .find(|(at, line)| block.marks.iter().any(|m| m.start >= *at && m.start < at + line.len()));
+    let (at, line) = marked
+        .or_else(|| offset_lines(&block.text).find(|(_, l)| !l.trim().is_empty()))
+        .unwrap_or((0, ""));
+    (at + (line.len() - line.trim_start().len()), line.trim().to_string())
+}
+
+/// `name` plus whatever argument identifies the call.
+///
+/// A `tool_call` body is the tool name on its own line followed by a JSON argument object, so
+/// the name is free and the useful part is picking the one argument a human would use to
+/// recognise the call — the command for a shell, the path for a read.
+pub fn tool_summary(text: &str) -> String {
+    let mut lines = text.lines();
+    let name = lines.next().unwrap_or("tool").trim().to_string();
+    let rest: String = lines.collect::<Vec<_>>().join("\n");
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&rest) else {
+        return name;
+    };
+
+    // `command` is spelled differently by each tool and both spellings are common here: Codex
+    // writes an argv array, Claude Code a single string. Handling only the array meant every
+    // Claude Code `Bash` call collapsed to a bare `Bash` — the name with the one piece of
+    // information stripped out.
+    if let Some(cmd) = json.get("command") {
+        if let Some(line) = cmd.as_str() {
+            return format!("{name} {}", line.replace('\n', " "));
+        }
+        if let Some(argv) = cmd.as_array() {
+            let parts: Vec<&str> = argv.iter().filter_map(|v| v.as_str()).collect();
+            // `["bash", "-lc", "<script>"]` is the overwhelmingly common argv shape, and the
+            // script is the only interesting element — the shell and its flag never vary.
+            let shown = match parts.as_slice() {
+                [_shell, flag, script, ..] if flag.starts_with('-') => script,
+                _ => return format!("{name} {}", parts.join(" ")),
+            };
+            return format!("{name} {shown}");
+        }
+    }
+    for key in ["path", "file_path", "pattern", "query", "url"] {
+        if let Some(v) = json.get(key).and_then(|v| v.as_str()) {
+            return format!("{name} {v}");
+        }
+    }
+    name
+}
+
+/// The lines of a message with their byte offsets, so a mark can be attributed to the line
+/// holding it.
+///
+/// Splits exactly where `str::lines` splits — `split_inclusive` yields one chunk per line and
+/// agrees with it on a trailing newline, where a plain `split('\n')` would report one line too
+/// many. That agreement is load-bearing past [`recognition_line`]: the TUI counts rendered rows
+/// with it and turns a click into a message with those counts, so an off-by-one on the last
+/// line of any expanded message would fold the wrong one.
+pub fn offset_lines(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut at = 0;
+    text.split_inclusive('\n').map(move |chunk| {
+        let start = at;
+        at += chunk.len();
+        let line = chunk.strip_suffix('\n').unwrap_or(chunk);
+        (start, line.strip_suffix('\r').unwrap_or(line))
+    })
 }
 
 /// Read one conversation's messages, with `terms` located in each.
@@ -353,6 +494,14 @@ pub struct WireBlock {
     pub drawn: bool,
     /// [`Block::mark_kind`], same reason.
     pub mark_kind: MarkKind,
+    /// [`Block::collapsed`] — the row this message shows when it is folded shut.
+    ///
+    /// Carried for every message rather than only the folded ones, because which messages are
+    /// folded is session state the client holds, not a property of the conversation. Without it
+    /// a client can list a conversation but cannot draw outline mode, which is the mode that
+    /// makes a 900-message agent session legible — and the two attempts to build one of these
+    /// outside Rust both began by reimplementing which line stands in for which message.
+    pub collapsed: Collapsed,
 }
 
 impl Transcript {
@@ -370,6 +519,7 @@ impl Transcript {
                 .map(|block| WireBlock {
                     drawn: block.drawn(),
                     mark_kind: block.mark_kind(),
+                    collapsed: block.collapsed(),
                     block,
                 })
                 .collect(),
@@ -561,6 +711,169 @@ mod tests {
         // that exists only because Rust needed somewhere to put two computed fields.
         assert_eq!(msgs[0]["kind"], "prose");
         assert_eq!(msgs[0]["msg_id"], "a");
+    }
+
+    /// A block with its matches already located, as [`load`] would leave it.
+    fn marked(kind: &str, role: &str, id: &str, text: &str, query: &str) -> Block {
+        let mut b = block(kind, role, id, text);
+        b.marks = highlight::spans(text, &crate::Query::exact(query).marking_terms());
+        b
+    }
+
+    #[test]
+    fn a_shell_call_collapses_to_the_script_not_the_shell() {
+        let t = "shell\n{\"command\":[\"bash\",\"-lc\",\"sed -n '1,160p' config.py\"],\"workdir\":\".\"}";
+        assert_eq!(tool_summary(t), "shell sed -n '1,160p' config.py");
+    }
+
+    #[test]
+    fn a_command_string_reads_the_same_as_a_command_array() {
+        // Codex writes argv, Claude Code writes a line. Both are `command`, and handling one
+        // shape silently rendered the other as a bare tool name.
+        assert_eq!(tool_summary("Bash\n{\"command\":\"ls -la\"}"), "Bash ls -la");
+        assert_eq!(
+            tool_summary("Bash\n{\"command\":\"echo one\\necho two\"}"),
+            "Bash echo one echo two",
+            "a multi-line script still occupies one row"
+        );
+    }
+
+    #[test]
+    fn a_call_with_an_identifying_path_uses_it() {
+        assert_eq!(tool_summary("Read\n{\"file_path\":\"/x/schema.rs\"}"), "Read /x/schema.rs");
+    }
+
+    #[test]
+    fn an_unparseable_body_still_yields_the_tool_name() {
+        // Argument shapes vary per tool and per version; the name alone is always better
+        // than a raw JSON fragment wrapped into the pane.
+        assert_eq!(tool_summary("update_plan\nnot json at all"), "update_plan");
+        assert_eq!(tool_summary("bare_name"), "bare_name");
+    }
+
+    #[test]
+    fn a_collapsed_message_shows_the_line_the_query_hit() {
+        // §8: collapsed prose is "the matching line, else the first non-empty line". Showing
+        // the first line instead makes outline mode a table of contents when its whole purpose
+        // is being a map of where the query landed.
+        let text = "a preamble nobody asked about\nsome filler\nthe borrow checker complained";
+        let b = marked("prose", "assistant", "a", text, "borrow");
+        assert!(!b.marks.is_empty(), "the fixture has to actually match");
+        assert_eq!(recognition_line(&b).1, "the borrow checker complained");
+
+        // Stemmed, because the whole point is agreeing with the ranker rather than with a
+        // substring scan: `commits` ranks this row on `Commit`.
+        let b = marked("prose", "user", "b", "hello there\nCommit current changes", "commits");
+        assert_eq!(recognition_line(&b).1, "Commit current changes");
+    }
+
+    #[test]
+    fn a_message_that_matched_nothing_falls_back_to_its_first_real_line() {
+        let b = marked("prose", "user", "a", "\n\n  first words here\nlater", "elephant");
+        assert!(b.marks.is_empty());
+        assert_eq!(recognition_line(&b).1, "first words here");
+    }
+
+    #[test]
+    fn offset_lines_splits_exactly_where_str_lines_splits() {
+        // A renderer counts rows with this and turns clicks into messages with those counts, so
+        // one extra line on a trailing newline — which `split('\n')` reports and `lines()` does
+        // not — puts every click after it on the wrong message.
+        for text in ["", "a", "a\n", "a\nb", "a\nb\n", "\n\n", "a\r\nb\r\n", "\n"] {
+            let got: Vec<&str> = offset_lines(text).map(|(_, l)| l).collect();
+            let want: Vec<&str> = text.lines().collect();
+            assert_eq!(got, want, "{text:?}");
+        }
+        // And the offsets point at the line they came from.
+        let text = "alpha\nbeta\ngamma";
+        for (at, line) in offset_lines(text) {
+            assert_eq!(&text[at..at + line.len()], line);
+        }
+    }
+
+    #[test]
+    fn a_quoted_collapsed_line_reports_where_it_was_lifted_from() {
+        // The offset is the whole seam: a client rebases this message's marks onto the one line
+        // it shows, and an offset that is off by the leading whitespace or by the trimmed
+        // asterisks highlights the wrong word rather than failing.
+        let text = "a preamble nobody asked about\n   the borrow checker complained";
+        let b = marked("prose", "assistant", "a", text, "borrow");
+        let c = b.collapsed();
+        let at = c.at.expect("a quoted line knows where it came from");
+        assert_eq!(&b.text[at..at + c.text.len()], c.text, "the offset does not point at the line");
+        // And the mark rebases onto the word it actually matched.
+        let m = b.marks.iter().find(|m| m.start >= at).expect("the fixture has to match");
+        assert_eq!(&c.text[m.start - at..m.end - at], "borrow");
+    }
+
+    #[test]
+    fn reasoning_collapses_to_the_models_own_summary_without_its_asterisks() {
+        // `**Planning README creation**` is the one-line version the model already wrote. The
+        // asterisks are its emphasis syntax rather than content, and dropping them has to move
+        // the offset with them or every mark on the line lands two bytes early.
+        let b = marked("reasoning", "assistant", "a", "**Planning the borrow fix**\ndetail", "borrow");
+        let c = b.collapsed();
+        assert_eq!(c.text, "Planning the borrow fix");
+        let at = c.at.expect("reasoning is quoted, not synthesised");
+        assert_eq!(&b.text[at..at + c.text.len()], c.text, "the asterisks moved the offset");
+    }
+
+    #[test]
+    fn a_synthesised_tool_summary_has_no_offset_to_give() {
+        // `Bash grep borrow src` is built from the tool name and one argument, not quoted from
+        // the message, so `marks` index text that is not on the line. An offset here would be
+        // fiction, and a client rebasing against it would highlight whatever sat at that byte.
+        let b = marked("tool_call", "assistant", "a", "Bash\n{\"command\":\"grep borrow src\"}", "borrow");
+        let c = b.collapsed();
+        assert_eq!(c.text, "Bash grep borrow src");
+        assert_eq!(c.at, None, "a synthesised line cannot locate a mark");
+        assert!(!b.marks.is_empty(), "the fixture matched, which is what makes the None matter");
+    }
+
+    #[test]
+    fn a_failed_result_collapses_to_its_error_text_whatever_kind_it_is() {
+        // §8 keeps the failure and drops the success. `is_error` is asked before `kind` so the
+        // error text is quoted rather than run through the form its kind would otherwise take.
+        let mut bad = block("tool_result", "tool", "b", "error: no such file or directory");
+        bad.is_error = true;
+        assert_eq!(bad.collapsed().text, "error: no such file or directory");
+        assert_eq!(bad.collapsed().at, Some(0));
+    }
+
+    #[test]
+    fn every_kind_collapses_to_something_a_client_can_draw() {
+        // A kind with no collapsed form would be a blank row in outline mode — the one mode
+        // where a message *is* its collapsed line, so an empty one loses the message entirely.
+        for kind in crate::Kind::ALL {
+            let b = block(kind.as_str(), "assistant", "a", "shell\n{\"command\":\"ls\"}");
+            assert!(!b.collapsed().text.is_empty(), "{kind:?} collapsed to nothing");
+        }
+    }
+
+    #[test]
+    fn the_wire_form_carries_the_collapsed_row_so_outline_mode_needs_no_second_copy() {
+        // The acceptance test for the move: everything a client needs to draw one outline row
+        // is on the wire. Before this, a JSON client could list a conversation's messages but
+        // had to reimplement which line stands in for each of them — which two prototypes did.
+        let t = Transcript::of(
+            "claude-code:abc",
+            &[],
+            vec![
+                block("prose", "user", "a", "  the opening question\nmore"),
+                block("tool_call", "assistant", "b", "Read\n{\"file_path\":\"/x/schema.rs\"}"),
+            ],
+        );
+        let v = serde_json::to_value(&t).expect("the transcript is plain data");
+        let msgs = v["messages"].as_array().expect("an array");
+        assert_eq!(msgs[0]["collapsed"], serde_json::json!({
+            "text": "the opening question",
+            "at": 2,
+        }));
+        // The synthesised form says so in the only way JSON can, rather than claiming an offset.
+        assert_eq!(msgs[1]["collapsed"], serde_json::json!({
+            "text": "Read /x/schema.rs",
+            "at": null,
+        }));
     }
 
     #[test]

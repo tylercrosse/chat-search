@@ -26,7 +26,7 @@ pub mod schema;
 pub mod search;
 pub mod time;
 
-pub use blocks::{Block, Density, Fold, MarkKind, Transcript, WireBlock};
+pub use blocks::{Block, Collapsed, Density, Fold, MarkKind, Transcript, WireBlock};
 pub use build::{open_for_read, IndexBuild, IndexState, Reader, Unreadable};
 pub use destination::{destinations, Destination};
 pub use eval::{Grade, Judged, QueryScore, Report};

@@ -13,7 +13,7 @@
    No CDN, no webfonts, no build step. macOS system faces with real fallbacks.
    ============================================================================= */
 
-:root {
+:root, .theme-dark {
   color-scheme: dark;
 
   --bg:       #1b2123;
@@ -22,9 +22,16 @@
   --panel-3:  #283335;
   --ink:      #e3e9e9;
   --ink-2:    #97a5a6;
-  /* 4.6:1 on --bg. Was 3.64 in dark and 2.90 in light, at 9-11px, on a tier that
-     carries date spans, group counts, section labels, the stat line and the footer —
-     real information, below the 4.5:1 AA floor for text that size. */
+  /* Was 3.64 in dark and 2.90 in light, at 9-11px, on a tier that carries date spans,
+     group counts, section labels, the stat line and the footer — real information,
+     below the 4.5:1 AA floor for text that size.
+
+     Now 4.59 dark and 4.60 light, and measured on the harder of the two grounds it
+     lands on rather than only on --bg. That distinction was worth 0.37: --panel is
+     darker than --bg in the light theme, and `.pv-meta` and every tool and reasoning
+     line in the transcript sit on the drawer, so the tier was still at 4.23:1 there
+     after the first fix — the same failure, on the ground where most of the text is.
+     palette.py solves against whichever ground is worse; see chat-search-4ar.11. */
   --ink-3:    #7a8b8e;
   --rule:     #2a3335;
   --rule-2:   #3a4547;
@@ -95,7 +102,7 @@
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 
-:root.light {
+:root.light, .theme-light {
   color-scheme: light;
 
   --bg:       #fdfdfc;
@@ -104,7 +111,7 @@
   --panel-3:  #dbe1e1;
   --ink:      #101a1c;
   --ink-2:    #55666a;
-  --ink-3:    #677779;
+  --ink-3:    #617175;
   --rule:     #dfe4e4;
   --rule-2:   #c4cdcd;
 
@@ -135,6 +142,64 @@
   --src-gemini:      #2b5bb5;
 }
 
+/* ------------------------------------------------------- the surface layer --- */
+/* Everything above is colour. Everything here is the rest of what a visual pass gets
+   to touch — type sizes, radii, the row's rhythm, the ribbon's geometry — pulled out
+   of the rules below so that a *direction* can be a set of token values rather than a
+   fork of this file. `directions.css` holds four of them and `directions.html` shows
+   them on the row and the ribbon at real size; chat-search-4ar.11 is the argument for
+   why that is the shape.
+
+   These record what the prototype already did rather than rationalising it. The type
+   scale really is five sizes and the radii really did grow ad hoc, and imposing an
+   order on them here would quietly make one direction's answer the default for all of
+   them. Rationalising the scale is a direction's job: `blueprint` squares every
+   corner, `ink` softens all six.
+
+   Two theme classes were added to the selectors above for the same reason. The theme
+   lives on `:root`, which makes it impossible to render two themes in one document —
+   the gallery works around that with iframes. `.theme-dark` / `.theme-light` let a
+   subtree carry a theme, which is what makes a direction measurable without opening
+   eight windows. */
+:root {
+  --fs-head:  13px;    /* pane titles, the preview's title */
+  --fs-body:  12.5px;  /* body text and row titles */
+  --fs-sub:   11.5px;  /* the best-match line, prose in the drawer */
+  --fs-meta:  10px;    /* everything tabular, which means everything monospaced */
+  --fs-micro: 9px;     /* keys, section labels, the topics line */
+
+  /* Radii below 3px, the 50% dots and the 10-11px pills stay literal in the rules:
+     they are geometry rather than style, and squaring a dot is not a visual direction,
+     it is a bug. The annotation overlay's 8px also stays literal — annotations are
+     commentary rather than product, which is why they are set in a serif, and they sit
+     outside the visual language on purpose. */
+  --r-1: 3px;
+  --r-2: 4px;
+  --r-3: 5px;
+  --r-4: 6px;
+  --r-5: 7px;
+  --r-6: 9px;
+
+  /* The row's rhythm. These are the tokens a direction is most likely to get wrong:
+     DESIGN-BRIEF's list of what would actually break this starts with losing
+     rows-per-screen, and every one of these trades against it. directions.html
+     measures the height of a rendered row rather than trusting anything written
+     here — a token can be set to a value the line box then ignores. */
+  --row-px:   12px;  /* the list's left and right margin */
+  --row-pt:   7px;
+  --row-pb:   8px;
+  --row-lead: 3px;   /* between the row's stacked lines */
+  --row-gap:  9px;   /* between cells on the meta line */
+
+  /* The ribbon. `--rib-top` is not `(--rib-h - --rib-track) / 2`, and the track is not
+     centred: the bottom 5px of the cell belongs to the failure and question marks and
+     the top 4px to the match ticks, both of which are drawn outside the track. A
+     direction that thickens the track has to take that from one end or the other. */
+  --rib-h:     18px;
+  --rib-track: 9px;
+  --rib-top:   6px;
+}
+
 *, *::before, *::after { box-sizing: border-box; }
 
 html, body {
@@ -147,17 +212,17 @@ body {
   background: var(--bg);
   color: var(--ink);
   font-family: var(--ui);
-  font-size: 12.5px;
+  font-size: var(--fs-body);
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
 
 button { font-family: inherit; }
 
-:focus-visible { outline: 2px solid var(--sel); outline-offset: -2px; border-radius: 3px; }
+:focus-visible { outline: 2px solid var(--sel); outline-offset: -2px; border-radius: var(--r-1); }
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: 5px; }
+::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: var(--r-3); }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ================================================================ shell === */
@@ -186,7 +251,7 @@ button { font-family: inherit; }
 .lights i:nth-child(3) { background: #28c840; }
 
 .tbar-title {
-  font-size: 12.5px;
+  font-size: var(--fs-body);
   font-weight: 600;
   color: var(--ink-2);
   letter-spacing: -0.005em;
@@ -198,16 +263,16 @@ button { font-family: inherit; }
   display: inline-flex;
   background: var(--panel);
   border: 1px solid var(--rule-2);
-  border-radius: 6px;
+  border-radius: var(--r-4);
   padding: 1.5px;
   margin-left: 10px;
 }
 
 .views button {
-  font-size: 11.5px;
+  font-size: var(--fs-sub);
   padding: 3px 12px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--r-2);
   background: transparent;
   color: var(--ink-2);
   cursor: pointer;
@@ -224,11 +289,11 @@ button { font-family: inherit; }
 
 .chip {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-2);
   background: transparent;
   border: 1px solid var(--rule-2);
-  border-radius: 5px;
+  border-radius: var(--r-3);
   padding: 3px 8px;
   cursor: pointer;
   transition: background 0.14s var(--ease), color 0.14s var(--ease), border-color 0.14s var(--ease);
@@ -258,10 +323,10 @@ button { font-family: inherit; }
   padding: 4px 10px;
   background: var(--panel);
   border: 1px solid var(--rule-2);
-  border-radius: 7px;
+  border-radius: var(--r-5);
   box-shadow: inset 0 1px 2px rgba(0,0,0,0.14);
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--fs-body);
 }
 
 .caret { width: 1.5px; height: 14px; background: var(--sel); animation: blink 1.15s steps(1) infinite; }
@@ -271,7 +336,7 @@ button { font-family: inherit; }
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  border-radius: 4px;
+  border-radius: var(--r-2);
   padding: 1.5px 3px 1.5px 6px;
   white-space: nowrap;
 }
@@ -296,7 +361,7 @@ button { font-family: inherit; }
   border: 0;
   background: transparent;
   color: currentColor;
-  font-size: 12.5px;
+  font-size: var(--fs-body);
   line-height: 1;
   padding: 0 3px;
   cursor: pointer;
@@ -311,7 +376,7 @@ button { font-family: inherit; }
 .group[hidden] { display: none; }
 .group-l {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-3);
@@ -319,10 +384,10 @@ button { font-family: inherit; }
 }
 .group button {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   padding: 3px 8px;
   border: 1px solid transparent;
-  border-radius: 5px;
+  border-radius: var(--r-3);
   background: transparent;
   color: var(--ink-3);
   cursor: pointer;
@@ -337,7 +402,7 @@ button { font-family: inherit; }
 
 .stat {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--fs-sub);
   color: var(--ink-3);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -368,7 +433,7 @@ button { font-family: inherit; }
   display: flex;
   align-items: center;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-3);
@@ -386,7 +451,7 @@ button { font-family: inherit; }
   background: transparent;
   border: 0;
   color: var(--ink-2);
-  font-size: 12.5px;
+  font-size: var(--fs-body);
   cursor: pointer;
   transition: background 0.12s var(--ease), color 0.12s var(--ease);
 }
@@ -395,29 +460,29 @@ button { font-family: inherit; }
 .srow .n {
   margin-left: auto;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
 }
 .srow.zero { opacity: 0.6; }
-.srow.zero .warn { color: var(--hit); font-family: var(--mono); font-weight: 700; font-size: 10px; }
+.srow.zero .warn { color: var(--hit); font-family: var(--mono); font-weight: 700; font-size: var(--fs-meta); }
 .srow.unconfigured { opacity: 0.42; font-style: italic; cursor: default; }
 
 .swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
-.glyph { width: 11px; flex: none; font-size: 9px; color: var(--ink-3); text-align: center; }
+.glyph { width: 11px; flex: none; font-size: var(--fs-micro); color: var(--ink-3); text-align: center; }
 
 /* ---------------------------------------------------- topic chips -------- */
 
 .tgroup { padding: 0 10px 8px; }
 .gname {
-  display: block; font-family: var(--mono); font-size: 9px;
+  display: block; font-family: var(--mono); font-size: var(--fs-micro);
   letter-spacing: 0.12em; text-transform: uppercase;
   color: var(--ink-3); opacity: 0.72; margin: 5px 0 4px;
 }
 
 .tchip {
   display: inline-flex; align-items: baseline; gap: 5px;
-  font-family: var(--mono); font-size: 9px; line-height: 1.5;
+  font-family: var(--mono); font-size: var(--fs-micro); line-height: 1.5;
   padding: 2.5px 7px; margin: 0 3px 3px 0;
   border: 1px solid var(--rule-2); border-radius: 11px;
   background: transparent; color: var(--ink-2); cursor: pointer;
@@ -428,10 +493,10 @@ button { font-family: inherit; }
 .tchip.dim { opacity: 0.4; }
 .tchip .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tchip .c { opacity: 0.6; flex: none; }
-.tchip.sm { font-size: 9px; padding: 2px 6px; }
+.tchip.sm { font-size: var(--fs-micro); padding: 2px 6px; }
 .tchip.ghost { border-style: dashed; cursor: default; }
 
-.srow.clearall { color: var(--hit); font-family: var(--mono); font-size: 10px; }
+.srow.clearall { color: var(--hit); font-family: var(--mono); font-size: var(--fs-meta); }
 
 /* What the conversation did, and where it landed. Both are free: the act comes from the
    tool name, and the paths were already mined for the project rollup and thrown away at
@@ -440,18 +505,18 @@ button { font-family: inherit; }
 .pv-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .pv-acts .gname { width: 46px; flex: none; margin: 0; }
 .pv-acts .n {
-  font-family: var(--mono); font-size: 9px; color: var(--ink-3);
+  font-family: var(--mono); font-size: var(--fs-micro); color: var(--ink-3);
   margin-right: 4px; font-variant-numeric: tabular-nums;
 }
 .pv-acts .tchip { margin: 0; max-width: 200px; }
 
 .act {
   display: inline-flex; align-items: center; gap: 4px;
-  font-family: var(--mono); font-size: 9px; letter-spacing: 0.04em;
+  font-family: var(--mono); font-size: var(--fs-micro); letter-spacing: 0.04em;
   padding: 1.5px 7px; border-radius: 10px;
   border: 1px solid var(--rule-2); color: var(--ink-2);
 }
-.act i { font-style: normal; font-size: 10px; line-height: 1; opacity: 0.8; }
+.act i { font-style: normal; font-size: var(--fs-meta); line-height: 1; opacity: 0.8; }
 .act b { font-weight: 600; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .act.run    { border-color: var(--act-run); }
 .act.change { border-color: var(--act-change); color: var(--ink); }
@@ -480,13 +545,13 @@ button { font-family: inherit; }
 }
 .tld-h {
   display: flex; align-items: center; gap: 10px;
-  font-family: var(--mono); font-size: 9px; color: var(--ink-3);
+  font-family: var(--mono); font-size: var(--fs-micro); color: var(--ink-3);
   margin-bottom: 6px;
 }
 .tld-h b { color: var(--ink-2); font-weight: 600; }
 .tld-h .sp { margin-left: auto; }
 .tld-btn {
-  font-family: var(--mono); font-size: 9px; padding: 2px 7px; border-radius: 4px;
+  font-family: var(--mono); font-size: var(--fs-micro); padding: 2px 7px; border-radius: var(--r-2);
   border: 1px solid var(--rule-2); background: transparent; color: var(--ink-3); cursor: pointer;
 }
 .tld-btn:hover { color: var(--ink); border-color: var(--ink-3); }
@@ -495,7 +560,7 @@ button { font-family: inherit; }
 .tld-track {
   position: relative; height: 42px;
   background: var(--map-bg); border: 1px solid var(--rule);
-  border-radius: 5px; cursor: ew-resize; overflow: hidden;
+  border-radius: var(--r-3); cursor: ew-resize; overflow: hidden;
 }
 /* Hits sit above the baseline, everything else below it: the drawer answers "when did
    this query land" as well as "when was I working". */
@@ -508,7 +573,7 @@ button { font-family: inherit; }
   background: color-mix(in srgb, var(--sel) 13%, transparent);
 }
 .tld-ax { display: flex; justify-content: space-between; font-family: var(--mono);
-          font-size: 9px; color: var(--ink-3); margin-top: 3px; }
+          font-size: var(--fs-micro); color: var(--ink-3); margin-top: 3px; }
 
 /* ==================================================== view: search ======== */
 
@@ -526,7 +591,7 @@ button { font-family: inherit; }
   display: block;
   width: 100%;
   text-align: left;
-  padding: 7px 12px 8px;
+  padding: var(--row-pt) var(--row-px) var(--row-pb);
   background: transparent;
   border: 0;
   border-bottom: 1px solid var(--rule);
@@ -557,13 +622,13 @@ button { font-family: inherit; }
     18px             /* forks   */
     30px;            /* age     */
   align-items: center;
-  gap: 9px;
-  margin-bottom: 3px;
+  gap: var(--row-gap);
+  margin-bottom: var(--row-lead);
 }
 
 .model {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-3);
   white-space: nowrap;
   overflow: hidden;
@@ -573,7 +638,7 @@ button { font-family: inherit; }
 /* Empty on more rows than not, so it has to disappear rather than sit there as a gap. */
 .edits {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   text-align: right;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -585,9 +650,9 @@ button { font-family: inherit; }
 /* The third line: what is true of the conversation, as opposed to what is true of this
    query. Deliberately the quietest thing in the row. */
 .row-topics {
-  margin-top: 3px;
+  margin-top: var(--row-lead);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.02em;
   color: var(--ink-3);
   white-space: nowrap;
@@ -617,7 +682,7 @@ button { font-family: inherit; }
   align-items: center;
   gap: 5px;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   white-space: nowrap;
   overflow: hidden;
 }
@@ -636,17 +701,17 @@ button { font-family: inherit; }
 
 .dir, .msgs, .age {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-2);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
   overflow: hidden;
 }
 .msgs, .age { text-align: right; }
-.fork { font-family: var(--mono); font-size: 10px; color: var(--ink-3); text-align: right; }
+.fork { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-3); text-align: right; }
 
 .row-title {
-  font-size: 12.5px;
+  font-size: var(--fs-body);
   font-weight: 500;
   line-height: 1.3;
   letter-spacing: -0.004em;
@@ -658,8 +723,8 @@ button { font-family: inherit; }
 /* Line 3: the true best match, framed with its provenance. 66-85% of hits land in
    tool traffic, so without the frame this reads as naked log spew. */
 .row-snip {
-  margin-top: 3px;
-  font-size: 11.5px;
+  margin-top: var(--row-lead);
+  font-size: var(--fs-sub);
   line-height: 1.35;
   color: var(--ink-2);
   display: flex;
@@ -667,14 +732,14 @@ button { font-family: inherit; }
   white-space: nowrap;
   overflow: hidden;
 }
-.row-snip .sig { flex: none; color: var(--ink-3); font-family: var(--mono); font-size: 10px; }
+.row-snip .sig { flex: none; color: var(--ink-3); font-family: var(--mono); font-size: var(--fs-meta); }
 .row-snip .prov {
   flex: none;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--k-tool-ink);
   background: var(--panel-2);
-  border-radius: 3px;
+  border-radius: var(--r-1);
   padding: 0 4px;
 }
 .row-snip .frag { overflow: hidden; text-overflow: ellipsis; font-style: italic; }
@@ -686,7 +751,7 @@ button { font-family: inherit; }
 
 /* Width comes from the grid track, not from a second number that has to be kept in
    sync with it — they had already drifted, and the track spilled into the gutter. */
-.ribbon { position: relative; width: 100%; height: 18px; }
+.ribbon { position: relative; width: 100%; height: var(--rib-h); }
 
 .rb-track {
   position: absolute;
@@ -694,8 +759,8 @@ button { font-family: inherit; }
      keeps its full width so the columns either side stay on the grid; only the drawn
      track varies, which is what makes length legible down the column. */
   left: 0;
-  top: 6px;
-  height: 9px;
+  top: var(--rib-top);
+  height: var(--rib-track);
   background: var(--map-bg);
   border-radius: 2px;
   overflow: hidden;
@@ -744,7 +809,7 @@ button { font-family: inherit; }
   padding: 5px 12px;
   border-bottom: 1px solid var(--rule);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.06em;
   color: var(--ink-3);
   align-items: center;
@@ -755,22 +820,22 @@ button { font-family: inherit; }
 /* ------------------------------------------------------------- preview --- */
 
 .pv-head { padding: 10px 12px; border-bottom: 1px solid var(--rule); }
-.pv-title { font-size: 13px; font-weight: 600; line-height: 1.3; letter-spacing: -0.005em; }
+.pv-title { font-size: var(--fs-head); font-weight: 600; line-height: 1.3; letter-spacing: -0.005em; }
 .pv-meta {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-3);
   margin-top: 5px;
   font-variant-numeric: tabular-nums;
 }
-.zoom { display: inline-flex; border: 1px solid var(--rule-2); border-radius: 6px; padding: 1.5px; margin-top: 9px; }
+.zoom { display: inline-flex; border: 1px solid var(--rule-2); border-radius: var(--r-4); padding: 1.5px; margin-top: 9px; }
 .zoom button {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.06em;
   padding: 2px 9px;
   border: 0;
-  border-radius: 4px;
+  border-radius: var(--r-2);
   background: transparent;
   color: var(--ink-3);
   cursor: pointer;
@@ -798,7 +863,7 @@ button { font-family: inherit; }
   display: flex;
   align-items: stretch;
   border: 1px solid var(--rule-2);
-  border-radius: 6px;
+  border-radius: var(--r-4);
   overflow: hidden;
   background: transparent;
   transition: border-color 0.13s var(--ease);
@@ -842,7 +907,7 @@ button { font-family: inherit; }
   background: transparent;
   cursor: pointer;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.04em;
   color: var(--ink-3);
 }
@@ -855,9 +920,9 @@ button { font-family: inherit; }
 
 .fid-all { display: flex; gap: 4px; margin-top: 7px; }
 .fid-all button {
-  font-family: var(--mono); font-size: 9px; letter-spacing: 0.04em;
+  font-family: var(--mono); font-size: var(--fs-micro); letter-spacing: 0.04em;
   padding: 2.5px 9px;
-  border: 1px solid var(--rule-2); border-radius: 5px;
+  border: 1px solid var(--rule-2); border-radius: var(--r-3);
   background: transparent; color: var(--hit); cursor: pointer;
 }
 .fid-all button:hover { border-color: var(--hit); }
@@ -867,7 +932,7 @@ button { font-family: inherit; }
 .blk.ovr .gut { box-shadow: inset 0 0 0 1px var(--hit); }
 
 .pv { display: grid; grid-template-columns: 1fr 50px; flex: 1; min-height: 0; }
-.pv-body { overflow-y: auto; padding: 10px 12px 40px; font-size: 12.5px; }
+.pv-body { overflow-y: auto; padding: 10px 12px 40px; font-size: var(--fs-body); }
 
 /* Gutter spine: the categorical channel, so text contrast can stay identical for
    user and assistant. me9.1.1 — "do not privilege user turns". */
@@ -879,7 +944,7 @@ button { font-family: inherit; }
 .blk.reason .gut { background: var(--k-reason); }
 .blk.err    .gut { background: var(--err); }
 
-.blk .sig { font-family: var(--mono); font-size: 10px; color: var(--ink-3); padding-top: 1px; }
+.blk .sig { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-3); padding-top: 1px; }
 
 /* The tool name is the label; the argument is the content, so the name is the quieter of
    the two. Reverses what the pane did before, where the name was all there was. */
@@ -893,8 +958,8 @@ button { font-family: inherit; }
 
 /* Equal contrast. Neither role is demoted. */
 .blk.user .txt, .blk.agent .txt { color: var(--ink); }
-.blk.tool .txt, .blk.reason .txt { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
-.blk.err .txt { font-family: var(--mono); font-size: 10px; color: var(--err); }
+.blk.tool .txt, .blk.reason .txt { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-3); }
+.blk.err .txt { font-family: var(--mono); font-size: var(--fs-meta); color: var(--err); }
 .blk.off { opacity: 0.42; }
 .blk.q .txt { color: var(--sel); }
 
@@ -907,7 +972,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   gap: 8px;
   margin: 9px 0 10px;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-3);
@@ -929,12 +994,12 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   cursor: pointer;
   color: var(--ink-3);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   align-items: baseline;
 }
 .seg-sum:hover { color: var(--ink-2); }
 .seg-sum .gut { background: var(--k-tool); border-radius: 2px; align-self: stretch; }
-.seg-sum .caret { font-size: 9px; }
+.seg-sum .caret { font-size: var(--fs-micro); }
 .seg-sum b { color: var(--hit); font-weight: 600; }
 .seg-sum i { color: var(--sel); font-style: normal; }
 
@@ -972,10 +1037,10 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   gap: 10px;
   margin: 0 0 12px;
 }
-.ws-h h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.008em; }
+.ws-h h2 { margin: 0; font-size: var(--fs-head); font-weight: 600; letter-spacing: -0.008em; }
 .ws-h .sub {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
 }
@@ -987,7 +1052,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 
 .card {
   border: 1px solid var(--rule);
-  border-radius: 9px;
+  border-radius: var(--r-6);
   background: var(--panel);
   padding: 12px 13px 13px;
   display: flex;
@@ -1004,17 +1069,17 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .card.proposal { border-style: dashed; border-color: var(--rule-2); background: transparent; }
 .card.proposal.going { opacity: 0; transform: scale(0.97); }
 
-.card-t { font-size: 13px; font-weight: 600; letter-spacing: -0.005em; line-height: 1.3; }
-.card-t .n { font-family: var(--mono); font-weight: 400; font-size: 10px; color: var(--ink-3); margin-left: 6px; }
+.card-t { font-size: var(--fs-head); font-weight: 600; letter-spacing: -0.005em; line-height: 1.3; }
+.card-t .n { font-family: var(--mono); font-weight: 400; font-size: var(--fs-meta); color: var(--ink-3); margin-left: 6px; }
 
 /* the rule, stated rather than implied */
 .rule-line {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-3);
   line-height: 1.55;
   background: var(--map-bg);
-  border-radius: 5px;
+  border-radius: var(--r-3);
   padding: 6px 8px;
 }
 .rule-line .q { color: var(--sel); }
@@ -1023,10 +1088,10 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .rule-line .eq { color: var(--ink-2); }
 
 /* source composition — the cross-tool claim, made visible */
-.compo { display: flex; height: 7px; border-radius: 4px; overflow: hidden; gap: 1.5px; }
+.compo { display: flex; height: 7px; border-radius: var(--r-2); overflow: hidden; gap: 1.5px; }
 .compo i { display: block; }
 
-.compo-key { display: flex; flex-wrap: wrap; gap: 4px 11px; font-family: var(--mono); font-size: 9px; color: var(--ink-3); }
+.compo-key { display: flex; flex-wrap: wrap; gap: 4px 11px; font-family: var(--mono); font-size: var(--fs-micro); color: var(--ink-3); }
 .compo-key span { display: inline-flex; align-items: center; gap: 4px; }
 .compo-key i { width: 7px; height: 7px; border-radius: 2px; }
 .compo-key i.ico { width: 11px; height: 11px; border-radius: 0; }
@@ -1034,9 +1099,9 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .terms { display: flex; flex-wrap: wrap; gap: 4px; }
 .term {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--r-2);
   background: var(--panel-2);
   color: var(--ink-2);
 }
@@ -1044,9 +1109,9 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .card-actions { display: flex; gap: 6px; margin-top: 2px; }
 
 .btn {
-  font-size: 11.5px;
+  font-size: var(--fs-sub);
   padding: 4px 11px;
-  border-radius: 6px;
+  border-radius: var(--r-4);
   border: 1px solid var(--rule-2);
   background: transparent;
   color: var(--ink-2);
@@ -1059,24 +1124,24 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 
 .empty {
   border: 1px dashed var(--rule-2);
-  border-radius: 9px;
+  border-radius: var(--r-6);
   padding: 22px;
   text-align: center;
   color: var(--ink-3);
-  font-size: 12.5px;
+  font-size: var(--fs-body);
 }
-.empty b { display: block; color: var(--ink-2); font-weight: 600; margin-bottom: 4px; font-size: 12.5px; }
+.empty b { display: block; color: var(--ink-2); font-weight: 600; margin-bottom: 4px; font-size: var(--fs-body); }
 
 /* collection detail */
-.detail { margin-top: 12px; border: 1px solid var(--sel); border-radius: 9px; overflow: hidden; }
+.detail { margin-top: 12px; border: 1px solid var(--sel); border-radius: var(--r-6); overflow: hidden; }
 .detail-h {
   display: flex; align-items: center; gap: 10px;
   padding: 9px 12px;
   background: var(--sel-bg);
   border-bottom: 1px solid var(--rule);
 }
-.detail-h .t { font-size: 12.5px; font-weight: 600; color: var(--sel); }
-.detail-h .m { font-family: var(--mono); font-size: 10px; color: var(--ink-2); margin-left: auto; }
+.detail-h .t { font-size: var(--fs-body); font-weight: 600; color: var(--sel); }
+.detail-h .m { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-2); margin-left: auto; }
 
 .member {
   display: grid;
@@ -1085,14 +1150,14 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   align-items: center;
   padding: 5px 12px;
   border-bottom: 1px solid var(--rule);
-  font-size: 12.5px;
+  font-size: var(--fs-body);
 }
 .member:last-child { border-bottom: 0; }
 .member .why {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   padding: 1.5px 5px;
-  border-radius: 4px;
+  border-radius: var(--r-2);
   text-align: center;
 }
 .why.matched { background: var(--sel-bg); color: var(--sel); }
@@ -1128,7 +1193,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .pj.open .pj-head { background: transparent; }
 
 .pj-head .tw {
-  font-size: 9px;
+  font-size: var(--fs-micro);
   color: var(--ink-3);
   transition: transform 0.13s var(--ease);
   transform-origin: 45% 50%;
@@ -1137,7 +1202,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 
 .pj-head .nm {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--fs-body);
   font-weight: 600;
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -1147,20 +1212,20 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .pj.open .pj-head .nm { color: var(--sel); }
 
 .pj-head .srcs { display: inline-flex; gap: 3px; }
-.badge.tiny { font-size: 0; padding: 2px; gap: 0; border-radius: 3px; }
+.badge.tiny { font-size: 0; padding: 2px; gap: 0; border-radius: var(--r-1); }
 .badge.tiny .ico { width: 10px; height: 10px; }
 .badge.tiny span { display: none; }
 
 .pj-head .cnt, .pj-head .when {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-3);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 .pj-head .cnt { text-align: right; }
 .pj-head .cnt b { color: var(--ink); font-weight: 600; }
-.pj-head .cnt i { font-style: normal; opacity: 0.65; font-size: 9px; }
+.pj-head .cnt i { font-style: normal; opacity: 0.65; font-size: var(--fs-micro); }
 
 /* Activity, not volume: 26 weeks of the sample so a dormant project and a live one are
    distinguishable before you open either. */
@@ -1180,7 +1245,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 }
 .pj-path {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-3);
   margin-bottom: 7px;
   overflow: hidden;
@@ -1194,7 +1259,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .pj-nums {
   gap: 14px;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   color: var(--ink-3);
   margin: 7px 0 0;
   padding-left: 44px;
@@ -1210,7 +1275,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   gap: 8px;
   padding: 9px 12px 4px 36px;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink-3);
@@ -1231,7 +1296,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   border: 0;
   color: var(--ink-3);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   cursor: pointer;
   text-align: left;
 }
@@ -1241,14 +1306,14 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 
 .pj-tail { padding: 9px 12px; border-bottom: 1px solid var(--rule); }
 .pj-tail:hover { color: var(--ink-2); background: var(--panel-2); }
-.pj-tail .tw { font-size: 9px; transition: transform 0.13s var(--ease); }
+.pj-tail .tw { font-size: var(--fs-micro); transition: transform 0.13s var(--ease); }
 .pj-tail[aria-expanded="true"] .tw { transform: rotate(90deg); }
 .pj-tail .n { margin-left: auto; font-variant-numeric: tabular-nums; }
 .pj.small .pj-head { padding-left: 24px; }
 
 /* Bands carry one line of explanation where the number alone would mislead. */
 .note-in {
-  font-size: 11.5px;
+  font-size: var(--fs-sub);
   line-height: 1.55;
   color: var(--ink-3);
   max-width: 74ch;
@@ -1259,18 +1324,18 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
    cross-tool run, the untagged residue — where that changes how to read the count. */
 .pj-head .tag {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   padding: 1.5px 5px;
-  border-radius: 3px;
+  border-radius: var(--r-1);
   border: 1px solid var(--rule-2);
   color: var(--ink-3);
   flex: none;
 }
 .pj-head .tag.warn { border-color: var(--hit); color: var(--hit); }
 
-.srow.muted { color: var(--ink-3); font-family: var(--mono); font-size: 10px; }
+.srow.muted { color: var(--ink-3); font-family: var(--mono); font-size: var(--fs-meta); }
 
 /* The drawer's way back to the project it belongs to. */
 .pv-proj {
@@ -1292,8 +1357,8 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 
 .lib-sec + .lib-sec { margin-top: 26px; }
 .lib-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
-.lib-h b { font-size: 13px; font-weight: 600; letter-spacing: -0.008em; }
-.lib-h span { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.lib-h b { font-size: var(--fs-head); font-weight: 600; letter-spacing: -0.008em; }
+.lib-h span { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-3); }
 
 .lib-row {
   display: grid;
@@ -1302,13 +1367,13 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   gap: 12px;
   padding: 7px 10px;
   border-bottom: 1px solid var(--rule);
-  font-size: 12.5px;
+  font-size: var(--fs-body);
 }
 .lib-row:hover { background: var(--panel-2); }
 .lib-row .t { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lib-row .rule {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1316,7 +1381,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 }
 .lib-row .n {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-2);
   text-align: right;
   font-variant-numeric: tabular-nums;
@@ -1324,9 +1389,9 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .lib-row .acts { display: inline-flex; gap: 4px; }
 .lib-row .acts button {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   padding: 2.5px 8px;
-  border-radius: 5px;
+  border-radius: var(--r-3);
   border: 1px solid var(--rule-2);
   background: transparent;
   color: var(--ink-2);
@@ -1353,15 +1418,15 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   border-bottom: 1px solid var(--rule);
   margin-bottom: 12px;
 }
-.day-h b { font-size: 13px; font-weight: 600; letter-spacing: -0.008em; }
-.day-h .w { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
-.day-h .m { margin-left: auto; font-family: var(--mono); font-size: 10px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.day-h b { font-size: var(--fs-head); font-weight: 600; letter-spacing: -0.008em; }
+.day-h .w { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-3); }
+.day-h .m { margin-left: auto; font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 
 .sit-row { display: grid; grid-template-columns: 46px 16px minmax(0, 1fr); gap: 10px; }
 
 .sit-time {
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-3);
   text-align: right;
   padding-top: 9px;
@@ -1391,7 +1456,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   background: var(--panel);
   border: 1px solid var(--rule);
   border-left: 2px solid;
-  border-radius: 0 7px 7px 0;
+  border-radius: 0 var(--r-5) var(--r-5) 0;
   cursor: pointer;
   transition: background 0.16s var(--ease), transform 0.16s var(--ease);
 }
@@ -1403,24 +1468,24 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .sit-card:disabled { cursor: default; opacity: 0.72; }
 .sit-card:disabled:hover { background: var(--panel); transform: none; }
 
-.sit-t { font-size: 12.5px; color: var(--ink); line-height: 1.35; }
+.sit-t { font-size: var(--fs-body); color: var(--ink); line-height: 1.35; }
 .sit-m {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
   margin-top: 5px;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   color: var(--ink-3);
 }
 
-.gap-row { font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em; color: var(--ink-3); padding: 2px 0; }
+.gap-row { font-family: var(--mono); font-size: var(--fs-micro); letter-spacing: 0.1em; color: var(--ink-3); padding: 2px 0; }
 
 .handoff {
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--fs-micro);
   letter-spacing: 0.06em;
   color: var(--hit);
   border: 1px solid var(--hit);
-  border-radius: 4px;
+  border-radius: var(--r-2);
   padding: 1px 5px;
 }
 
@@ -1434,7 +1499,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   position: relative;
   width: 76px; height: 13px;
   background: var(--map-bg);
-  border-radius: 3px;
+  border-radius: var(--r-1);
   overflow: hidden;
   display: inline-block;
   vertical-align: -2px;
@@ -1456,7 +1521,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   border-top: 1px solid var(--rule);
   background: var(--panel);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-3);
 }
 .fbar kbd {
@@ -1464,7 +1529,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   background: var(--panel-2);
   border: 1px solid var(--rule-2);
   border-bottom-width: 2px;
-  border-radius: 4px;
+  border-radius: var(--r-2);
   padding: 0 4px;
   color: var(--ink-2);
 }
@@ -1499,7 +1564,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
   background: var(--hit);
   color: #221802;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   font-weight: 700;
   display: flex; align-items: center; justify-content: center;
   transform: translate(-50%, -50%);
@@ -1511,7 +1576,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .halo {
   position: absolute;
   border: 1px solid var(--hit);
-  border-radius: 5px;
+  border-radius: var(--r-3);
   background: rgba(240, 185, 95, 0.07);
 }
 
@@ -1530,7 +1595,7 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .note b {
   display: block;
   font-family: var(--serif);
-  font-size: 13px;
+  font-size: var(--fs-head);
   font-weight: 600;
   line-height: 1.25;
   color: var(--ink);
@@ -1539,22 +1604,22 @@ mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding
 .note p {
   margin: 0;
   font-family: var(--serif);
-  font-size: 12.5px;
+  font-size: var(--fs-body);
   line-height: 1.5;
   color: var(--ink-2);
 }
-.note code { font-family: var(--mono); font-size: 10px; color: var(--hit); }
+.note code { font-family: var(--mono); font-size: var(--fs-meta); color: var(--hit); }
 
 .anno-hint {
   position: absolute;
   left: 50%; bottom: 18px;
   transform: translateX(-50%);
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--fs-meta);
   color: var(--ink-2);
   background: var(--panel);
   border: 1px solid var(--rule-2);
-  border-radius: 6px;
+  border-radius: var(--r-4);
   padding: 5px 11px;
   pointer-events: auto;
 }

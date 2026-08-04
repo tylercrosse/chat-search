@@ -547,16 +547,17 @@ pub fn show(
         println!("{:#}", serde_json::to_value(&t)?);
         return Ok(());
     }
-    // Deliberately thin. The readable form is a table of contents, not a second renderer —
-    // `cs-tui` already owns the one that wraps, folds and marks, and a second one here would
-    // be the duplication `blocks` exists to prevent.
+    // Deliberately thin. The readable form is the whole conversation in outline, not a second
+    // renderer — `cs-tui` already owns the one that wraps, folds and marks, and a second one
+    // here would be the duplication `blocks` exists to prevent. Even the one line each message
+    // shows is core's: this printed the first non-empty line for itself until `blocks` learned
+    // to prefer the line the query hit, which made it the third copy of that rule.
     println!("{} — {} messages, {} drawn, {} thread(s)", t.conv_id, t.count, t.drawn, t.threads);
     for m in &t.messages {
         if !m.drawn {
             continue;
         }
-        let first = m.block.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-        let head: String = first.chars().take(96).collect();
+        let head: String = m.collapsed.text.chars().take(96).collect();
         let mark = if m.block.marks.is_empty() { ' ' } else { '*' };
         println!("{mark} {:>5}  {:<11} {:<9} {head}", m.block.seq, m.block.kind, m.block.role);
     }

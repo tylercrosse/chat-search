@@ -237,11 +237,18 @@ Documented rather than changed, because changing them changes a published interf
 ## Not covered here
 
 `cs show --json` is the second client contract ADR 12 published, and it has no written
-statement of its shape either — `chat-search-me9.34`. Nothing in it is ever null, which is a
-sentence worth writing down rather than deriving from Rust, and it is otherwise the
-better-specified of the two: it carries a `v` and it names its offset encoding on the wire as
-`mark_offsets`, both of which this contract lacks (`chat-search-me9.33`). This file documents
-`snippet_spans` in prose because there is nowhere on the wire that says it.
+statement of its shape either — `chat-search-me9.34`. It is otherwise the better-specified of
+the two: it carries a `v` and it names its offset encoding on the wire as `mark_offsets`, both
+of which this contract lacks (`chat-search-me9.33`). This file documents `snippet_spans` in
+prose because there is nowhere on the wire that says it.
+
+Exactly one field in it is nullable, and it was not until `chat-search-me9.20`: a message
+carries `collapsed`, the one line it shows when folded, and `collapsed.at` is the byte offset
+that line was lifted from. A `tool_call` collapses to a line *synthesised* from its name and
+one argument rather than quoted out of its text, so there is no offset to give and `at` is
+null. Encoded as a null rather than a zero on purpose — a client that skips the check and
+rebases against zero would mark whatever byte happened to sit there, which is a wrong
+highlight instead of a loud failure.
 
 `cs status`, `cs scan`, `cs index`, `cs archive`, `cs needs` and `cs explain` also take
 `--json`; those are operator output rather than a client seam, and nothing has been promised

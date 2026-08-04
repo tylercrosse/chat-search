@@ -682,9 +682,12 @@ What is still needed to feed this prototype from the real index, in order:
 1. **Kind runs in search results.** The ribbon draws user/agent/reason/tool bands positionally,
    and `cs search --json` carries `match_seqs` but no per-message kinds. `cs show` is the wrong
    tool at 354 rows — this is a smaller, search-side addition (`me9.19`).
-2. **The collapsed forms.** `tool_summary` and `recognition_line` are still in `cs-tui`, and
-   `export.py`'s `call_detail()` is a second implementation of the first one. Moving them is
-   what makes outline mode reproducible by any client (`me9.20`).
+2. ~~**The collapsed forms.**~~ Done — `me9.20`, 2026-08-04. `tool_summary`, `recognition_line`
+   and the choice between them are `cs_core::blocks` now, and every message on `cs show --json`
+   carries the `collapsed` line it folds to plus the offset that line came from, so a client
+   marks it without re-deriving anything. `export.py` asks for it rather than computing it.
+   Deleting `call_detail()` measured it first: the second implementation had learned `cmd`,
+   patch targets and the prose keys that the first had not, and those are folded in.
 3. The rest of the row is feedable from `cs search --json` today: `Group` already carries
    `match_seqs`, `user_turns`, `msg_count`, `prose_count`, `cwd`, `ended_date`, `title` and
    `destinations`. Still missing there: model, topics and diff counts.

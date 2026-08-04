@@ -314,8 +314,11 @@ client itself — transport, model, view, rows — is about 500.
 
 Recorded so the recommendation is not read as covering more than it does.
 
-- **No reader pane.** Deliberate: `tool_summary` and `recognition_line` are still in `cs-tui`
-  (`chat-search-me9.20`), so a Swift reader would either render raw text or duplicate them.
+- **No reader pane.** Deliberate: `tool_summary` and `recognition_line` were still in `cs-tui`
+  when this ran, so a Swift reader would either render raw text or duplicate them. *Since
+  landed — `chat-search-me9.20`, 2026-08-04:* both are in `cs-core` and `cs show --json` carries
+  each message's collapsed line, so the obstacle this names is gone. The measurement is
+  unaffected; it never touched `cs show`.
 - **No `Canvas` drawing.** The ribbon, the minimap and the gutter spine are the parts of the design
   brief most likely to be hard, and none of them was attempted.
 - **No theming, no accessibility audit, no localisation, no packaging.** No bundle, no signing, no

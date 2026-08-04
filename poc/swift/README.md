@@ -47,9 +47,11 @@ keystrokes; `--rows` the size of the list.
 
 ## What it deliberately does not do
 
-**No reader pane.** `cs show --json` exists, but `tool_summary` and `recognition_line` still live
-in `cs-tui` (`chat-search-me9.20`), so a Swift reader would either render raw message text or
-reimplement them — and reimplementing them is the duplication `chat-search-me9.17` exists to stop.
+**No reader pane.** Not blocked any more: `chat-search-me9.20` moved `tool_summary` and
+`recognition_line` into `cs-core`, so every message on `cs show --json` now carries the
+`collapsed` line it folds to and the offset to rebase its marks onto. A Swift reader would
+decode that rather than reimplement it. Simply not attempted here — this program measures what
+a process per keystroke costs, and a reader pane does not bear on that.
 
 **No debounce.** The whole question is what a process per keystroke costs, and a debounce answers
 a different question by hiding that one. `RESULTS.md` §2 has the number that says whether one is

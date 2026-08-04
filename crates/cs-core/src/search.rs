@@ -2036,6 +2036,226 @@ mod group_tests {
     }
 }
 
+/// What a search returns once an activity log has been read back as the chats it was.
+///
+/// [`crate::sittings`] proves the fold itself — where a sitting starts and stops. These prove
+/// that the fold *arrives*: that a result set counts, positions, dates and totals a sitting as
+/// one row rather than as the several conversations the index holds. The two failures are
+/// different, and the second is the one chat-search-o1i.5 is about.
+#[cfg(test)]
+mod sitting_tests {
+    use super::*;
+
+    const MINUTE: i64 = 60_000;
+
+    /// One activity record: a conversation of `turns`, at one instant, under one surface.
+    ///
+    /// The counts on `conversation` are set by hand rather than left at their defaults,
+    /// because summing them is exactly what a sitting does — a fixture that left them zero
+    /// would agree with the code about nothing.
+    fn record(conn: &Connection, id: &str, surface: &str, ended: i64, turns: &[(&str, &str)]) {
+        let prose = turns.iter().filter(|(_, kind)| *kind == "prose").count() as i64;
+        conn.execute(
+            "INSERT INTO conversation(id, source, native_id, surface, title, started_at,
+                                      ended_at, msg_count, prose_count, user_turns)
+             VALUES (?1, 'google-takeout', ?1, ?2, ?1, ?3, ?3, ?4, ?5, 1)",
+            params![id, surface, ended, turns.len() as i64, prose],
+        )
+        .unwrap();
+        for (i, (text, kind)) in turns.iter().enumerate() {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            conn.execute(
+                "INSERT INTO message(id, conv_id, thread_key, seq, role, kind, ts, text)
+                 VALUES (?1, ?2, 'main', ?3, ?4, ?5, ?6, ?7)",
+                params![format!("{id}:m{i}"), id, i as i64, role, kind, ended, text],
+            )
+            .unwrap();
+            if *kind == "prose" {
+                let rowid = conn.last_insert_rowid();
+                conn.execute(
+                    "INSERT INTO fts_prose(rowid, text) VALUES (?1, ?2)",
+                    params![rowid, text],
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    /// Three records inside one 30-minute window, all about the same thing, plus a fourth an
+    /// hour later that is a different sitting and a fifth that is a different product.
+    fn corpus() -> Connection {
+        let conn = crate::open(":memory:").unwrap();
+        record(&conn, "g:1", "gemini-apps", 0, &[("what is a monad", "prose"), ("a monoid", "prose")]);
+        record(&conn, "g:2", "gemini-apps", 10 * MINUTE, &[("monad laws", "prose"), ("three of them", "prose")]);
+        record(&conn, "g:3", "gemini-apps", 25 * MINUTE, &[("monad in rust", "prose"), ("no higher kinds", "prose")]);
+        record(&conn, "g:4", "gemini-apps", 120 * MINUTE, &[("monad again", "prose"), ("still a monoid", "prose")]);
+        record(&conn, "a:1", "ai-mode", 12 * MINUTE, &[("monad definition", "prose"), ("endofunctors", "prose")]);
+        conn
+    }
+
+    fn opts() -> SearchOptions {
+        SearchOptions { limit: 20, nested: 3, ..SearchOptions::new(0) }
+    }
+
+    #[test]
+    fn several_records_of_one_chat_come_back_as_one_row_rather_than_as_several() {
+        // The whole of chat-search-o1i.5. Five conversations hold the word; three of them were
+        // one sitting at the keyboard, so the reader is owed three rows and not five.
+        let conn = corpus();
+        let groups = search_grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        let ids: Vec<&str> = groups.iter().map(|g| g.conv_id.as_str()).collect();
+        assert_eq!(ids.len(), 3, "got {ids:?}");
+
+        let folded = groups.iter().find(|g| g.sitting.is_some()).unwrap();
+        // Keyed on the record that *opened* it, whose prompt is the row's title. Any other
+        // choice would title the row with something said in the middle of the conversation.
+        assert_eq!(folded.conv_id, "g:1");
+        assert_eq!(folded.title.as_deref(), Some("g:1"));
+        assert_eq!(folded.sitting.as_ref().unwrap().members, ["g:1", "g:2", "g:3"]);
+        // Reported rather than implied: a client has to be able to say *this row is three
+        // records we believe were one sitting*, and on what basis.
+        assert_eq!(folded.sitting.as_ref().unwrap().gap_ms, crate::sittings::GAP_MS);
+
+        // The hour-long silence and the other product are their own rows, and neither is a
+        // fold, so both say so by carrying nothing.
+        for id in ["g:4", "a:1"] {
+            let row = groups.iter().find(|g| g.conv_id == id).unwrap();
+            assert!(row.sitting.is_none(), "{id} is one conversation and should say so");
+        }
+    }
+
+    #[test]
+    fn a_sitting_is_counted_and_positioned_as_the_conversation_it_was() {
+        let conn = corpus();
+        let groups = search_grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        let folded = groups.iter().find(|g| g.conv_id == "g:1").unwrap();
+
+        // Six messages and three turns, not the opener's two and one.
+        assert_eq!((folded.msg_count, folded.prose_count, folded.user_turns), (6, 6, 3));
+        // Positions run across the sitting rather than restarting per record, which is what
+        // makes them a coordinate the strip can be drawn in: seq 0 of `g:3` is position 4.
+        assert_eq!(folded.match_seqs, [0, 2, 4]);
+        assert_eq!(folded.match_count, 3);
+        // And the two halves agree, which is what breaks first if either is taken from the
+        // opening record alone: three marks spread across the strip. Positions numbered per
+        // record against a sitting-wide total would draw `▄·········`, and a sitting-wide
+        // numbering against one record's total would run off the end of it.
+        assert_eq!(match_density(&folded.match_seqs, folded.msg_count), "▁··▁··▁···");
+
+        // Dated by the last record in the sitting: "when was this" means when it ended.
+        assert_eq!(folded.ended_at, Some(25 * MINUTE));
+    }
+
+    #[test]
+    fn the_nested_hits_stay_with_the_records_they_came_from() {
+        // A sitting is a way of *reading* the index, not a rewrite of it. The row is folded;
+        // the messages under it still name the conversation that actually holds them, which is
+        // what lets a client open the right one.
+        let conn = corpus();
+        let groups = search_grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        let folded = groups.iter().find(|g| g.conv_id == "g:1").unwrap();
+        let mut from: Vec<&str> = folded.hits.iter().map(|h| h.conv_id.as_str()).collect();
+        from.sort_unstable();
+        assert_eq!(from, ["g:1", "g:2", "g:3"]);
+    }
+
+    #[test]
+    fn the_total_beside_a_result_set_counts_rows_and_not_records() {
+        // A header saying "5 matched" over three rows is the same bug as the duplicate rows,
+        // one layer up: the number and the list have to be counting the same thing.
+        let conn = corpus();
+        let query = Query::exact("monad");
+        let counted = search_grouped_counted(&conn, &query, &opts()).unwrap();
+        assert_eq!(counted.groups.len(), 3);
+        assert_eq!(counted.matched, Total::Exact(3));
+        // And the settling pass, which is a different query and therefore a second chance to
+        // count the wrong thing.
+        assert_eq!(count_matching(&conn, &query, &opts()).unwrap(), 3);
+    }
+
+    #[test]
+    fn the_browse_list_folds_too_and_its_total_agrees_with_it() {
+        // The list a typeahead opens on, where the shredding shows worst: unfolded, the
+        // activity log is a third of everything a reader scrolls past.
+        let conn = corpus();
+        let groups = recent(&conn, &Query::exact(""), 0, 20, false).unwrap();
+        let ids: Vec<&str> = groups.iter().map(|g| g.conv_id.as_str()).collect();
+        // Ordered by when each row *ended*, so the sitting sorts on its last record rather
+        // than on the one that opened it two hours earlier.
+        assert_eq!(ids, ["g:4", "g:1", "a:1"]);
+        assert_eq!(groups[1].sitting.as_ref().unwrap().members, ["g:1", "g:2", "g:3"]);
+
+        // Filling the limit forces the count onto the second branch, which is the one that
+        // asks the database rather than reading `groups.len()`.
+        let counted = search_grouped_counted(
+            &conn,
+            &Query::exact(""),
+            &SearchOptions { limit: 3, ..opts() },
+        )
+        .unwrap();
+        assert_eq!(counted.matched, Total::Exact(3), "the browse total counts rows");
+    }
+
+    #[test]
+    fn a_sittings_shape_is_its_records_end_to_end_with_the_seams_encoded_away() {
+        use crate::blocks::{Band, Run};
+        let conn = corpus();
+        let shaped = SearchOptions { shape: true, ..opts() };
+        let groups = search_grouped(&conn, &Query::exact("monad"), &shaped).unwrap();
+        let folded = groups.iter().find(|g| g.conv_id == "g:1").unwrap();
+        // Six bands, from three records of two — the opening record's shape alone would be
+        // two, and a strip drawn from it would say "one question" about a nine-turn sitting.
+        assert_eq!(
+            folded.kind_runs,
+            [
+                Run(Band::User, 1), Run(Band::Agent, 1), Run(Band::User, 1),
+                Run(Band::Agent, 1), Run(Band::User, 1), Run(Band::Agent, 1),
+            ]
+        );
+
+        // And the seam is re-encoded rather than merely concatenated: two records that both
+        // end and begin in the same band are one run across the join, not two. This is why
+        // the bands are joined and run-length encoded once at the end, instead of each
+        // record's runs being appended to the last record's.
+        let conn = crate::open(":memory:").unwrap();
+        record(&conn, "g:1", "gemini-apps", 0, &[("monad", "prose")]);
+        record(&conn, "g:2", "gemini-apps", MINUTE, &[("monad again", "prose")]);
+        let groups = search_grouped(&conn, &Query::exact("monad"), &shaped).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].kind_runs, [Run(Band::User, 2)]);
+    }
+
+    #[test]
+    fn a_corpus_with_no_activity_log_in_it_is_unchanged_by_any_of_this() {
+        // The fold has to be invisible to the 70% of this corpus that arrives as transcripts.
+        // Both tables are empty for them, so every join finds nothing and every row is its
+        // own conversation.
+        let conn = crate::open(":memory:").unwrap();
+        for (i, id) in ["c:1", "c:2"].iter().enumerate() {
+            conn.execute(
+                "INSERT INTO conversation(id, source, native_id, title, ended_at, msg_count,
+                                          prose_count, user_turns)
+                 VALUES (?1, 'codex', ?1, ?1, ?2, 1, 1, 1)",
+                params![id, i as i64],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO message(id, conv_id, thread_key, seq, role, kind, ts, text)
+                 VALUES (?1, ?2, 'main', 0, 'user', 'prose', 0, 'monad')",
+                params![format!("{id}:m0"), id],
+            )
+            .unwrap();
+            let rowid = conn.last_insert_rowid();
+            conn.execute("INSERT INTO fts_prose(rowid, text) VALUES (?1, 'monad')", params![rowid])
+                .unwrap();
+        }
+        let groups = search_grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().all(|g| g.sitting.is_none()));
+        assert!(groups.iter().all(|g| g.msg_count == 1));
+    }
+}
+
 /// The DSL, against SQL rather than against the parser.
 ///
 /// `query::tests` proves a token parses; these prove the parse reaches the database and
@@ -2635,5 +2855,112 @@ mod count_cost {
         // And the deferred half stays bounded: it is one pass over the postings the ranking
         // just walked, so it cannot run away from the search that precedes it.
         assert!(pause < 60.0, "settling a total took {pause:.1} ms");
+    }
+}
+
+/// What reading the activity log back as chats costs, and what it buys.
+///
+/// Measured the same way and for the same reason as [`filter_cost`]. Three quantities:
+///
+/// * **`ensure`, warm.** Charged to every search, so it is the number that has to be near
+///   zero. It is two cached statements — a temp-schema lookup and a count over
+///   `idx_conversation_source` — deliberately in place of loading a map per query.
+/// * **`ensure`, cold.** Charged to the first search on a connection, and again after a
+///   reindex. This is why the fold is a table built once and not a map rebuilt per keystroke.
+/// * **the fold against the joins alone.** Emptying the two tables leaves every `LEFT JOIN`
+///   in place and finding nothing, which is exactly what a corpus with no Google Takeout in
+///   it pays. The difference between that and the populated fold is what the Gemini records
+///   cost — and beside it, the rows they save.
+///
+/// What this cannot measure from inside is the joins themselves, since removing them is a
+/// different build. Against `63a8b31` on the same 4,377-conversation index, at `limit` 50:
+/// `the` 65.0 -> 70.5 ms, `con` 41.3 -> 43.4, `tes` 29.4 -> 31.0, `rus` 23.2 -> 23.3,
+/// `ind` 13.4 -> 12.9, blank 0.9 -> 1.9. So the joins are 5–8% on the broadest prefixes and
+/// nothing on the narrow ones, against 17% fewer rows for `the` (4,243 -> 3,511).
+///
+/// This is the third `--ignored` benchmark in this file and they contend: run them with
+/// `--test-threads=1`, or each on its own. Three timing loops racing for the same index put
+/// [`count_cost`] four times over its budget on `63a8b31` too, so a failure from running them
+/// together is measuring the harness rather than the code.
+#[cfg(test)]
+mod sitting_cost {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a real index; set CS_INDEX to an index.db"]
+    fn folding_an_activity_log_does_not_cost_a_keystroke_its_budget() {
+        let Ok(path) = std::env::var("CS_INDEX") else { return };
+        let conn = Connection::open(path).expect("readable index");
+        // The TUI's own shape, as [`count_cost`] uses it: `limit` 50, and `nested: 0` because
+        // per keystroke it draws no snippets. Building them swings ±10 ms between runs on a
+        // narrow query and none of that swing is the fold, so it would be noise standing in
+        // front of the thing being measured.
+        let opts =
+            || SearchOptions { limit: 50, nested: 0, ..SearchOptions::new(crate::time::now_ms()) };
+
+        let ms = |f: &dyn Fn()| {
+            let t0 = std::time::Instant::now();
+            f();
+            t0.elapsed().as_secs_f64() * 1000.0
+        };
+        // Best of seven, floor taken, exactly as `filter_cost` does — see its note on why the
+        // minimum is the honest number.
+        let best = |f: &dyn Fn()| (0..7).map(|_| ms(f)).fold(f64::INFINITY, f64::min);
+
+        let cold = ms(&|| crate::sittings::ensure(&conn).unwrap());
+        let warm = best(&|| crate::sittings::ensure(&conn).unwrap());
+        println!("ensure: {cold:.1} ms cold, {warm:.2} ms warm");
+
+        let search = |text: &str| {
+            let query = Query::typeahead(text);
+            best(&|| {
+                std::hint::black_box(search_grouped(&conn, &query, &opts()).unwrap());
+            })
+        };
+        // The whole row count, settled: a blank query takes the branch that ranks nothing and
+        // has no `MATCH` expression to count with, and a broad prefix comes back a floor.
+        let total = |text: &str| {
+            let query = Query::typeahead(text);
+            match search_grouped_counted(&conn, &query, &opts()).unwrap().matched {
+                Total::Exact(n) => n,
+                Total::AtLeast(_) => count_matching(&conn, &query, &opts()).unwrap(),
+            }
+        };
+
+        let queries = ["", "borrow checker", "gemini", "monad", "ind", "the"];
+        // Warmed before either pass. The two passes cannot run at once, so whichever goes
+        // first would otherwise be charged for pulling the postings off disk — which on a
+        // 345 MB index is larger than the difference being measured, and lands entirely on
+        // the fold, since the fold has to be measured before the tables are emptied.
+        for text in queries {
+            std::hint::black_box(search_grouped(&conn, &Query::typeahead(text), &opts()).unwrap());
+        }
+        let with: Vec<(f64, usize)> = queries.iter().map(|t| (search(t), total(t))).collect();
+
+        // The tables emptied rather than dropped: `ensure` rebuilds on a changed fingerprint,
+        // not on an empty table, so this leaves every join in place and finding nothing —
+        // which is the shape of the query plan for a corpus that has no activity log at all.
+        conn.execute_batch("DELETE FROM conv_sitting; DELETE FROM sitting;").unwrap();
+        let mut worst = 0.0f64;
+        println!("    joins     fold    rows   folded   query");
+        for (text, (fold_ms, fold_n)) in queries.iter().zip(with) {
+            let bare_ms = search(text);
+            let bare_n = total(text);
+            println!("{bare_ms:9.1}{fold_ms:9.1}{bare_n:8}{fold_n:9}   {text}");
+            worst = worst.max(fold_ms - bare_ms);
+        }
+        println!("worst the fold added: {worst:.1} ms");
+
+        // The invariant the temp table exists to hold: what every search pays is a lookup, not
+        // a rebuild, and a rebuild is what the first one pays instead.
+        // Measured at 0.04 ms warm and 8–24 ms cold — 132 ms once, on a cold page cache,
+        // which is what the ceiling below leaves room for.
+        assert!(warm < 1.0, "every search paid {warm:.2} ms to check the fold was current");
+        assert!(cold < 300.0, "building the fold took {cold:.1} ms");
+        // And the fold itself stays inside the noise of the joins that carry it: measured at
+        // 0.9–2.9 ms across runs. It is a thousand-row table joined by primary key, so
+        // anything much above this means a plan changed, not that there is more Gemini in the
+        // corpus.
+        assert!(worst < 8.0, "the fold added {worst:.1} ms to a keystroke");
     }
 }

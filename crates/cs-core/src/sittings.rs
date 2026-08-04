@@ -141,11 +141,12 @@ CREATE TABLE IF NOT EXISTS temp.sitting_build(
 
 /// Build the fold if it is missing or out of date, and touch nothing otherwise.
 ///
-/// Called at the top of every search entry point, so the cost when warm is what matters: two
-/// cached statements, one of them a count answered out of `idx_conversation_source` without
-/// reading a table row. The build itself is ~15 ms against the live index and would be a
-/// third of a keystroke's whole budget if it ran per query — which is why this is a temp
-/// table filled once rather than a map loaded in Rust on every search.
+/// Called at the top of every search entry point, so the cost when warm is what matters, and
+/// it is 0.04 ms: two cached statements, one of them a count answered out of
+/// `idx_conversation_source` without reading a table row. The build behind it is 8–24 ms
+/// against the live index — a third of the worst keystroke's whole budget if it ran per
+/// query, which is why this is a temp table filled once rather than a map loaded in Rust on
+/// every search. Both numbers are guarded by `search::sitting_cost`.
 ///
 /// The fingerprint is how many activity-log conversations there are and when the last one
 /// ended. A connection held open across a `cs index` — a running TUI, say — would otherwise
@@ -202,7 +203,7 @@ fn fingerprint(conn: &Connection) -> rusqlite::Result<(i64, i64, i64)> {
 /// Recompute both tables from scratch at a given threshold.
 ///
 /// Whole-table rather than incremental, for the reason `cs index` has no migrations: it is a
-/// pure function of what `conversation` holds, it costs 15 ms, and an incremental version
+/// pure function of what `conversation` holds, it costs 8–24 ms, and an incremental version
 /// would be a second implementation of the gap rule that could disagree with this one.
 fn build(conn: &Connection, gap_ms: i64) -> rusqlite::Result<()> {
     conn.execute_batch("DELETE FROM conv_sitting; DELETE FROM sitting;")?;

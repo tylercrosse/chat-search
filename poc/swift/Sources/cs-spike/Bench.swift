@@ -29,15 +29,15 @@ enum Bench {
         // typeahead work at all, so if it is expensive that is a fact about the whole design.
         print("  47 prefixes × 3 passes per cell. `seam` is total − sqlite differenced per sample,")
         print("  which is what a `--stdio` transport or a C ABI would be buying back.\n")
-        print("    limit  --prefix   total p50  total p95   sqlite p50  sqlite p95   seam p50  seam p95   stdout p50")
+        print("    limit  --prefix   total min  total p50  total p95   sqlite min  sqlite p50   seam min  seam p50   stdout")
         for l in [10, 30, 60, 120] {
             for prefix in [true, false] {
                 let m = await sweep(client: client, limit: l, prefix: prefix, passes: 3)
                 print(
                     "    \(pad(String(l), 7))\(pad(prefix ? "yes" : "no", 11))"
-                        + "\(pad(fmt(m.total.p50), 11))\(pad(fmt(m.total.p95), 12))"
-                        + "\(pad(fmt(m.server.p50), 12))\(pad(fmt(m.server.p95), 13))"
-                        + "\(pad(fmt(m.seam.p50), 11))\(pad(fmt(m.seam.p95), 11))"
+                        + "\(pad(fmt(m.total.min), 11))\(pad(fmt(m.total.p50), 11))\(pad(fmt(m.total.p95), 12))"
+                        + "\(pad(fmt(m.server.min), 12))\(pad(fmt(m.server.p50), 13))"
+                        + "\(pad(fmt(m.seam.min), 11))\(pad(fmt(m.seam.p50), 11))"
                         + fmt(m.bytes.p50 / 1024) + " KB")
             }
         }
@@ -220,6 +220,7 @@ enum Bench {
     /// typing, and the difference is how many processes get killed before they answer.
     @MainActor
     static func typing(model: SearchModel, recorder: FrameRecorder, interval: Duration) async {
+        print("  " + machineLine())
         for phrase in phrases {
             model.query = ""
             try? await Task.sleep(for: .milliseconds(400))

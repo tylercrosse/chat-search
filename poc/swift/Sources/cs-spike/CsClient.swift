@@ -113,6 +113,18 @@ struct CsClient: Sendable {
         var process: Double
     }
 
+    /// Nothing here blocks a thread, and that is the whole design.
+    ///
+    /// The obvious spelling — `readDataToEndOfFile()` on a background queue, then
+    /// `waitUntilExit()` — costs three blocked threads per invocation. `DispatchQueue.global()`
+    /// is not overcommit, so its width is the core count: eight here. Three keystrokes in flight
+    /// exhaust it, the fourth waits for a thread rather than for `cs`, and the measured keystroke
+    /// latency stops being a measurement of the transport at all. It read as ~80 ms of transport
+    /// cost that did not exist. See RESULTS.md §2.
+    ///
+    /// So: readability handlers for both pipes, a termination handler for the exit status, and
+    /// the continuation resumes when all three have reported. Foundation runs those on its own
+    /// queues and no thread of ours is ever parked.
     private func spawn(_ args: [String]) async throws -> Run {
         let proc = Process()
         proc.executableURL = binary
@@ -124,40 +136,32 @@ struct CsClient: Sendable {
 
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (k: CheckedContinuation<Run, Error>) in
-                // Blocking reads on a background thread. Both pipes are drained concurrently:
-                // stderr is tiny today, but a client that reads stdout to EOF first deadlocks
-                // the moment the other side fills 64 KB, and that is a bug you find in
-                // production rather than in a spike.
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let t0 = ContinuousClock.now
-                    do { try proc.run() } catch {
-                        k.resume(throwing: CsError.unhealthy(.noBinary("\(binary.path): \(error)")))
-                        return
-                    }
-                    let launch = t0.duration(to: .now).ms
+                let state = SpawnState(continuation: k)
+                let t0 = ContinuousClock.now
 
-                    let drained = Drained()
-                    let outHandle = out.fileHandleForReading
-                    let errHandle = err.fileHandleForReading
-                    let group = DispatchGroup()
-                    group.enter()
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        drained.put(.out, outHandle.readDataToEndOfFile())
-                        group.leave()
+                for (handle, stream) in [
+                    (out.fileHandleForReading, SpawnState.Stream.out),
+                    (err.fileHandleForReading, SpawnState.Stream.err),
+                ] {
+                    handle.readabilityHandler = { h in
+                        let chunk = h.availableData
+                        // Empty read is EOF. Clearing the handler is not optional: Foundation
+                        // keeps polling a closed descriptor otherwise.
+                        if chunk.isEmpty {
+                            h.readabilityHandler = nil
+                            state.close(stream, at: t0)
+                        } else {
+                            state.append(stream, chunk)
+                        }
                     }
-                    group.enter()
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        drained.put(.err, errHandle.readDataToEndOfFile())
-                        group.leave()
-                    }
-                    group.wait()
-                    proc.waitUntilExit()
-                    k.resume(
-                        returning: Run(
-                            stdout: drained.take(.out), stderr: drained.take(.err),
-                            exit: proc.terminationStatus,
-                            launch: launch, process: t0.duration(to: .now).ms))
                 }
+                proc.terminationHandler = { p in state.exited(p.terminationStatus, at: t0) }
+
+                do { try proc.run() } catch {
+                    state.failed(CsError.unhealthy(.noBinary("\(binary.path): \(error)")))
+                    return
+                }
+                state.launched(after: t0.duration(to: .now).ms)
             }
         } onCancel: {
             if proc.isRunning { proc.terminate() }
@@ -165,28 +169,76 @@ struct CsClient: Sendable {
     }
 }
 
-/// Somewhere for two background reads to land. A `var` captured by two `@Sendable` closures is
-/// exactly the data race Swift 6 refuses to compile, and a lock is the honest answer rather than
-/// an escape hatch.
-private final class Drained: @unchecked Sendable {
+/// Three callbacks from three queues assembling one answer, and exactly one resume of the
+/// continuation. A `var` shared by `@Sendable` closures is the data race Swift 6 refuses to
+/// compile; a lock is the honest answer rather than an escape hatch.
+private final class SpawnState: @unchecked Sendable {
     enum Stream { case out, err }
+
     private let lock = NSLock()
+    private var k: CheckedContinuation<CsClient.Run, Error>?
     private var out = Data()
     private var err = Data()
+    private var outClosed = false
+    private var errClosed = false
+    private var exit: Int32?
+    private var launch: Double = 0
+    private var elapsed: Double = 0
 
-    func put(_ stream: Stream, _ data: Data) {
+    init(continuation: CheckedContinuation<CsClient.Run, Error>) { k = continuation }
+
+    func append(_ stream: Stream, _ data: Data) {
         lock.lock()
         defer { lock.unlock() }
         switch stream {
-        case .out: out = data
-        case .err: err = data
+        case .out: out.append(data)
+        case .err: err.append(data)
         }
     }
 
-    func take(_ stream: Stream) -> Data {
+    func close(_ stream: Stream, at t0: ContinuousClock.Instant) {
         lock.lock()
-        defer { lock.unlock() }
-        return stream == .out ? out : err
+        switch stream {
+        case .out: outClosed = true
+        case .err: errClosed = true
+        }
+        elapsed = t0.duration(to: .now).ms
+        let ready = finish()
+        lock.unlock()
+        ready?()
+    }
+
+    func exited(_ status: Int32, at t0: ContinuousClock.Instant) {
+        lock.lock()
+        exit = status
+        elapsed = t0.duration(to: .now).ms
+        let ready = finish()
+        lock.unlock()
+        ready?()
+    }
+
+    func launched(after ms: Double) {
+        lock.lock()
+        launch = ms
+        lock.unlock()
+    }
+
+    func failed(_ error: Error) {
+        lock.lock()
+        let k = self.k
+        self.k = nil
+        lock.unlock()
+        k?.resume(throwing: error)
+    }
+
+    /// Called with the lock held; returns the resume to run without it, because resuming a
+    /// continuation inside a lock is how a deadlock gets built.
+    private func finish() -> (() -> Void)? {
+        guard outClosed, errClosed, let exit, let k else { return nil }
+        self.k = nil
+        let run = CsClient.Run(
+            stdout: out, stderr: err, exit: exit, launch: launch, process: elapsed)
+        return { k.resume(returning: run) }
     }
 }
 

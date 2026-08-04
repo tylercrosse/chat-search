@@ -17,6 +17,10 @@ struct Samples {
     var p95: Double { percentile(0.95) }
     var max: Double { values.max() ?? 0 }
     var mean: Double { values.isEmpty ? 0 : values.reduce(0, +) / Double(values.count) }
+    /// Reported because this machine cannot be quieted. Contention only ever adds time, so the
+    /// minimum is the closest thing available to the uncontended cost, and the gap between it and
+    /// p50 is a reading of how contaminated the rest of the row is.
+    var min: Double { values.min() ?? 0 }
 
     /// Nearest-rank. With 20–40 samples an interpolating percentile invents precision the sample
     /// size does not have.
@@ -28,7 +32,7 @@ struct Samples {
     }
 
     var line: String {
-        String(format: "p50 %6.1f  p95 %6.1f  max %6.1f  (n=%d)", p50, p95, max, count)
+        String(format: "min %6.1f  p50 %6.1f  p95 %6.1f  max %6.1f  (n=%d)", min, p50, p95, max, count)
     }
 }
 

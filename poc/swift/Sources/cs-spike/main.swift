@@ -14,6 +14,12 @@ struct Options {
     var command = "ui"
     var interval = Duration.milliseconds(100)
     var rows = 3200
+    /// Bring the window to the front for the run. Steals focus, so it is opt-in — but a latency
+    /// measured in a background app is partly a measurement of how macOS treats background apps.
+    var front = false
+    /// Hold a `beginActivity` assertion. Also opt-in, because whether one is needed is one of the
+    /// things being measured.
+    var activity = false
 }
 
 func parse(_ argv: [String]) -> Options {
@@ -32,6 +38,8 @@ func parse(_ argv: [String]) -> Options {
         case "--limit": if let v = next(), let n = Int(v) { o.limit = n }
         case "--rows": if let v = next(), let n = Int(v) { o.rows = n }
         case "--interval": if let v = next(), let n = Int(v) { o.interval = .milliseconds(n) }
+        case "--front": o.front = true
+        case "--activity": o.activity = true
         case "--help", "-h":
             print("""
                 cs-spike [--db PATH] [--config PATH] [--bin PATH] [--limit N] <command>
@@ -70,6 +78,7 @@ final class Host: NSObject, NSApplicationDelegate {
     let options: Options
     var window: NSWindow!
     private var keyMonitor: Any?
+    private var activity: NSObjectProtocol?
 
     init(model: SearchModel, command: String, options: Options) {
         self.model = model
@@ -78,6 +87,11 @@ final class Host: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        if options.activity {
+            activity = ProcessInfo.processInfo.beginActivity(
+                options: [.userInitiated, .latencyCritical],
+                reason: "measuring keystroke latency")
+        }
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 900, height: 620),
             styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
@@ -87,6 +101,7 @@ final class Host: NSObject, NSApplicationDelegate {
         window.contentView = hosting
         window.orderFrontRegardless()
         self.window = window
+        if options.front { NSApp.activate(ignoringOtherApps: true) }
 
         recorder.attach(to: hosting)
         model.recorder = recorder
@@ -160,7 +175,7 @@ default:
     let app = NSApplication.shared
     // `.accessory` for the benches so a scripted run does not steal focus from whatever is in
     // front; `.regular` for the interactive one, which has to be typed into.
-    app.setActivationPolicy(options.command == "ui" ? .regular : .accessory)
+    app.setActivationPolicy(options.command == "ui" || options.front ? .regular : .accessory)
     let host = Host(
         model: SearchModel(client: client, limit: options.limit),
         command: options.command, options: options)

@@ -176,6 +176,10 @@ impl IndexBuild {
 
         remove_database(&temp);
         let conn = index::open(temp.to_str().unwrap_or_default())?;
+        // Stamped up front so that a build which writes no conversations — an archive with
+        // nothing in it yet — still swaps in an index that reads as current rather than as one
+        // predating the schema.
+        index::record_importer_version(&conn)?;
         Ok(Self {
             target: target.to_path_buf(),
             temp,
@@ -197,7 +201,10 @@ impl IndexBuild {
     /// is checkpointed away first: a `-wal` is found by path and not by inode, so a renamed
     /// database with a stale log beside it is how an atomic swap still hands the next reader a
     /// torn one. The shipped index is therefore in rollback-journal mode, and readers open it
-    /// read-only ([`open_for_read`]), so nothing recreates a log against it.
+    /// read-only ([`open_for_read`]), so nothing writes a log against it either.
+    ///
+    /// Measured at 257–367 ms over a 334 MB index — the checkpoint and the rename together,
+    /// against 14–26 s of import.
     pub fn commit(mut self) -> Result<(), BuildError> {
         let conn = self.conn.take().expect("a build commits once");
         conn.pragma_update(None, "journal_mode", "DELETE")?;
@@ -296,9 +303,11 @@ pub struct Reader {
 ///
 /// Read-only, for two reasons that both showed up as silent wrong answers. SQLite creates a
 /// database at any path it is handed for writing, so a mistyped `--db` became a new empty
-/// index that reported nothing matched (chat-search-me9.22). And a reader that cannot write
-/// cannot create a `-wal` beside a file [`IndexBuild::commit`] is about to rename over, which
-/// is the one way an atomic swap can still hand the next reader a torn database.
+/// index that reported nothing matched (chat-search-me9.22). And a read-only connection to a
+/// rollback-mode database — which is what [`IndexBuild::commit`] leaves behind — writes no
+/// journal of its own, so nothing appears at `<db>-wal` for a swap to strand there. (An index
+/// built before that change is still in WAL mode, and a reader of one does create the
+/// sidecars; the first rebuild after this retires them.)
 pub fn open_for_read(db: &Path) -> Result<Reader, Unreadable> {
     let state = IndexState::of(db);
     match state {

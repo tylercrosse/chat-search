@@ -151,12 +151,23 @@ where
            started_at   = (SELECT MIN(m.ts) FROM message m WHERE m.conv_id = conversation.id),
            ended_at     = (SELECT MAX(m.ts) FROM message m WHERE m.conv_id = conversation.id)",
     )?;
-    tx.execute(
+    record_importer_version(&tx)?;
+    tx.commit()?;
+    Ok(stats)
+}
+
+/// Stamp the version that produced this index's contents.
+///
+/// Written when a build starts as well as when conversations are written, because an archive
+/// that holds nothing still produces a perfectly current index — and an index with no such row
+/// is indistinguishable from one too old to read (see [`ensure_current`]), so a first run over
+/// an empty archive was told its brand-new index predated the schema.
+pub fn record_importer_version(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute(
         "INSERT OR REPLACE INTO build_info(key, value) VALUES ('importer_version', ?1)",
         params![IMPORTER_VERSION.to_string()],
     )?;
-    tx.commit()?;
-    Ok(stats)
+    Ok(())
 }
 
 fn write_one(

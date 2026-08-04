@@ -31,8 +31,8 @@ pub use build::{open_for_read, IndexBuild, IndexState, Reader, Unreadable};
 pub use destination::{destinations, Destination};
 pub use eval::{Grade, Judged, QueryScore, Report};
 pub use index::{
-    built_by, ensure_current, open, reset, write_conversations, write_conversations_with, IndexOptions,
-    IndexStats, TOOL_TEXT_MAX,
+    built_by, ensure_current, open, record_importer_version, reset, write_conversations,
+    write_conversations_with, IndexOptions, IndexStats, TOOL_TEXT_MAX,
 };
 pub use model::{Conversation, Kind, Message, Role, Titles};
 pub use query::{Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection, Window};

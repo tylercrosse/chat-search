@@ -119,6 +119,8 @@ enum Command {
         /// One row per message instead of grouping by conversation.
         #[arg(long)]
         flat: bool,
+        /// The client contract (ADR 12). docs/JSON-CONTRACT.md is every field it emits and,
+        /// for the six that can be null, what the null means.
         #[arg(long)]
         json: bool,
     },

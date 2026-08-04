@@ -371,6 +371,9 @@ pub fn needs(
             "log": path, "events": events.len(), "unreadable": skipped,
             "keystrokes": folded.keystrokes, "driven": folded.driven, "spans": folded.spans,
             "browsed": folded.browsed,
+            // Over every need, not the `limit` shown: a truncated list cannot be summed back
+            // into the totals, and these two are what 6eb.21's trigger is read from.
+            "judgements": folded.judgements(), "answered": folded.answered(),
             "needs": folded.needs.iter().take(limit).collect::<Vec<_>>(),
         }));
         return Ok(());
@@ -387,11 +390,15 @@ pub fn needs(
         let top = n.picked.first().map(|(c, _)| c.as_str()).unwrap_or("—");
         println!("  {:<34} {:>8} {:>7}  {}", trunc(&n.q, 34), n.searches, picks, trunc(top, 40));
     }
-    let answered: usize = folded.needs.iter().map(|n| n.picked.len()).sum();
+    // Judgements and the queries behind them are printed as a pair because that is the shape
+    // of chat-search-6eb.21's trigger — "roughly 50-100 picks across 20+ distinct queries" —
+    // and either number alone reads as further along than the set actually is.
     println!(
-        "\n  {} need(s) · {} event(s) · {answered} answered",
+        "\n  {} need(s) · {} event(s) · {} judgement(s) across {} answered quer(y/ies)",
         folded.needs.len(),
-        events.len()
+        events.len(),
+        folded.judgements(),
+        folded.answered()
     );
 
     // Each of these is a claim about what the log means, so each is named rather than summed

@@ -201,6 +201,26 @@ pub struct Folded {
     pub browsed: usize,
 }
 
+impl Folded {
+    /// Distinct query-and-conversation pairs somebody accepted.
+    ///
+    /// The eval set's unit: one of these is a grade-3 nobody had to sit down and award.
+    /// Distinct rather than a count of pick events, because opening the same conversation for
+    /// the same query four times is one judgement made four times, not four judgements.
+    pub fn judgements(&self) -> usize {
+        self.needs.iter().map(|n| n.picked.len()).sum()
+    }
+
+    /// Needs with at least one pick behind them.
+    ///
+    /// Reported beside [`Folded::judgements`] because `chat-search-6eb.21` triggers on both
+    /// numbers at once — "roughly 50-100 picks across 20+ distinct queries" — and either on
+    /// its own can be read into meaning the set is ready when it is not.
+    pub fn answered(&self) -> usize {
+        self.needs.iter().filter(|n| !n.picked.is_empty()).count()
+    }
+}
+
 /// Fold the log into one entry per need.
 ///
 /// Three things happen before the grouping, and each of them is a claim about what the events
@@ -582,6 +602,23 @@ mod tests {
         let folded = fold(&[search("launchd", 300), search("launch", 200), search("laun", 100)]);
         assert_eq!(folded.keystrokes, 2);
         assert_eq!(folded.needs[0].q, "launchd");
+    }
+
+    #[test]
+    fn opening_the_same_answer_four_times_is_one_judgement_rather_than_four() {
+        // What chat-search-6eb.21's "50-100 picks across 20+ distinct queries" has to be read
+        // against. Counting pick events instead would let one query answered on four separate
+        // afternoons look like most of the way to a set.
+        let folded = fold(&[
+            pick("rust", "claude-code:a", Some(1), apart(1)),
+            pick("rust", "claude-code:a", Some(1), apart(2)),
+            pick("rust", "claude-code:a", Some(1), apart(3)),
+            pick("rust", "claude-code:b", Some(3), apart(4)),
+            search("recipe", apart(5)),
+        ]);
+        assert_eq!(folded.judgements(), 2, "two conversations, however often opened");
+        assert_eq!(folded.answered(), 1, "one query behind them");
+        assert_eq!(folded.needs.len(), 2, "the abandoned search is still a need");
     }
 
     #[test]

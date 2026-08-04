@@ -156,6 +156,24 @@ fn litter_from_a_killed_build_does_not_report_a_build_forever() {
 }
 
 #[test]
+fn the_state_can_be_asked_for_rather_than_discovered_by_failing_a_query() {
+    let f = Fixture::new();
+    // `cs status` reads the configured index, not `--db`, so point the config's default at
+    // the same file this fixture builds.
+    let default_db = f.home.join("archive").join("index.db");
+    let state = |f: &Fixture| {
+        let out = f.cs(&["status", "--json"]);
+        let body: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        body["index"]["state"].as_str().unwrap().to_string()
+    };
+    assert_eq!(state(&f), "no_index");
+
+    let out = f.cs(&["index", "--db", default_db.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(state(&f), "ready");
+}
+
+#[test]
 fn a_rebuild_leaves_no_journal_beside_the_index_it_swapped_in() {
     let f = Fixture::new();
     f.index();

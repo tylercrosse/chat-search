@@ -662,6 +662,10 @@ fn status(config_path: &PathBuf, json: bool) -> Result<()> {
     let cfg = Config::load(config_path)
         .with_context(|| format!("reading {} (run `cs init` first?)", config_path.display()))?;
     let m = machine::load_or_create(&cfg.archive_root, cfg.machine_alias.as_deref())?;
+    // Asked rather than discovered by failing a search: a client that wants to draw "building
+    // one now" before anyone types has nowhere else to look (chat-search-me9.28).
+    let db = cfg.default_db();
+    let index_state = cs_core::IndexState::of(&db);
 
     if json {
         let sources: Vec<_> = cfg
@@ -683,6 +687,7 @@ fn status(config_path: &PathBuf, json: bool) -> Result<()> {
                 "archive_root": cfg.archive_root,
                 "machine": { "id": m.id, "alias": m.alias },
                 "machine_dir": m.dir(&cfg.archive_root),
+                "index": { "path": db, "state": index_state.as_str() },
                 "sources": sources,
             })
         );
@@ -691,6 +696,7 @@ fn status(config_path: &PathBuf, json: bool) -> Result<()> {
         println!("archive root {}", cfg.archive_root.display());
         println!("machine      {} ({})", m.alias, m.id);
         println!("machine dir  {}", m.dir(&cfg.archive_root).display());
+        println!("index        {} ({})", db.display(), index_state.as_str());
         println!("sources");
         for s in &cfg.sources {
             let mark = if s.path.is_dir() { "ok     " } else { "MISSING" };

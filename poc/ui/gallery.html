@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>chat-search — component gallery</title>
+<meta name="description" content="Every component of the chat-search interface prototype, in every state, in both themes, on one page." />
+<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="gallery.css" />
+</head>
+<body class="gal">
+
+<header class="gal-top">
+  <h1>chat-search — components</h1>
+  <span class="gal-sub" id="gal-count"></span>
+  <div class="gal-actions">
+    <button class="chip" id="gal-both" type="button" aria-pressed="false">side by side</button>
+    <button class="chip" id="gal-theme" type="button">light</button>
+  </div>
+</header>
+
+<nav class="gal-nav" id="gal-nav"></nav>
+
+<!-- Rendered by gallery.js from the app's own functions, never from a copy of its
+     markup. data.js falls back to fixtures when real-data.js is absent, which is what
+     makes this page committable: no conversation text of yours is in it. -->
+<main class="gal-body" id="gal-body"></main>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+<script src="gallery.js"></script>
+</body>
+</html>

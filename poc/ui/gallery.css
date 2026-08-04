@@ -1,0 +1,229 @@
+/* Gallery chrome only. Every component on the page is styled by styles.css — nothing
+   here may restyle a component, or the gallery stops being evidence about the app.
+   Rules below are layout and labelling, and each one is scoped to a `gal-` class. */
+
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: auto;
+}
+
+.gal {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--ui);
+}
+
+.gal-top[hidden], .gal-nav[hidden] { display: none; }
+
+.gal-top {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 12px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+}
+.gal-top h1 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+.gal-sub { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+.gal-actions { margin-left: auto; display: flex; gap: 6px; }
+
+.gal-nav {
+  position: sticky;
+  top: 41px;
+  z-index: 19;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 7px 20px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--rule);
+}
+.gal-nav a {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  text-decoration: none;
+  padding: 3px 8px;
+  border-radius: 5px;
+}
+.gal-nav a:hover { color: var(--sel); background: var(--panel-2); }
+
+.gal-body { padding: 0 20px 120px; max-width: 1180px; }
+
+.gal-sec { padding-top: 30px; }
+.gal-h {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--rule);
+}
+.gal-h h2 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.008em; }
+.gal-h span { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+
+/* The note carries the measurement behind the component. A gallery that only shows the
+   pixels invites re-litigating decisions that were settled with numbers. */
+.gal-note {
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 78ch;
+  margin: 10px 0 4px;
+}
+.gal-note b { color: var(--ink); font-weight: 600; }
+.gal-note code {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  background: var(--panel-2);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
+.gal-case { margin-top: 14px; }
+.gal-lab {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 5px;
+}
+/* Components sit on the panel they sit on in the app, so contrast reads true. */
+.gal-frame {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+.gal-frame.plain { background: var(--bg); }
+.gal-frame > * + * { margin-top: 0; }
+
+.gal-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.gal-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+
+/* Each specimen keeps its own caption, because "which one is this" is the question a
+   gallery exists to answer. */
+.gal-item .cap {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--ink-3);
+  margin-bottom: 4px;
+}
+
+/* Side-by-side mode renders the page twice, one theme each, so a colour decision can be
+   judged in both at once rather than by toggling and remembering. */
+.gal-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+.gal-pair > div { padding: 0 16px; min-width: 0; }
+.gal-pair > div + div { border-left: 1px solid var(--rule); }
+.gal-pane-h {
+  position: sticky; top: 78px;
+  font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em;
+  text-transform: uppercase; color: var(--ink-3);
+  padding: 6px 0; background: var(--bg);
+}
+
+/* A forced state the DOM cannot be put into by hovering a headless browser. */
+.gal-force-hover { background: var(--panel-2) !important; }
+
+/* ---------------------------------------------------- visual directions --- */
+/* Chrome for directions.html, under the same rule as everything above: it may lay out
+   and label, and may not restyle a component. A direction is judged on what styles.css
+   and directions.css do to the row and the ribbon, so anything here that touched one
+   would be putting a thumb on the scale.
+
+   `.vd-pane` is the one exception that is not an exception: it re-declares the four
+   things `body` declares, because a direction is a subtree here rather than a document
+   and body's rules do not reach it. They are the same declarations, reading the same
+   tokens. */
+
+.gal-body.wide { max-width: none; }
+
+.vd-pair {
+  display: grid;
+  grid-template-columns: repeat(2, 706px);
+  gap: 24px;
+  margin-top: 14px;
+  overflow-x: auto;
+  padding-bottom: 8px;
+}
+
+/* 706px is the list column at a 1560px window, so the row is drawn at the width it is
+   actually read at. Anything narrower and the path cell starts eliding for a reason
+   that is the page's fault rather than the direction's. */
+.vd-pane {
+  width: 706px;
+  padding: 0 0 14px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--ui);
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  border: 1px solid var(--rule-2);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.vd-pane-h {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 7px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--rule);
+}
+
+.vd-cap {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--ink-3);
+  padding: 12px 12px 5px;
+}
+.vd-cap:empty { padding: 0; }
+
+.vd-ribs { padding: 0 12px; }
+
+.vd-tbl {
+  border-collapse: collapse;
+  margin-top: 14px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-2);
+}
+.vd-tbl th {
+  text-align: left;
+  font-weight: 400;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  border-bottom: 1px solid var(--rule-2);
+}
+.vd-tbl th, .vd-tbl td {
+  padding: 4px 14px 4px 0;
+  white-space: pre;
+  vertical-align: baseline;
+}
+.vd-tbl td { border-bottom: 1px solid var(--rule); font-variant-numeric: tabular-nums; }
+.vd-name { color: var(--ink); }
+.vd-ok { color: var(--ok); }
+/* Loud on purpose. A table of eight rows where one has quietly failed is a table you
+   read as eight passes. */
+.vd-bad { color: var(--err); font-weight: 600; }
+
+.gal-top code {
+  font-family: var(--mono);
+  background: var(--panel-2);
+  padding: 1px 4px;
+  border-radius: 3px;
+}

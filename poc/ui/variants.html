@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>chat-search — organising variants</title>
+<link rel="stylesheet" href="styles.css" />
+<style>
+  html, body { height: 100%; overflow: hidden; }
+  .shell { height: 100%; display: grid; grid-template-rows: auto 1fr; }
+
+  .top { display: flex; align-items: center; gap: 14px; padding: 10px 16px;
+         border-bottom: 1px solid var(--rule); background: var(--panel); }
+  .top h1 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  .top .sub { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+
+  #tabs { display: inline-flex; gap: 2px; background: var(--bg);
+          border: 1px solid var(--rule-2); border-radius: 7px; padding: 2px; }
+  .vtab { font-size: 11.5px; padding: 4px 13px; border: 0; border-radius: 5px;
+          background: transparent; color: var(--ink-2); cursor: pointer; }
+  .vtab:hover { color: var(--ink); }
+  .vtab.on { background: var(--sel); color: var(--sel-ink); font-weight: 600; }
+
+  .body { display: grid; grid-template-columns: minmax(0,1fr) 430px; min-height: 0; }
+  #main { overflow-y: auto; padding: 14px 16px 40px; }
+  #drawer { border-left: 1px solid var(--rule); background: var(--panel);
+            overflow-y: auto; padding: 14px 14px 40px; }
+
+  .two { display: grid; grid-template-columns: 300px minmax(0,1fr); gap: 18px; }
+  .lbl { font-family: var(--mono); font-size: 9px; letter-spacing: 0.14em;
+         text-transform: uppercase; color: var(--ink-3); margin: 0 0 8px; }
+  .note-sm { font-size: 12px; color: var(--ink-3); line-height: 1.55; margin: 0 0 12px; max-width: 62ch; }
+  .note-sm b { color: var(--ink-2); }
+
+  .grp { margin-bottom: 12px; }
+  .gname { display: block; font-family: var(--mono); font-size: 9px; letter-spacing: 0.1em;
+           text-transform: uppercase; color: var(--ink-3); opacity: 0.7; margin-bottom: 4px; }
+
+  .chip { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono);
+          font-size: 10px; padding: 3px 8px; margin: 0 4px 4px 0; border: 1px solid var(--rule-2);
+          border-radius: 12px; background: transparent; color: var(--ink-2); cursor: pointer; }
+  .chip.on { background: var(--sel); border-color: var(--sel); color: var(--sel-ink); font-weight: 600; }
+  .chip.dim { opacity: 0.4; }
+  .chip.sm { font-size: 9.5px; padding: 2px 7px; cursor: default; }
+  .chip.ghost { border-style: dashed; }
+  .chip .c { opacity: 0.65; }
+
+  .crow { display: grid; grid-template-columns: 116px minmax(0,1fr) auto; gap: 10px;
+          align-items: center; width: 100%; text-align: left; padding: 5px 8px;
+          background: transparent; border: 0; border-bottom: 1px solid var(--rule);
+          color: var(--ink); font-size: 12.5px; cursor: pointer; border-radius: 4px; }
+  .crow:hover { background: var(--panel-2); }
+  .crow.on { background: var(--sel-bg); }
+  .crow .t { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .crow .m { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
+
+  .dirline { display: flex; gap: 8px; width: 100%; text-align: left; padding: 4px 7px;
+             background: transparent; border: 0; border-radius: 5px; cursor: pointer;
+             font-family: var(--mono); font-size: 11px; color: var(--ink-2); }
+  .dirline:hover { background: var(--panel-2); }
+  .dirline.on { background: var(--sel-bg); color: var(--sel); }
+  .dirline .p { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dirline .c { color: var(--ink-3); }
+  .files { margin: 4px 0 12px; }
+
+  .tbar2 { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .mini { font-family: var(--mono); font-size: 9.5px; padding: 3px 9px; border-radius: 5px;
+          border: 1px solid var(--rule-2); background: transparent; color: var(--ink-2); cursor: pointer; }
+  .mini:hover { border-color: var(--ink-3); color: var(--ink); }
+
+  .tl2 { border: 1px solid var(--rule); border-radius: 7px; padding: 8px 10px; background: var(--bg); }
+  .tl-row { display: grid; grid-template-columns: 84px minmax(0,1fr); align-items: center;
+            height: 28px; border-bottom: 1px solid var(--rule); }
+  .tl-row:last-child { border-bottom: 0; }
+  .tl-row .name { font-family: var(--mono); font-size: 9.5px; color: var(--ink-3); }
+  .track { position: relative; height: 100%; }
+  .tl-mark { position: absolute; bottom: 4px; width: 3px; padding: 0; border: 0;
+             border-radius: 2px; background: var(--k-agent); cursor: pointer; }
+  .tl-mark:hover { background: var(--sel); }
+  .tl-mark.on { background: var(--sel); width: 5px; }
+
+  .scrub { margin-top: 12px; }
+  .scrub-t { position: relative; height: 26px; background: var(--map-bg);
+             border: 1px solid var(--rule); border-radius: 5px; cursor: ew-resize; }
+  .scrub-t i { position: absolute; top: 8px; width: 1.5px; height: 10px;
+               background: var(--ink-3); opacity: 0.55; }
+  .scrub-sel { position: absolute; top: 0; bottom: 0; border: 1px solid var(--sel);
+               background: color-mix(in srgb, var(--sel) 14%, transparent); border-radius: 4px; }
+
+  .dr-h { display: flex; align-items: baseline; gap: 8px; }
+  .dr-t { font-size: 13.5px; font-weight: 600; line-height: 1.3; }
+  .dr-m { font-family: var(--mono); font-size: 10px; color: var(--ink-3); margin-top: 6px; }
+  .dr-tags { margin: 9px 0 10px; }
+  .dr-blk { display: grid; grid-template-columns: 3px minmax(0,1fr); gap: 8px; margin-bottom: 7px;
+            font-size: 12px; line-height: 1.5; }
+  .dr-blk .g { border-radius: 2px; }
+  .dr-blk.user  .g { background: var(--k-user); }
+  .dr-blk.agent .g { background: var(--k-agent); }
+  .dr-blk.tool  .g { background: var(--k-tool); }
+  .dr-blk.reasoning .g { background: var(--k-reason); }
+  .dr-blk.err   .g { background: var(--err); }
+  .dr-blk.tool .x, .dr-blk.reasoning .x { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+  .dr-blk.err .x { font-family: var(--mono); font-size: 10px; color: var(--err); }
+  .dr-empty { color: var(--ink-3); font-size: 12px; }
+  .warn { font-family: var(--mono); font-size: 10.5px; color: var(--hit);
+          border: 1px solid var(--hit); border-radius: 6px; padding: 8px 11px; margin: 14px 16px; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top">
+    <h1>Organising variants</h1>
+    <div id="tabs"></div>
+    <span class="sub">one drawer, four views · real corpus</span>
+  </div>
+  <div class="body">
+    <div id="main"></div>
+    <aside id="drawer"></aside>
+  </div>
+</div>
+<div class="warn" id="nodata" hidden>No real-data.js — run <code>python3 poc/ui/export.py</code>.</div>
+<script src="real-data.js"></script>
+<script src="data.js"></script>
+<script src="variants.js"></script>
+</body>
+</html>

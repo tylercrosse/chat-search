@@ -1,0 +1,1629 @@
+/* =============================================================================
+   chat-search — interface prototype
+   =============================================================================
+
+   This is a mockup, not a document about one. The app fills the viewport; nothing
+   scrolls except the panes that would scroll in the real thing.
+
+   It renders in the system UI face at native metrics on purpose. Set a native app
+   mock in a display face and it stops telling the truth about density, which is the
+   only reason it exists. The one exception is the annotation overlay, which is
+   commentary rather than product and is set in a serif so it reads as such.
+
+   No CDN, no webfonts, no build step. macOS system faces with real fallbacks.
+   ============================================================================= */
+
+:root, .theme-dark {
+  color-scheme: dark;
+
+  --bg:       #1b2123;
+  --panel:    #161c1e;
+  --panel-2:  #212a2c;
+  --panel-3:  #283335;
+  --ink:      #e3e9e9;
+  --ink-2:    #97a5a6;
+  /* Was 3.64 in dark and 2.90 in light, at 9-11px, on a tier that carries date spans,
+     group counts, section labels, the stat line and the footer — real information,
+     below the 4.5:1 AA floor for text that size.
+
+     Now 4.59 dark and 4.60 light, and measured on the harder of the two grounds it
+     lands on rather than only on --bg. That distinction was worth 0.37: --panel is
+     darker than --bg in the light theme, and `.pv-meta` and every tool and reasoning
+     line in the transcript sit on the drawer, so the tier was still at 4.23:1 there
+     after the first fix — the same failure, on the ground where most of the text is.
+     palette.py solves against whichever ground is worse; see chat-search-4ar.11. */
+  --ink-3:    #7a8b8e;
+  --rule:     #2a3335;
+  --rule-2:   #3a4547;
+
+  --sel:      #4ec3c0;
+  --sel-bg:   #143a3b;
+  --sel-ink:  #06201f;
+  --hit:      #f0b95f;
+  --hit-bg:   #4a3512;
+  --err:      #e2796c;
+  --ok:       #6fc98a;
+
+  /* Four categories on a luminance ramp, with hue as the redundant second channel.
+     Measured: the previous palette separated the kinds by hue but not by luminance —
+     agent/reasoning were 2.00 apart in dark and 1.12 in light, i.e. the same colour —
+     and hue is the channel that degrades fastest at the 2px width these bands are drawn
+     at. §7's rule is "nothing encoded in colour alone"; kind *is* encoded in colour
+     alone here, so that colour has to carry it on the strong channel.
+
+     Ratios against --map-bg: tool 2.2, reasoning 4.0, user 7.2, agent 13.0 — an even
+     ~1.8x per step, which is the widest even spacing four levels fit into the range.
+     Tools stay quietest because they are 66-85% of the volume; agent prose is brightest
+     because it is what you are usually looking for. Amber stays reserved for match, red
+     for failure. Solved rather than picked; see NOTES §3. */
+  --k-user:   #2bb6b2;
+  --k-agent:  #d6dddc;
+  --k-reason: #9361bf;
+  --k-tool:   #425258;
+  /* Sub-shades inside the tool band, by what the call was *for*. Deliberately narrow —
+     1.29x and 1.42x apart — because the primary read (tool vs prose vs reasoning) has to
+     stay on the main ramp: these only need to say "something changed here", not be
+     independently decodable at 2px. `run` is the tool colour itself, so an ordinary
+     agentic run looks exactly as it did; `change` lifts, because a patch landing inside
+     a wall of exec is the event worth spotting. The glyph in the preview carries the
+     distinction where there is room for it. */
+  --act-look:   #354146;
+  --act-run:    #425258;
+  --act-change: #486d65;
+  --k-tool-ink: #8fa0a3;
+  --map-bg:   #10191a;
+
+  /* Source marks. Rendered as CSS masks tinted with the palette above rather than as
+     full-colour logos: two of the five ship as white-on-transparent (invisible on a
+     light ground) and one ships on an opaque white square. Masking also keeps §7's rule
+     that source identity is a discriminable categorical encoding, not brand colour —
+     and it means the icon inherits the row's colour, so shape, hue and text label are
+     three redundant channels rather than one.
+
+     Inlined as data URIs because Chrome refuses file:// subresources, and this prototype
+     has to open from disk without a server — the same constraint that made real-data a
+     script rather than JSON. Regenerate with poc/ui/icons.py. */
+  --ico-claude: url("data:image/png;base64,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");
+  --ico-claude-code: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc4AAAD8ElEQVR42u2czYoTQRSFv0o6DsLgD6iIjH8wGxncieDK8QkEt/oA8wpuZqlrn0FBV4JPIK4EcSGIiCAoOoio4Iw7Z5IuF1MNRdGZVJvqnyTnQJOQrlRu9amqe0/VrRhrLUJ76OkRiAARIIgAESCIABEgiAARIIgAESCIABEgiAARIIgAESCIABEgiIC5RZawLgP0F+S5jYAk2QxGWRGzPwKM6w0rwC333szp8yra9hTY8treKgE9NyTXgAcL0nE/OAKKtnfCB+wCQyCfY+detG23q044WxACjMJQ6QBBBIgAoUtOuIojy4PP+i1oB1sSQvaa7pRZS6OuCyPPtNT+1ggoVOR7dxnv86tOSTehoovf2AJeBXZccldjaj5reAErAx4C94N7j4DbXpkm7HgB3Anu3QXuNWRHa1PQYTfnZ948fKgFOw45Owr/M3S2LYQTHnkLWcmWdqdwwsa9zxWGSgcIIkBCrBJRvYphm/G0gG1xA8e3w1Rc5QzbcJC/S0JAHnEvdo18z33HLz9sgYBhiSrfI37vI0/htGMJuMDkHbGVyLpOAOeAgReJHPV6VhM9H/eb570wdM/ZFoMV77sHkfA51ab834iQruceaowQGgYKdNCCP8rdQ/ftyCIzO4pRPKnDLKUiQKkT0422qacgm+oHx9RnWsxySGF/7T7ANN0zutJD67ZfOkBCTAQIM6CE7YzN7U0775lzwnMfXqYm4FdEmYGnaOcdOxWWLZIIsWMH3Os7ZXsdeLYgqYk32d/SzCYk526nGgHbkb2CBRoBO13xAf0mN7E7FLwYr+3/7axTREHWu1igKChJu6UDJMREgDAnqYm2ZJvOlDhwO2YZ2FTdT52ys8Xa4ZfL21LCsXXFJN6aSCXZa0DNmorleqmfW5ZwXWQbeOOJlRw4CZz1yhjgO/DNa0wOXASOBxkSH4E/EZkHkx5eDhwBVoPk3N/Ap8COM8DpwN6vwE+vTT1PF00/Eqy1dVzGvW7Yfey5y1prN4MyWGsfe+VG7v16QnvWXZ0jz44nJfZulti7UWJvsquuYd73cmfKphYTJMZOKleHHaZBO1qZZ23kPVvzsm9X7FAYKh0giAARIDR6QqbI/RwFcTljTs2Malpdtd4JmDzSDlL8HU3bBCx5YR7eGbEQyyXlBgntGJTUv8z482v9KvmdXfzHrKLnrAJXvB7VB94C74Kk2GvsZ0zn3tT4HPgxZS8svnsKuBHU/wV4GdixBlwO7H3tVHkto0F/WTbnPqBsca7sYENZuZSnJ8uUbKwdSQ5iaAQoDBVEgAgQRIAIEESACBBEgAgQRIAIEESACBABgggQAYIIEAGCCBABQsP4B+6cHaTjTvgIAAAAAElFTkSuQmCC");
+  --ico-chatgpt: url("data:image/png;base64,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");
+  --ico-codex: url("data:image/png;base64,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");
+  --ico-gemini: url("data:image/png;base64,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");
+
+  --src-claude-code: #d9b551;
+  --src-codex:       #5fd3d0;
+  --src-chatgpt:     #74c884;
+  --src-claude-ai:   #cf93d4;
+  --src-gemini:      #86abf3;
+
+  --ui:     -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
+  --mono:   ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  --serif:  "Hoefler Text", "Iowan Old Style", Palatino, Georgia, serif;
+
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+:root.light, .theme-light {
+  color-scheme: light;
+
+  --bg:       #fdfdfc;
+  --panel:    #f1f4f4;
+  --panel-2:  #e7ebeb;
+  --panel-3:  #dbe1e1;
+  --ink:      #101a1c;
+  --ink-2:    #55666a;
+  --ink-3:    #617175;
+  --rule:     #dfe4e4;
+  --rule-2:   #c4cdcd;
+
+  --sel:      #0b5d63;
+  --sel-bg:   #d6e8e8;
+  --sel-ink:  #ffffff;
+  --hit:      #a96a06;
+  --hit-bg:   #ffe9b8;
+  --err:      #a3322a;
+  --ok:       #2f7a3e;
+
+  /* The same ramp, achieved by going darker: on a light track, contrast is distance
+     from white. Ratios against --map-bg match the dark theme to two decimals. */
+  --k-user:   #145654;
+  --k-agent:  #202726;
+  --k-reason: #905dbd;
+  --k-tool:   #91a5ac;
+  --act-look:   #abbac0;
+  --act-run:    #91a5ac;
+  --act-change: #608f86;
+  --k-tool-ink: #5d6d70;
+  --map-bg:   #eaeeee;
+
+  --src-claude-code: #8a6a00;
+  --src-codex:       #14707a;
+  --src-chatgpt:     #2f7a3e;
+  --src-claude-ai:   #8c4a93;
+  --src-gemini:      #2b5bb5;
+}
+
+/* ------------------------------------------------------- the surface layer --- */
+/* Everything above is colour. Everything here is the rest of what a visual pass gets
+   to touch — type sizes, radii, the row's rhythm, the ribbon's geometry — pulled out
+   of the rules below so that a *direction* can be a set of token values rather than a
+   fork of this file. `directions.css` holds four of them and `directions.html` shows
+   them on the row and the ribbon at real size; chat-search-4ar.11 is the argument for
+   why that is the shape.
+
+   These record what the prototype already did rather than rationalising it. The type
+   scale really is five sizes and the radii really did grow ad hoc, and imposing an
+   order on them here would quietly make one direction's answer the default for all of
+   them. Rationalising the scale is a direction's job: `blueprint` squares every
+   corner, `ink` softens all six.
+
+   Two theme classes were added to the selectors above for the same reason. The theme
+   lives on `:root`, which makes it impossible to render two themes in one document —
+   the gallery works around that with iframes. `.theme-dark` / `.theme-light` let a
+   subtree carry a theme, which is what makes a direction measurable without opening
+   eight windows. */
+:root {
+  --fs-head:  13px;    /* pane titles, the preview's title */
+  --fs-body:  12.5px;  /* body text and row titles */
+  --fs-sub:   11.5px;  /* the best-match line, prose in the drawer */
+  --fs-meta:  10px;    /* everything tabular, which means everything monospaced */
+  --fs-micro: 9px;     /* keys, section labels, the topics line */
+
+  /* Radii below 3px, the 50% dots and the 10-11px pills stay literal in the rules:
+     they are geometry rather than style, and squaring a dot is not a visual direction,
+     it is a bug. The annotation overlay's 8px also stays literal — annotations are
+     commentary rather than product, which is why they are set in a serif, and they sit
+     outside the visual language on purpose. */
+  --r-1: 3px;
+  --r-2: 4px;
+  --r-3: 5px;
+  --r-4: 6px;
+  --r-5: 7px;
+  --r-6: 9px;
+
+  /* The row's rhythm. These are the tokens a direction is most likely to get wrong:
+     DESIGN-BRIEF's list of what would actually break this starts with losing
+     rows-per-screen, and every one of these trades against it. directions.html
+     measures the height of a rendered row rather than trusting anything written
+     here — a token can be set to a value the line box then ignores. */
+  --row-px:   12px;  /* the list's left and right margin */
+  --row-pt:   7px;
+  --row-pb:   8px;
+  --row-lead: 3px;   /* between the row's stacked lines */
+  --row-gap:  9px;   /* between cells on the meta line */
+
+  /* The ribbon. `--rib-top` is not `(--rib-h - --rib-track) / 2`, and the track is not
+     centred: the bottom 5px of the cell belongs to the failure and question marks and
+     the top 4px to the match ticks, both of which are drawn outside the track. A
+     direction that thickens the track has to take that from one end or the other. */
+  --rib-h:     18px;
+  --rib-track: 9px;
+  --rib-top:   6px;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--ui);
+  font-size: var(--fs-body);
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+
+button { font-family: inherit; }
+
+:focus-visible { outline: 2px solid var(--sel); outline-offset: -2px; border-radius: var(--r-1); }
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: var(--rule-2); border-radius: var(--r-3); }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ================================================================ shell === */
+
+.app {
+  height: 100%;
+  display: grid;
+  grid-template-rows: 38px auto 1fr 26px;
+}
+
+/* ------------------------------------------------------------ title bar --- */
+
+.tbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px;
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  border-bottom: 1px solid var(--rule);
+}
+
+.lights { display: flex; gap: 8px; }
+.lights i { width: 11.5px; height: 11.5px; border-radius: 50%; display: block; }
+.lights i:nth-child(1) { background: #ff5f57; }
+.lights i:nth-child(2) { background: #febc2e; }
+.lights i:nth-child(3) { background: #28c840; }
+
+.tbar-title {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  color: var(--ink-2);
+  letter-spacing: -0.005em;
+  margin-left: 2px;
+}
+
+/* view switcher — a real segmented control */
+.views {
+  display: inline-flex;
+  background: var(--panel);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-4);
+  padding: 1.5px;
+  margin-left: 10px;
+}
+
+.views button {
+  font-size: var(--fs-sub);
+  padding: 3px 12px;
+  border: 0;
+  border-radius: var(--r-2);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+.views button:hover { color: var(--ink); }
+.views button[aria-pressed="true"] {
+  background: var(--sel);
+  color: var(--sel-ink);
+  font-weight: 600;
+}
+
+.tbar-right { margin-left: auto; display: flex; align-items: center; gap: 5px; }
+
+.chip {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-2);
+  background: transparent;
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-3);
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease), border-color 0.14s var(--ease);
+}
+.chip:hover { border-color: var(--ink-3); color: var(--ink); }
+.chip[aria-pressed="true"] { background: var(--sel); border-color: var(--sel); color: var(--sel-ink); }
+.chip.warm[aria-pressed="true"] { background: var(--hit); border-color: var(--hit); color: #2a1c04; }
+
+/* ---------------------------------------------------------- search bar --- */
+
+.sbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--rule);
+  background: var(--bg);
+}
+.sbar[hidden] { display: none; }
+
+.qbox {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 4px 10px;
+  background: var(--panel);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-5);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.14);
+  font-family: var(--mono);
+  font-size: var(--fs-body);
+}
+
+.caret { width: 1.5px; height: 14px; background: var(--sel); animation: blink 1.15s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.tok {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: var(--r-2);
+  padding: 1.5px 3px 1.5px 6px;
+  white-space: nowrap;
+}
+.tok.free  { color: var(--ink); padding-left: 0; }
+.tok.facet { background: var(--sel-bg); color: var(--sel); }
+.tok.facet b { font-weight: 600; opacity: 0.7; }
+.tok.bad   { color: var(--err); text-decoration: line-through; }
+
+/* A narrowing with no grammar in cs_core::query. It still belongs in the line — it is
+   narrowing the list — but it cannot be typed, copied out or replayed, and a token that
+   looks identical to `agent:` would claim otherwise. */
+.tok.nogram {
+  background: transparent;
+  color: var(--ink-2);
+  border: 1px dashed var(--rule-2);
+  padding-top: 0.5px;
+  padding-bottom: 0.5px;
+}
+.tok.nogram b { color: var(--ink-3); }
+
+.tok .x {
+  border: 0;
+  background: transparent;
+  color: currentColor;
+  font-size: var(--fs-body);
+  line-height: 1;
+  padding: 0 3px;
+  cursor: pointer;
+  opacity: 0.5;
+}
+.tok .x:hover { opacity: 1; }
+
+/* Grouping sits beside the query it modifies, not with the views: it is a property of
+   this list, not a place to go. It leads the bar so the line reads in the order it
+   applies — group by project, then narrow with the query. */
+.group { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.group[hidden] { display: none; }
+.group-l {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-right: 5px;
+}
+.group button {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--r-3);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.group button:hover { color: var(--ink); border-color: var(--rule-2); }
+.group button[aria-pressed="true"] {
+  background: var(--sel-bg);
+  border-color: var(--sel);
+  color: var(--sel);
+  font-weight: 600;
+}
+
+.stat {
+  font-family: var(--mono);
+  font-size: var(--fs-sub);
+  color: var(--ink-3);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.stat b { color: var(--ink-2); font-weight: 600; }
+
+/* ---------------------------------------------------------------- body --- */
+
+.body { display: grid; grid-template-columns: 252px 1fr; min-height: 0; }
+/* Library is not a view of the conversation set, so the facets do not narrow it. Drawing
+   them beside it would repeat the defect this pass exists to fix: controls that look
+   live and are not. */
+.body.solo { grid-template-columns: 1fr; }
+.sidebar[hidden] { display: none; }
+
+.sidebar {
+  background: var(--panel);
+  border-right: 1px solid var(--rule);
+  overflow-y: auto;
+  padding: 4px 0 12px;
+}
+
+.main { min-width: 0; overflow: hidden; display: flex; flex-direction: column; }
+
+/* ------------------------------------------------------------- sidebar --- */
+
+.side-h {
+  display: flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding: 13px 12px 4px;
+}
+.side-h span:last-child { margin-left: auto; opacity: 0.75; }
+
+.srow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  text-align: left;
+  padding: 4px 12px;
+  background: transparent;
+  border: 0;
+  color: var(--ink-2);
+  font-size: var(--fs-body);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.srow:hover { background: var(--panel-2); color: var(--ink); }
+.srow[aria-pressed="true"] { background: var(--sel-bg); color: var(--sel); font-weight: 600; }
+.srow .n {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.srow.zero { opacity: 0.6; }
+.srow.zero .warn { color: var(--hit); font-family: var(--mono); font-weight: 700; font-size: var(--fs-meta); }
+.srow.unconfigured { opacity: 0.42; font-style: italic; cursor: default; }
+
+.swatch { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+.glyph { width: 11px; flex: none; font-size: var(--fs-micro); color: var(--ink-3); text-align: center; }
+
+/* ---------------------------------------------------- topic chips -------- */
+
+.tgroup { padding: 0 10px 8px; }
+.gname {
+  display: block; font-family: var(--mono); font-size: var(--fs-micro);
+  letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-3); opacity: 0.72; margin: 5px 0 4px;
+}
+
+.tchip {
+  display: inline-flex; align-items: baseline; gap: 5px;
+  font-family: var(--mono); font-size: var(--fs-micro); line-height: 1.5;
+  padding: 2.5px 7px; margin: 0 3px 3px 0;
+  border: 1px solid var(--rule-2); border-radius: 11px;
+  background: transparent; color: var(--ink-2); cursor: pointer;
+  max-width: 100%;
+}
+.tchip:hover { border-color: var(--ink-3); color: var(--ink); }
+.tchip.on { background: var(--sel); border-color: var(--sel); color: var(--sel-ink); font-weight: 600; }
+.tchip.dim { opacity: 0.4; }
+.tchip .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tchip .c { opacity: 0.6; flex: none; }
+.tchip.sm { font-size: var(--fs-micro); padding: 2px 6px; }
+.tchip.ghost { border-style: dashed; cursor: default; }
+
+.srow.clearall { color: var(--hit); font-family: var(--mono); font-size: var(--fs-meta); }
+
+/* What the conversation did, and where it landed. Both are free: the act comes from the
+   tool name, and the paths were already mined for the project rollup and thrown away at
+   conversation scale. */
+.pv-work { margin-top: 9px; display: flex; flex-direction: column; gap: 4px; }
+.pv-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.pv-acts .gname { width: 46px; flex: none; margin: 0; }
+.pv-acts .n {
+  font-family: var(--mono); font-size: var(--fs-micro); color: var(--ink-3);
+  margin-right: 4px; font-variant-numeric: tabular-nums;
+}
+.pv-acts .tchip { margin: 0; max-width: 200px; }
+
+.act {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: var(--fs-micro); letter-spacing: 0.04em;
+  padding: 1.5px 7px; border-radius: 10px;
+  border: 1px solid var(--rule-2); color: var(--ink-2);
+}
+.act i { font-style: normal; font-size: var(--fs-meta); line-height: 1; opacity: 0.8; }
+.act b { font-weight: 600; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.act.run    { border-color: var(--act-run); }
+.act.change { border-color: var(--act-change); color: var(--ink); }
+.act.look   { border-color: var(--act-look); }
+.act.steer  { border-color: var(--sel); color: var(--sel); }
+.act.sub    { border-color: var(--hit); color: var(--hit); }
+.act.sub b  { color: var(--hit); opacity: 0.75; }
+
+/* The same distinction in the gutter, where there is room for it to read. */
+.blk.a-look   .gut { background: var(--act-look); }
+.blk.a-run    .gut { background: var(--act-run); }
+.blk.a-change .gut { background: var(--act-change); }
+.blk.a-steer  .gut { background: var(--sel); }
+
+.pv-tags { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 3px; }
+.pv-tags .tchip { margin: 0; }
+.tchip.more { border-style: dashed; color: var(--ink-3); }
+.tchip.more:hover { color: var(--sel); border-color: var(--sel); }
+
+/* --------------------------------------------- timeline bottom drawer ---- */
+
+.tldrawer {
+  border-top: 1px solid var(--rule);
+  background: var(--panel);
+  padding: 7px 12px 9px;
+}
+.tld-h {
+  display: flex; align-items: center; gap: 10px;
+  font-family: var(--mono); font-size: var(--fs-micro); color: var(--ink-3);
+  margin-bottom: 6px;
+}
+.tld-h b { color: var(--ink-2); font-weight: 600; }
+.tld-h .sp { margin-left: auto; }
+.tld-btn {
+  font-family: var(--mono); font-size: var(--fs-micro); padding: 2px 7px; border-radius: var(--r-2);
+  border: 1px solid var(--rule-2); background: transparent; color: var(--ink-3); cursor: pointer;
+}
+.tld-btn:hover { color: var(--ink); border-color: var(--ink-3); }
+.tld-btn.on { background: var(--sel); border-color: var(--sel); color: var(--sel-ink); }
+
+.tld-track {
+  position: relative; height: 42px;
+  background: var(--map-bg); border: 1px solid var(--rule);
+  border-radius: var(--r-3); cursor: ew-resize; overflow: hidden;
+}
+/* Hits sit above the baseline, everything else below it: the drawer answers "when did
+   this query land" as well as "when was I working". */
+.tld-track .base { position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--rule-2); }
+.tld-mark { position: absolute; width: 2px; border-radius: 1px; opacity: 0.85; }
+.tld-mark.hit { background: var(--hit); }
+.tld-sel {
+  position: absolute; top: 0; bottom: 0;
+  border-left: 1px solid var(--sel); border-right: 1px solid var(--sel);
+  background: color-mix(in srgb, var(--sel) 13%, transparent);
+}
+.tld-ax { display: flex; justify-content: space-between; font-family: var(--mono);
+          font-size: var(--fs-micro); color: var(--ink-3); margin-top: 3px; }
+
+/* ==================================================== view: search ======== */
+
+/* 620 / 602: the title moved off the column grid onto its own line, so the list needs
+   less width and the preview reaches a real reading measure (78ch at 12px). */
+.searchshell { display: grid; grid-template-rows: minmax(0,1fr) auto; min-height: 0; flex: 1; }
+.panes { display: grid; grid-template-columns: minmax(340px, 1fr) 602px; min-height: 0; }
+
+.col { display: flex; flex-direction: column; min-width: 0; overflow: hidden; }
+.col.preview { background: var(--panel); border-left: 1px solid var(--rule); }
+
+.list { flex: 1; overflow-y: auto; }
+
+.row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--row-pt) var(--row-px) var(--row-pb);
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--rule);
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.11s var(--ease);
+}
+.row:hover { background: var(--panel-2); }
+.row[aria-selected="true"] { background: var(--sel-bg); }
+.row[aria-selected="true"] .row-title { color: var(--sel); }
+
+/* A grid, not a flex row: every cell must sit at the same x on every row so the eye can
+   run down a column.
+
+   Two clusters with a gutter between them — agent, model, size, shape on the left;
+   directory, forks, age on the right. The `sp` column is the gutter, and it is the only
+   flexible one, so everything else holds its position as the pane resizes. */
+.row-meta {
+  display: grid;
+  grid-template-columns:
+    22px             /* agent   */
+    96px             /* model   */
+    52px             /* msgs    */
+    58px             /* +/-     */
+    200px            /* ribbon  */
+    26px             /* gutter  */
+    minmax(0, 1fr)   /* cwd     */
+    18px             /* forks   */
+    30px;            /* age     */
+  align-items: center;
+  gap: var(--row-gap);
+  margin-bottom: var(--row-lead);
+}
+
+.model {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Empty on more rows than not, so it has to disappear rather than sit there as a gap. */
+.edits {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.edits i { font-style: normal; }
+.edits .m { color: var(--err); opacity: 0.85; }
+.edits .p { color: var(--ok); opacity: 0.85; margin-left: 4px; }
+
+/* The third line: what is true of the conversation, as opposed to what is true of this
+   query. Deliberately the quietest thing in the row. */
+.row-topics {
+  margin-top: var(--row-lead);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.row[aria-selected="true"] .row-topics { color: var(--ink-2); }
+
+.ico {
+  width: 12px; height: 12px; flex: none; display: inline-block;
+  background-color: currentColor;
+  -webkit-mask: var(--ico) center / contain no-repeat;
+  mask: var(--ico) center / contain no-repeat;
+}
+.ico.lg { width: 15px; height: 15px; }
+
+/* No border, no box. It was the heaviest mark in a row — bordered, mono, saturated —
+   while carrying the least discriminating information: inside a project every row shows
+   the identical badge, so twenty of them shout in unison and out-weigh the titles. The
+   border was also what clipped the label: `claude-code` needs 89px and the cell is 84,
+   so the last glyph collided with the box on every claude-code row.
+
+   Colour now lives on the icon alone. Shape, hue and word remain three redundant
+   channels per §7; only the frame is gone. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.badge > span {
+  color: var(--ink-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Icon only in the row. The list column is 706px and the row now carries nine cells;
+   the word cost 66px, which is exactly what `cwd` needed to stop collapsing to zero.
+   The mark is still a distinct shape per source and the name is one hover or one click
+   into the drawer away, so §7's three channels become two here rather than one. */
+.row-meta > .badge { gap: 0; }
+.row-meta > .badge > span { display: none; }
+
+.dir, .msgs, .age {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-2);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+}
+.msgs, .age { text-align: right; }
+.fork { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-3); text-align: right; }
+
+.row-title {
+  font-size: var(--fs-body);
+  font-weight: 500;
+  line-height: 1.3;
+  letter-spacing: -0.004em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Line 3: the true best match, framed with its provenance. 66-85% of hits land in
+   tool traffic, so without the frame this reads as naked log spew. */
+.row-snip {
+  margin-top: var(--row-lead);
+  font-size: var(--fs-sub);
+  line-height: 1.35;
+  color: var(--ink-2);
+  display: flex;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.row-snip .sig { flex: none; color: var(--ink-3); font-family: var(--mono); font-size: var(--fs-meta); }
+.row-snip .prov {
+  flex: none;
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--k-tool-ink);
+  background: var(--panel-2);
+  border-radius: var(--r-1);
+  padding: 0 4px;
+}
+.row-snip .frag { overflow: hidden; text-overflow: ellipsis; font-style: italic; }
+.row-snip mark { font-style: normal; }
+
+/* ------------------------------------------------------------ the ribbon --- */
+/* One graphic, two channels. Body is shape and is query-independent; ticks are
+   matches and vanish when there is no query. Notches are >4h pauses or resumes. */
+
+/* Width comes from the grid track, not from a second number that has to be kept in
+   sync with it — they had already drifted, and the track spilled into the gutter. */
+.ribbon { position: relative; width: 100%; height: var(--rib-h); }
+
+.rb-track {
+  position: absolute;
+  /* Width is set inline from the message count — see app.js::ribbonWidth. The cell
+     keeps its full width so the columns either side stay on the grid; only the drawn
+     track varies, which is what makes length legible down the column. */
+  left: 0;
+  top: var(--rib-top);
+  height: var(--rib-track);
+  background: var(--map-bg);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.rb-band { position: absolute; top: 0; bottom: 0; }
+.rb-band.user   { background: var(--k-user); }
+.rb-band.agent  { background: var(--k-agent); }
+.rb-band.tool   { background: var(--k-tool); }
+.rb-band.a-look   { background: var(--act-look); }
+.rb-band.a-run    { background: var(--act-run); }
+.rb-band.a-change { background: var(--act-change); }
+.rb-band.reason { background: var(--k-reason); }
+.rb-band.off    { opacity: 0.35; }
+/* Hidden in the preview, still on the map — dimmed so the axis stays comparable
+   between rows. 0.55, not 0.22: on the new ramp tool already sits at 2.19 against the
+   track, so 0.22 opacity took a dimmed tool band to 1.15 — invisible, which is
+   "dropped from the axis" by another name, and that was §3's mistake #6. At 0.55 a
+   dimmed band reads at 1.48 against the track and still ranks well below the 2.19 of
+   an undimmed one, which is the whole signal. */
+.rb-band.dim    { opacity: 0.55; }
+
+.rb-tick { position: absolute; top: 0; width: 2px; height: 4px; background: var(--hit); border-radius: 1px; }
+
+.rb-mark { position: absolute; bottom: 0; height: 5px; width: 5px; font-size: 0; }
+.rb-mark.q { background: var(--sel); border-radius: 50%; }
+.rb-mark.x { background: var(--err); }
+
+.rb-notch { position: absolute; top: 4px; bottom: 4px; width: 1px; background: var(--ink-2); opacity: 0.85; }
+/* Full height and doubled, against the notch's partial height and single stroke: a pause
+   interrupts a conversation, a compaction cuts it. Ink, not amber or red — those are
+   spoken for by match and failure (§7). */
+.rb-cut {
+  position: absolute; top: 3px; bottom: 3px; width: 3px;
+  background: linear-gradient(90deg, var(--ink) 1px, transparent 1px 2px, var(--ink) 2px);
+}
+
+/* The same event in the transcript. */
+.brk.cut { color: var(--ink-2); }
+.brk.cut::before, .brk.cut::after { background: var(--ink-3); }
+.brk.cut::before { max-width: 14px; }
+
+.ribbon-key {
+  display: flex;
+  gap: 12px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.06em;
+  color: var(--ink-3);
+  align-items: center;
+}
+.ribbon-key i { display: inline-block; width: 10px; height: 7px; border-radius: 1.5px; margin-right: 4px; vertical-align: -1px; }
+.ribbon-key span { white-space: nowrap; }
+
+/* ------------------------------------------------------------- preview --- */
+
+.pv-head { padding: 10px 12px; border-bottom: 1px solid var(--rule); }
+.pv-title { font-size: var(--fs-head); font-weight: 600; line-height: 1.3; letter-spacing: -0.005em; }
+.pv-meta {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
+  margin-top: 5px;
+  font-variant-numeric: tabular-nums;
+}
+.zoom { display: inline-flex; border: 1px solid var(--rule-2); border-radius: var(--r-4); padding: 1.5px; margin-top: 9px; }
+.zoom button {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.06em;
+  padding: 2px 9px;
+  border: 0;
+  border-radius: var(--r-2);
+  background: transparent;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.zoom button:hover { color: var(--ink); }
+.zoom button[aria-pressed="true"] { background: var(--sel); color: var(--sel-ink); font-weight: 600; }
+
+/* Per-kind fidelity: the primary control. The three zoom names are presets over
+   these same four knobs. */
+/* One explicit three-state control per kind, not a cycling chip: going from
+   expanded back to collapsed used to require passing through hidden, so there was
+   no direct "collapse all the tool calls" gesture. */
+/* Visibility and detail are two axes, so the chip has two targets — but they live in
+   one box, with the label, so proximity points at the right thing. The 2x2 grid this
+   replaces put `you`'s control nearer to `agent`'s label than `agent`'s own control
+   was, which is most of why it read as fiddly. */
+.fid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 8px;
+  margin-top: 9px;
+}
+
+.fid-chip {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-4);
+  overflow: hidden;
+  background: transparent;
+  transition: border-color 0.13s var(--ease);
+}
+.fid-chip.on { border-color: var(--rule-2); background: var(--panel-2); }
+.fid-chip:hover { border-color: var(--ink-3); }
+
+.fid-chip .dot {
+  flex: none;
+  width: 22px;
+  border: 0;
+  border-right: 1px solid var(--rule-2);
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+}
+.fid-chip .dot::before {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto 50%;
+  translate: -50% -50%;
+  width: 8px; height: 8px;
+  border-radius: 2px;
+  background: var(--k);
+  opacity: 0.28;
+  transition: opacity 0.13s var(--ease);
+}
+.fid-chip.on .dot::before { opacity: 1; }
+.fid-chip .dot:hover::before { opacity: 0.7; }
+.fid-chip.on .dot:hover::before { opacity: 0.55; }
+
+.fid-chip .lv {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.04em;
+  color: var(--ink-3);
+}
+.fid-chip.on .lv { color: var(--ink-2); }
+.fid-chip .lv:hover { color: var(--ink); }
+.fid-chip .lv .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The state is a word, not a glyph legend you have to learn. */
+.fid-chip .lv .st { flex: none; opacity: 0.7; }
+.fid-chip.on .lv .st { color: var(--sel); opacity: 1; font-weight: 600; }
+
+.fid-all { display: flex; gap: 4px; margin-top: 7px; }
+.fid-all button {
+  font-family: var(--mono); font-size: var(--fs-micro); letter-spacing: 0.04em;
+  padding: 2.5px 9px;
+  border: 1px solid var(--rule-2); border-radius: var(--r-3);
+  background: transparent; color: var(--hit); cursor: pointer;
+}
+.fid-all button:hover { border-color: var(--hit); }
+
+/* A message whose level was overridden by clicking it directly. */
+.blk .txt { cursor: pointer; }
+.blk.ovr .gut { box-shadow: inset 0 0 0 1px var(--hit); }
+
+.pv { display: grid; grid-template-columns: 1fr 50px; flex: 1; min-height: 0; }
+.pv-body { overflow-y: auto; padding: 10px 12px 40px; font-size: var(--fs-body); }
+
+/* Gutter spine: the categorical channel, so text contrast can stay identical for
+   user and assistant. me9.1.1 — "do not privilege user turns". */
+.blk { display: grid; grid-template-columns: 3px 13px minmax(0, 1fr); gap: 8px; margin-bottom: 2px; }
+.blk .gut { border-radius: 2px; }
+.blk.user   .gut { background: var(--k-user); }
+.blk.agent  .gut { background: var(--k-agent); }
+.blk.tool   .gut { background: var(--k-tool); }
+.blk.reason .gut { background: var(--k-reason); }
+.blk.err    .gut { background: var(--err); }
+
+.blk .sig { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-3); padding-top: 1px; }
+
+/* The tool name is the label; the argument is the content, so the name is the quieter of
+   the two. Reverses what the pane did before, where the name was all there was. */
+.blk .cmd { font-weight: 600; color: var(--ink-2); font-style: normal; }
+.blk .kb { color: var(--ink-3); opacity: 0.7; }
+.dif { display: inline-flex; gap: 4px; margin-left: 2px; }
+.dif i { font-style: normal; font-weight: 600; }
+.dif .m { color: var(--err); }
+.dif .p { color: var(--ok); }
+.blk .txt { min-width: 0; padding-bottom: 7px; line-height: 1.5; }
+
+/* Equal contrast. Neither role is demoted. */
+.blk.user .txt, .blk.agent .txt { color: var(--ink); }
+.blk.tool .txt, .blk.reason .txt { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-3); }
+.blk.err .txt { font-family: var(--mono); font-size: var(--fs-meta); color: var(--err); }
+.blk.off { opacity: 0.42; }
+.blk.q .txt { color: var(--sel); }
+
+mark { background: var(--hit-bg); color: var(--ink); border-radius: 2px; padding: 0 2px; }
+
+/* structural boundary, drawn where a pause or a resume happened */
+.brk {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 9px 0 10px;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.brk::before, .brk::after { content: ""; height: 1px; background: var(--rule-2); flex: 1; }
+.brk::before { max-width: 14px; }
+
+/* segment summary, the coarse zoom stop */
+.seg { margin-bottom: 3px; }
+.seg-sum {
+  display: grid;
+  grid-template-columns: 3px 13px minmax(0, 1fr) auto;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 3px 0 6px;
+  cursor: pointer;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  align-items: baseline;
+}
+.seg-sum:hover { color: var(--ink-2); }
+.seg-sum .gut { background: var(--k-tool); border-radius: 2px; align-self: stretch; }
+.seg-sum .caret { font-size: var(--fs-micro); }
+.seg-sum b { color: var(--hit); font-weight: 600; }
+.seg-sum i { color: var(--sel); font-style: normal; }
+
+.mm { position: relative; border-left: 1px solid var(--rule); background: var(--map-bg); cursor: pointer; }
+.mm-band { position: absolute; left: 8px; border-radius: 1px; }
+.mm-band.user   { background: var(--k-user); }
+.mm-band.agent  { background: var(--k-agent); }
+.mm-band.reason { background: var(--k-reason); }
+.mm-band.tool   { background: var(--k-tool); }
+.mm-band.off    { opacity: 0.3; }
+.mm-band.dim    { opacity: 0.22; }
+.mm-hit { position: absolute; right: 3px; width: 8px; height: 2.5px; background: var(--hit); border-radius: 1px; }
+.mm-notch { position: absolute; left: 0; right: 0; height: 1px; background: var(--ink-2); opacity: 0.7; }
+/* Doubled and full-strength against the notch's single faint line, matching the ribbon:
+   a pause interrupts, a compaction cuts. */
+.mm-cut {
+  position: absolute; left: 0; right: 0; height: 3px;
+  background: linear-gradient(180deg, var(--ink) 1px, transparent 1px 2px, var(--ink) 2px);
+}
+.mm-view {
+  position: absolute; left: 0; right: 0;
+  border: 1px solid var(--sel);
+  background: color-mix(in srgb, var(--sel) 12%, transparent);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* ================================================ view: workspace ========= */
+
+.ws { flex: 1; overflow-y: auto; padding: 18px 20px 40px; }
+
+.ws-h {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.ws-h h2 { margin: 0; font-size: var(--fs-head); font-weight: 600; letter-spacing: -0.008em; }
+.ws-h .sub {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}
+.ws-h .sub b { color: var(--ink-2); font-weight: 600; }
+
+.ws-sec + .ws-sec { margin-top: 30px; }
+
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
+
+.card {
+  border: 1px solid var(--rule);
+  border-radius: var(--r-6);
+  background: var(--panel);
+  padding: 12px 13px 13px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  text-align: left;
+  transition: border-color 0.18s var(--ease), transform 0.18s var(--ease), opacity 0.25s var(--ease);
+}
+.card.collection { cursor: pointer; }
+.card.collection:hover { border-color: var(--rule-2); transform: translateY(-1px); }
+.card.collection[aria-pressed="true"] { border-color: var(--sel); background: var(--sel-bg); }
+
+/* A proposal is visibly provisional: dashed, and it has to be acted on. */
+.card.proposal { border-style: dashed; border-color: var(--rule-2); background: transparent; }
+.card.proposal.going { opacity: 0; transform: scale(0.97); }
+
+.card-t { font-size: var(--fs-head); font-weight: 600; letter-spacing: -0.005em; line-height: 1.3; }
+.card-t .n { font-family: var(--mono); font-weight: 400; font-size: var(--fs-meta); color: var(--ink-3); margin-left: 6px; }
+
+/* the rule, stated rather than implied */
+.rule-line {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
+  line-height: 1.55;
+  background: var(--map-bg);
+  border-radius: var(--r-3);
+  padding: 6px 8px;
+}
+.rule-line .q { color: var(--sel); }
+.rule-line .p { color: var(--ok); }
+.rule-line .x { color: var(--err); }
+.rule-line .eq { color: var(--ink-2); }
+
+/* source composition — the cross-tool claim, made visible */
+.compo { display: flex; height: 7px; border-radius: var(--r-2); overflow: hidden; gap: 1.5px; }
+.compo i { display: block; }
+
+.compo-key { display: flex; flex-wrap: wrap; gap: 4px 11px; font-family: var(--mono); font-size: var(--fs-micro); color: var(--ink-3); }
+.compo-key span { display: inline-flex; align-items: center; gap: 4px; }
+.compo-key i { width: 7px; height: 7px; border-radius: 2px; }
+.compo-key i.ico { width: 11px; height: 11px; border-radius: 0; }
+
+.terms { display: flex; flex-wrap: wrap; gap: 4px; }
+.term {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  padding: 2px 6px;
+  border-radius: var(--r-2);
+  background: var(--panel-2);
+  color: var(--ink-2);
+}
+
+.card-actions { display: flex; gap: 6px; margin-top: 2px; }
+
+.btn {
+  font-size: var(--fs-sub);
+  padding: 4px 11px;
+  border-radius: var(--r-4);
+  border: 1px solid var(--rule-2);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease), border-color 0.14s var(--ease);
+}
+.btn:hover { border-color: var(--ink-3); color: var(--ink); }
+.btn.primary { background: var(--sel); border-color: var(--sel); color: var(--sel-ink); font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.08); }
+
+.empty {
+  border: 1px dashed var(--rule-2);
+  border-radius: var(--r-6);
+  padding: 22px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: var(--fs-body);
+}
+.empty b { display: block; color: var(--ink-2); font-weight: 600; margin-bottom: 4px; font-size: var(--fs-body); }
+
+/* collection detail */
+.detail { margin-top: 12px; border: 1px solid var(--sel); border-radius: var(--r-6); overflow: hidden; }
+.detail-h {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px;
+  background: var(--sel-bg);
+  border-bottom: 1px solid var(--rule);
+}
+.detail-h .t { font-size: var(--fs-body); font-weight: 600; color: var(--sel); }
+.detail-h .m { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-2); margin-left: auto; }
+
+.member {
+  display: grid;
+  grid-template-columns: 84px 1fr 76px 62px;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--fs-body);
+}
+.member:last-child { border-bottom: 0; }
+.member .why {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  padding: 1.5px 5px;
+  border-radius: var(--r-2);
+  text-align: center;
+}
+.why.matched { background: var(--sel-bg); color: var(--sel); }
+.why.pinned  { background: color-mix(in srgb, var(--ok) 20%, transparent); color: var(--ok); }
+
+/* ================================================== view: projects ======== */
+/* An accordion, not master/detail. The header stays a single dense line at every state
+   so the list reads as a list; everything the old right-hand pane held moves into the
+   band that opens beneath it. */
+
+.pj-list { padding-bottom: 40px; }
+
+.pj { border-bottom: 1px solid var(--rule); }
+.pj.open { background: var(--panel-2); }
+
+.pj-head {
+  display: grid;
+  /* 130px on the date column, not 108: a span crossing a year renders
+     "Oct 25 ’25 – Aug 2" and the narrower cell clipped it to "Oct 25 ’25 – Aug". */
+  grid-template-columns: 14px minmax(0, 1fr) auto 76px 130px 76px;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: 0;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.11s var(--ease);
+}
+.pj-head:hover { background: var(--panel-2); }
+.pj.open .pj-head { background: transparent; }
+
+.pj-head .tw {
+  font-size: var(--fs-micro);
+  color: var(--ink-3);
+  transition: transform 0.13s var(--ease);
+  transform-origin: 45% 50%;
+}
+.pj-head[aria-expanded="true"] .tw { transform: rotate(90deg); color: var(--sel); }
+
+.pj-head .nm {
+  font-family: var(--mono);
+  font-size: var(--fs-body);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pj.open .pj-head .nm { color: var(--sel); }
+
+.pj-head .srcs { display: inline-flex; gap: 3px; }
+.badge.tiny { font-size: 0; padding: 2px; gap: 0; border-radius: var(--r-1); }
+.badge.tiny .ico { width: 10px; height: 10px; }
+.badge.tiny span { display: none; }
+
+.pj-head .cnt, .pj-head .when {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.pj-head .cnt { text-align: right; }
+.pj-head .cnt b { color: var(--ink); font-weight: 600; }
+.pj-head .cnt i { font-style: normal; opacity: 0.65; font-size: var(--fs-micro); }
+
+/* Activity, not volume: 26 weeks of the sample so a dormant project and a live one are
+   distinguishable before you open either. */
+/* 12 bars at 3px, not 20 at 2px: the finer version read as dust at 100% zoom, which is
+   the only zoom anyone uses. */
+.spark { display: inline-flex; align-items: flex-end; gap: 1px; height: 17px; }
+.spark i { width: 3px; background: var(--k-user); border-radius: 0.5px; opacity: 0.8; }
+.spark i.z { background: var(--ink-3); opacity: 0.25; }
+.pj.open .spark i { opacity: 1; }
+
+.pj-body { padding-bottom: 6px; }
+
+.pj-band {
+  padding: 2px 12px 10px 36px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 2px;
+}
+.pj-path {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
+  margin-bottom: 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pj-sec { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; margin-bottom: 5px; }
+.pj-sec .gname { margin: 0 6px 0 0; flex: none; width: 38px; }
+.pj-sec .tchip { margin: 0; max-width: 260px; }
+
+.pj-nums {
+  gap: 14px;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  color: var(--ink-3);
+  margin: 7px 0 0;
+  padding-left: 44px;
+}
+.pj-nums .q { color: var(--sel); }
+.pj-nums .e { color: var(--err); }
+
+/* A run divider is a label, not a control. Making it collapsible would imply the rows
+   under it are optional, and they are the only thing on the screen that is not. */
+.pj-run {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px 4px 36px;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.pj-run .d { color: var(--ink-2); }
+.pj-run .n { opacity: 0.6; }
+.pj-run::after { content: ""; height: 1px; background: var(--rule-2); flex: 1; }
+
+.pj-body .row { padding-left: 36px; border-bottom: 0; }
+.pj-body .row:hover { background: var(--panel); }
+
+.pj-more, .pj-tail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: 0;
+  color: var(--ink-3);
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  cursor: pointer;
+  text-align: left;
+}
+.pj-more { padding: 8px 12px 4px 36px; }
+.pj-more .go { color: var(--sel); margin-left: auto; }
+.pj-more:hover .go { text-decoration: underline; }
+
+.pj-tail { padding: 9px 12px; border-bottom: 1px solid var(--rule); }
+.pj-tail:hover { color: var(--ink-2); background: var(--panel-2); }
+.pj-tail .tw { font-size: var(--fs-micro); transition: transform 0.13s var(--ease); }
+.pj-tail[aria-expanded="true"] .tw { transform: rotate(90deg); }
+.pj-tail .n { margin-left: auto; font-variant-numeric: tabular-nums; }
+.pj.small .pj-head { padding-left: 24px; }
+
+/* Bands carry one line of explanation where the number alone would mislead. */
+.note-in {
+  font-size: var(--fs-sub);
+  line-height: 1.55;
+  color: var(--ink-3);
+  max-width: 74ch;
+  display: block;
+}
+
+/* A group header can be labelled with what kind of group it is — a mode facet, a
+   cross-tool run, the untagged residue — where that changes how to read the count. */
+.pj-head .tag {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1.5px 5px;
+  border-radius: var(--r-1);
+  border: 1px solid var(--rule-2);
+  color: var(--ink-3);
+  flex: none;
+}
+.pj-head .tag.warn { border-color: var(--hit); color: var(--hit); }
+
+.srow.muted { color: var(--ink-3); font-family: var(--mono); font-size: var(--fs-meta); }
+
+/* The drawer's way back to the project it belongs to. */
+.pv-proj {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  color: var(--sel);
+  cursor: pointer;
+  border-bottom: 1px dotted currentColor;
+}
+.pv-proj:hover { color: var(--ink); }
+
+/* ================================================== view: library ========= */
+/* The only surface here that is not derived from the index. Everything else can be
+   rebuilt by `rm index.db && cs index`; this is what cannot. */
+
+.library { flex: 1; overflow-y: auto; padding: 16px 20px 40px; max-width: 940px; }
+
+.lib-sec + .lib-sec { margin-top: 26px; }
+.lib-h { display: flex; align-items: baseline; gap: 10px; margin-bottom: 9px; }
+.lib-h b { font-size: var(--fs-head); font-weight: 600; letter-spacing: -0.008em; }
+.lib-h span { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-3); }
+
+.lib-row {
+  display: grid;
+  grid-template-columns: 210px minmax(0, 1fr) 44px auto;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--rule);
+  font-size: var(--fs-body);
+}
+.lib-row:hover { background: var(--panel-2); }
+.lib-row .t { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lib-row .rule {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.lib-row .n {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.lib-row .acts { display: inline-flex; gap: 4px; }
+.lib-row .acts button {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  padding: 2.5px 8px;
+  border-radius: var(--r-3);
+  border: 1px solid var(--rule-2);
+  background: transparent;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.lib-row .acts button:hover { border-color: var(--sel); color: var(--sel); }
+.lib-row .acts button:disabled { opacity: 0.4; cursor: default; }
+.lib-row .acts button:disabled:hover { border-color: var(--rule-2); color: var(--ink-2); }
+
+.library .empty { text-align: left; padding: 16px 18px; }
+.library .empty span { display: block; max-width: 76ch; line-height: 1.55; }
+
+/* ================================================== view: sittings ======== */
+
+.sittings { flex: 1; overflow-y: auto; padding: 16px 20px 40px; }
+
+.day + .day { margin-top: 26px; }
+
+.day-h {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--rule);
+  margin-bottom: 12px;
+}
+.day-h b { font-size: var(--fs-head); font-weight: 600; letter-spacing: -0.008em; }
+.day-h .w { font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-3); }
+.day-h .m { margin-left: auto; font-family: var(--mono); font-size: var(--fs-meta); color: var(--ink-3); font-variant-numeric: tabular-nums; }
+
+.sit-row { display: grid; grid-template-columns: 46px 16px minmax(0, 1fr); gap: 10px; }
+
+.sit-time {
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
+  text-align: right;
+  padding-top: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.spine { position: relative; }
+.spine::before { content: ""; position: absolute; left: 7px; top: 0; bottom: 0; width: 1px; background: var(--rule-2); }
+.sit-row:first-of-type .spine::before { top: 13px; }
+.sit-row.last .spine::before { bottom: calc(100% - 13px); }
+
+.dot {
+  position: absolute;
+  left: 2px; top: 9px;
+  width: 11px; height: 11px;
+  border-radius: 50%;
+  border: 2.5px solid var(--bg);
+  z-index: 1;
+}
+
+.sit-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin: 3px 0 8px;
+  padding: 7px 10px 8px;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-left: 2px solid;
+  border-radius: 0 var(--r-5) var(--r-5) 0;
+  cursor: pointer;
+  transition: background 0.16s var(--ease), transform 0.16s var(--ease);
+}
+.sit-card:hover { background: var(--panel-2); transform: translateX(3px); }
+.sit-card[aria-selected="true"] { background: var(--sel-bg); border-color: var(--sel); }
+.sit-card[aria-selected="true"] .sit-t { color: var(--sel); }
+/* A sitting drawn from fixtures has no conversation behind it, so the card says so by
+   not being a target rather than by opening an empty drawer. */
+.sit-card:disabled { cursor: default; opacity: 0.72; }
+.sit-card:disabled:hover { background: var(--panel); transform: none; }
+
+.sit-t { font-size: var(--fs-body); color: var(--ink); line-height: 1.35; }
+.sit-m {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+  margin-top: 5px;
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  color: var(--ink-3);
+}
+
+.gap-row { font-family: var(--mono); font-size: var(--fs-micro); letter-spacing: 0.1em; color: var(--ink-3); padding: 2px 0; }
+
+.handoff {
+  font-family: var(--mono);
+  font-size: var(--fs-micro);
+  letter-spacing: 0.06em;
+  color: var(--hit);
+  border: 1px solid var(--hit);
+  border-radius: var(--r-2);
+  padding: 1px 5px;
+}
+
+/* Shared map renderer at card scale, used by the sittings view. Restored here: the
+   rule was lost when the search-view block was rewritten. */
+.micro i.cut {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--ink); opacity: 0.9;
+}
+.micro {
+  position: relative;
+  width: 76px; height: 13px;
+  background: var(--map-bg);
+  border-radius: var(--r-1);
+  overflow: hidden;
+  display: inline-block;
+  vertical-align: -2px;
+}
+.micro i { position: absolute; bottom: 0; display: block; }
+.micro i.user   { background: var(--k-user); }
+.micro i.agent  { background: var(--k-agent); }
+.micro i.reason { background: var(--k-reason); }
+.micro i.tool   { background: var(--k-tool); }
+.micro i.hit    { top: 0; bottom: auto; height: 3px; background: var(--hit); }
+
+/* ---------------------------------------------------------- status bar --- */
+
+.fbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 12px;
+  border-top: 1px solid var(--rule);
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-3);
+}
+.fbar kbd {
+  font-family: var(--mono);
+  background: var(--panel-2);
+  border: 1px solid var(--rule-2);
+  border-bottom-width: 2px;
+  border-radius: var(--r-2);
+  padding: 0 4px;
+  color: var(--ink-2);
+}
+.fbar .sp { margin-left: auto; }
+
+/* ============================================ annotation overlay ========== */
+/* Commentary, not product — hence the serif. Off by default, and it never
+   intercepts a click meant for the interface underneath it. */
+
+.anno {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+}
+.anno[hidden] { display: none; }
+
+.anno::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(4, 8, 9, 0.55);
+  animation: fade 0.25s var(--ease);
+}
+:root.light .anno::before { background: rgba(240, 244, 244, 0.6); }
+@keyframes fade { from { opacity: 0; } }
+
+.pin {
+  position: absolute;
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--hit);
+  color: #221802;
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 0 3px rgba(240, 185, 95, 0.25);
+  animation: pop 0.3s var(--ease) backwards;
+}
+@keyframes pop { from { transform: translate(-50%, -50%) scale(0.4); opacity: 0; } }
+
+.halo {
+  position: absolute;
+  border: 1px solid var(--hit);
+  border-radius: var(--r-3);
+  background: rgba(240, 185, 95, 0.07);
+}
+
+.note {
+  position: absolute;
+  width: 264px;
+  background: var(--panel);
+  border: 1px solid var(--hit);
+  border-radius: 8px;
+  padding: 9px 11px 10px;
+  box-shadow: 0 8px 28px rgba(0,0,0,0.45);
+  animation: pop2 0.3s var(--ease) backwards;
+}
+@keyframes pop2 { from { opacity: 0; transform: translateY(5px); } }
+
+.note b {
+  display: block;
+  font-family: var(--serif);
+  font-size: var(--fs-head);
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+.note p {
+  margin: 0;
+  font-family: var(--serif);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+.note code { font-family: var(--mono); font-size: var(--fs-meta); color: var(--hit); }
+
+.anno-hint {
+  position: absolute;
+  left: 50%; bottom: 18px;
+  transform: translateX(-50%);
+  font-family: var(--mono);
+  font-size: var(--fs-meta);
+  color: var(--ink-2);
+  background: var(--panel);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--r-4);
+  padding: 5px 11px;
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

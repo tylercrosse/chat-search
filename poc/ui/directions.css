@@ -1,0 +1,388 @@
+/* =============================================================================
+   chat-search — visual directions
+   =============================================================================
+
+   Four answers to the same interface. Nothing here changes what is in a row, how
+   panes are arranged, or how anything is grouped — those came out of measuring the
+   corpus and re-litigating them in a visual pass would spend the measurement. This
+   file may only set tokens declared in styles.css: palette, type faces and sizes,
+   spacing, radii, and how much contrast separates one thing from another.
+
+   Two findings have to survive whichever one is chosen, and both are easy to lose to
+   a prettier palette:
+
+     1. At the ~2px the ribbon bands are drawn, LUMINANCE does the work and hue does
+        not. The four kinds therefore sit at 2.2 / 4.0 / 7.2 / 13.0 against the track
+        in every direction below — an even ~1.8x per step, with hue as the redundant
+        second channel. Every one of those colours was solved for its ratio by
+        palette.py rather than picked; none of them is sacred and the ramp is.
+     2. The quiet tier carries dates, counts and section labels rather than
+        decoration, and clears 4.6:1 on its own ground in every direction, in both
+        themes. It was 3.64 dark and 2.90 light at 9-11px once, which is where it
+        started.
+
+   `python3 palette.py --verify` re-measures both from this file, and
+   directions.html re-measures them a third time from what the browser actually
+   rendered. Three readings of one number is not redundancy here — the first two can
+   agree with each other and still both be wrong about the page.
+
+   A direction is `.dir-<name>` plus `.theme-dark` or `.theme-light`, on any element.
+   Try one in the real mockup with `index.html?dir=paper`, and see them side by side
+   in `directions.html`.
+   ============================================================================= */
+
+
+/* ---------------------------------------------------------------- terminal --- */
+/* The incumbent, named so it can be argued with rather than assumed. It declares
+   nothing: `.dir-terminal` *is* styles.css as it stands, which is the only way the
+   control stays a control. Nudging it here to match palette.py's solve would move the
+   baseline the other three are measured against.
+
+   Worth recording that it barely needs nudging. palette.py solves this ramp from hue
+   and target ratio alone and lands within one part in 255 of every value that was
+   hand-solved months earlier — #2bb6b2 exactly for the user band, #415358 against
+   #425258 for tools. The generator and the incumbent agree, which is the reason to
+   trust the generator on the three below. */
+.dir-terminal.theme-dark { color-scheme: dark; }
+.dir-terminal.theme-light { color-scheme: light; }
+
+
+/* ------------------------------------------------------------------- paper --- */
+/* Warm editorial. Ink on stock rather than phosphor on glass: a warm ground, a serif
+   for the two lines of the row that are prose, square corners, and rules withdrawn to
+   the point where space does most of the separating. The bet is that the archive reads
+   more like a set of documents than like a process listing, and that the row's title —
+   the thing you are actually scanning for — gains more from a text face than it loses
+   to the half-pixel of height.
+
+   That half-pixel is paid for, not waived: --fs-body goes up 0.5px and --row-pt and
+   --row-pb each come down 1px, so the row is a pixel shorter than the incumbent's. */
+.dir-paper {
+  --ui: "Iowan Old Style", "Hoefler Text", Palatino, Georgia, serif;
+
+  --fs-head:  13px;
+  --fs-body:  13px;
+  --fs-sub:   11.5px;
+  --fs-meta:  10px;
+  --fs-micro: 9px;
+
+  /* Set type does not have rounded corners. */
+  --r-1: 0;
+  --r-2: 0;
+  --r-3: 0;
+  --r-4: 0;
+  --r-5: 2px;
+  --r-6: 2px;
+
+  --row-px:   14px;
+  --row-pt:   6px;
+  --row-pb:   7px;
+  --row-lead: 3px;
+  --row-gap:  10px;
+}
+
+.dir-paper.theme-dark {
+  color-scheme: dark;
+
+  --bg:      #1c1917;
+  --panel:   #15120f;
+  --panel-2: #262220;
+  --panel-3: #322c28;
+  --ink:     #ece6da;
+  --ink-2:   #b3a794;
+  --ink-3:   #8e826f;
+  --rule:    #262019;
+  --rule-2:  #3a322a;
+
+  /* Selection goes to ink blue rather than the incumbent's teal: on a warm ground
+     teal reads as a stain, and blue is the one cool hue that is nowhere near the
+     amber reserved for a match or the red reserved for a failure. */
+  --sel:     #8fa9cf;
+  --sel-bg:  #1e2836;
+  --sel-ink: #0b1420;
+  --hit:     #e8b45f;
+  --hit-bg:  #46320f;
+  --err:     #dc7d6b;
+  --ok:      #8fb26a;
+
+  --map-bg:     #100e0c;
+  --k-tool:     #504a42;
+  --k-reason:   #9959ad;
+  --k-user:     #7aa2cb;
+  --k-agent:    #d9d4ca;
+  --act-look:   #3e3a35;
+  --act-run:    #504a42;
+  --act-change: #526744;
+  --k-tool-ink: #a3947f;
+
+  --src-claude-code: #d5aa5c;
+  --src-codex:       #7fb2ae;
+  --src-chatgpt:     #93b87c;
+  --src-claude-ai:   #c395c8;
+  --src-gemini:      #93a8d8;
+}
+
+.dir-paper.theme-light {
+  color-scheme: light;
+
+  --bg:      #f6f1e6;
+  --panel:   #efe9db;
+  --panel-2: #e8e0ce;
+  --panel-3: #ded4bf;
+  --ink:     #221d16;
+  --ink-2:   #5d5344;
+  --ink-3:   #736653;
+  --rule:    #e3dbc9;
+  --rule-2:  #cabda3;
+
+  --sel:     #2c4a7a;
+  --sel-bg:  #dbe3ef;
+  --sel-ink: #ffffff;
+  --hit:     #8a5c06;
+  --hit-bg:  #f6e2b0;
+  --err:     #9c2f26;
+  --ok:      #4a6b32;
+
+  --map-bg:     #e8e1d1;
+  --k-tool:     #a49687;
+  --k-reason:   #9550ab;
+  --k-user:     #27486a;
+  --k-agent:    #201c16;
+  --act-look:   #b5ada4;
+  --act-run:    #a49687;
+  --act-change: #688753;
+  --k-tool-ink: #6b5f4d;
+
+  --src-claude-code: #7a5c10;
+  --src-codex:       #17635f;
+  --src-chatgpt:     #40703a;
+  --src-claude-ai:   #7d4383;
+  --src-gemini:      #3a5590;
+}
+
+
+/* --------------------------------------------------------------- blueprint --- */
+/* The terminal register taken seriously instead of apologised for. Everything in the
+   mono face, every corner square, and the rules raised in contrast rather than hidden,
+   so the grid the row already is becomes something you can see. Cool throughout,
+   because the incumbent's teal is doing two jobs — selection and a message kind — and
+   here selection gets the saturated end of the page to itself.
+
+   Mono sets wide, so the whole type scale drops half a pixel to a pixel. That plus the
+   tightest rhythm of the four is where its rows-per-screen comes from; it is the only
+   direction that buys density rather than spending it. */
+.dir-blueprint {
+  --ui: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  --fs-head:  12.5px;
+  --fs-body:  12px;
+  --fs-sub:   11px;
+  --fs-meta:  9.5px;
+  --fs-micro: 8.5px;
+
+  --r-1: 0;
+  --r-2: 0;
+  --r-3: 0;
+  --r-4: 0;
+  --r-5: 0;
+  --r-6: 0;
+
+  --row-px:   12px;
+  --row-pt:   6px;
+  --row-pb:   6px;
+  --row-lead: 2px;
+  --row-gap:  8px;
+
+  /* A heavier bar, drawn like a section on a drawing. The extra pixel comes off the
+     top, where the match ticks have a pixel of slack, not off the bottom, where the
+     failure and question marks are. */
+  --rib-track: 10px;
+  --rib-top:   5px;
+}
+
+.dir-blueprint.theme-dark {
+  color-scheme: dark;
+
+  --bg:      #0f1720;
+  --panel:   #0b131b;
+  --panel-2: #17212c;
+  --panel-3: #202c39;
+  --ink:     #dae5f0;
+  --ink-2:   #93a7bb;
+  --ink-3:   #6e8496;
+  /* Raised deliberately. Every other direction spends its hairlines down; this one is
+     the counter-argument, and the page should be judged on whether a visible grid
+     helps you run down a column or just adds noise at 350 rows. */
+  --rule:    #1e2c3a;
+  --rule-2:  #31465b;
+
+  --sel:     #4fc0f0;
+  --sel-bg:  #0d3348;
+  --sel-ink: #04161f;
+  --hit:     #f0b95f;
+  --hit-bg:  #453008;
+  --err:     #e2796c;
+  --ok:      #6fc98a;
+
+  --map-bg:     #070d14;
+  --k-tool:     #3c4c5b;
+  --k-reason:   #875cbf;
+  --k-user:     #30a9d5;
+  --k-agent:    #cdd4d9;
+  --act-look:   #313b44;
+  --act-run:    #3c4c5b;
+  --act-change: #38695f;
+  --k-tool-ink: #8fa6bd;
+
+  --src-claude-code: #d7b45a;
+  --src-codex:       #58cfd6;
+  --src-chatgpt:     #6cc7a0;
+  --src-claude-ai:   #b48ce0;
+  --src-gemini:      #7fa8f5;
+}
+
+.dir-blueprint.theme-light {
+  color-scheme: light;
+
+  --bg:      #f4f7fa;
+  --panel:   #e9eef5;
+  --panel-2: #dde6ef;
+  --panel-3: #ccd9e6;
+  --ink:     #0d1a26;
+  --ink-2:   #47607a;
+  --ink-3:   #586d7f;
+  --rule:    #cfdbe7;
+  --rule-2:  #a8bdd0;
+
+  --sel:     #0a5f8a;
+  --sel-bg:  #d3e6f2;
+  --sel-ink: #ffffff;
+  --hit:     #8f5a05;
+  --hit-bg:  #ffe4ae;
+  --err:     #a3322a;
+  --ok:      #2f7a3e;
+
+  --map-bg:     #e2e9f1;
+  --k-tool:     #8ba0b5;
+  --k-reason:   #875ac2;
+  --k-user:     #125067;
+  --k-agent:    #1d2227;
+  --act-look:   #a8b5c3;
+  --act-run:    #8ba0b5;
+  --act-change: #478f81;
+  --k-tool-ink: #4f6a84;
+
+  --src-claude-code: #6f5300;
+  --src-codex:       #10646d;
+  --src-chatgpt:     #216b45;
+  --src-claude-ai:   #6c3d9c;
+  --src-gemini:      #274d9e;
+}
+
+
+/* --------------------------------------------------------------------- ink --- */
+/* The argument that this product has no business being colourful. Chrome goes fully
+   neutral, corners soften, and the hairlines all but vanish so that separation comes
+   from the ground a thing sits on rather than from a line drawn round it. What is left
+   of colour is exactly the reserved vocabulary — amber for a match, red for a failure,
+   blue for selection — plus the four kinds, which now carry only enough hue to be a
+   second channel and nothing more.
+
+   This is the direction that tests the first finding hardest, because it deliberately
+   removes almost all the hue the ramp has been leaning on as backup. If the four kinds
+   are still tellable apart in its ribbon, luminance really was doing the work. */
+.dir-ink {
+  --r-1: 4px;
+  --r-2: 6px;
+  --r-3: 8px;
+  --r-4: 10px;
+  --r-5: 12px;
+  --r-6: 14px;
+
+  /* Air between the row's lines, taken back out of the row's own padding so the trade
+     is visible rather than paid for in rows-per-screen. */
+  --row-px:   14px;
+  --row-pt:   6px;
+  --row-pb:   6px;
+  --row-lead: 4px;
+  --row-gap:  10px;
+
+  --rib-track: 7px;
+  --rib-top:   7px;
+}
+
+.dir-ink.theme-dark {
+  color-scheme: dark;
+
+  --bg:      #1a1a1a;
+  --panel:   #141414;
+  --panel-2: #242424;
+  --panel-3: #2e2e2e;
+  --ink:     #e9e9e9;
+  --ink-2:   #a6a6a6;
+  --ink-3:   #848484;
+  --rule:    #1f1f1f;
+  --rule-2:  #2f2f2f;
+
+  --sel:     #7ea6d8;
+  --sel-bg:  #1b2836;
+  --sel-ink: #08131f;
+  --hit:     #efb85e;
+  --hit-bg:  #43310f;
+  --err:     #e0796c;
+  --ok:      #74c98d;
+
+  --map-bg:     #0e0e0e;
+  --k-tool:     #484b4f;
+  --k-reason:   #806b8a;
+  --k-user:     #85a4a7;
+  --k-agent:    #d4d4d4;
+  --act-look:   #383b3d;
+  --act-run:    #484b4f;
+  --act-change: #52655f;
+  --k-tool-ink: #9a9a9a;
+
+  --src-claude-code: #c2ae7e;
+  --src-codex:       #7fb6b4;
+  --src-chatgpt:     #86b590;
+  --src-claude-ai:   #b494bb;
+  --src-gemini:      #93a5c9;
+}
+
+.dir-ink.theme-light {
+  color-scheme: light;
+
+  --bg:      #fbfaf9;
+  --panel:   #f2f1ef;
+  --panel-2: #e9e8e6;
+  --panel-3: #dedcd9;
+  --ink:     #1b1b1b;
+  --ink-2:   #5a5a5a;
+  --ink-3:   #6c6c6c;
+  --rule:    #f0efed;
+  --rule-2:  #d9d7d4;
+
+  --sel:     #2f5d99;
+  --sel-bg:  #dfe8f4;
+  --sel-ink: #ffffff;
+  --hit:     #8a5a04;
+  --hit-bg:  #ffe6b4;
+  --err:     #a3322a;
+  --ok:      #2f7a3e;
+
+  --map-bg:     #e9e8e6;
+  --k-tool:     #999ea4;
+  --k-reason:   #80688d;
+  --k-user:     #384e51;
+  --k-agent:    #212121;
+  --act-look:   #b0b4b8;
+  --act-run:    #999ea4;
+  --act-change: #6c8980;
+  --k-tool-ink: #6a6a6a;
+
+  --src-claude-code: #7d6510;
+  --src-codex:       #2a6b68;
+  --src-chatgpt:     #3d6b47;
+  --src-claude-ai:   #6d4b76;
+  --src-gemini:      #4a5c85;
+}

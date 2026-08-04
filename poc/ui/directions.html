@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>chat-search — visual directions</title>
+<meta name="description" content="Four visual directions for the chat-search interface, shown on the row and the ribbon at real size, in both themes, with the measurements each one has to hold." />
+<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="directions.css" />
+<link rel="stylesheet" href="gallery.css" />
+</head>
+<body class="gal">
+
+<header class="gal-top">
+  <h1>chat-search — visual directions</h1>
+  <span class="gal-sub" id="vd-count"></span>
+  <div class="gal-actions">
+    <span class="gal-sub">try one live: <code>index.html?dir=paper</code></span>
+  </div>
+</header>
+
+<nav class="gal-nav" id="vd-nav"></nav>
+
+<!-- Rendered by directions.js from the app's own row and ribbon and the gallery's own
+     fixtures, never from a copy of either. Both themes are sibling subtrees rather
+     than two iframes, which is what the token layer's theme classes bought. -->
+<main class="gal-body wide" id="vd-body"></main>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+<script src="gallery.js"></script>
+<script src="directions.js"></script>
+</body>
+</html>

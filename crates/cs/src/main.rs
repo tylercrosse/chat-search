@@ -165,6 +165,22 @@ enum Command {
         #[arg(long)]
         db: Option<PathBuf>,
     },
+    /// One conversation's messages, head path only.
+    ///
+    /// `--json` is the client contract (ADR 12): every field a reader needs, including which
+    /// messages are drawn and which matches are entitled to claim they ranked the
+    /// conversation, so no client re-derives either.
+    Show {
+        conv_id: String,
+        /// Same syntax as `cs search`. Marks the terms the ranker would have matched, so a
+        /// highlight here means what it means in the results list. Omitted marks nothing.
+        #[arg(allow_hyphen_values = true, default_value = "")]
+        query: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     /// Measure the ranking against judged queries.
     Eval {
         #[command(subcommand)]
@@ -258,6 +274,9 @@ fn main() -> Result<()> {
         }
         Command::Needs { limit, json } => commands::needs(&config_path, limit, json),
         Command::Explain { conv_id, query: q, db } => commands::explain(&config_path, db, &conv_id, &q),
+        Command::Show { conv_id, query: q, db, json } => {
+            commands::show(&config_path, db, &conv_id, &q, json)
+        }
         Command::Eval { command } => match command {
             EvalCommand::Sheet { set, db, depth, only, force } => {
                 eval::sheet(&config_path, db, &set, depth, only.as_deref(), force)

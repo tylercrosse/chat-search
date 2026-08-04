@@ -169,6 +169,11 @@ pub fn search(
         field: if tools { cs_core::Field::Tools } else { cs_core::Field::Prose },
         include_off_path,
         nested,
+        // The shape rides on the JSON and nothing else, because nothing else draws it: the
+        // terminal listing prints a title, a date and a snippet. It is not free — see
+        // `SearchOptions::shape` for what it costs — so the surface that cannot use it does
+        // not pay for it.
+        shape: json,
         ..cs_core::SearchOptions::new(cs_core::now_ms())
     };
 
@@ -387,6 +392,49 @@ pub fn explain(config_path: &Path, db_path: Option<PathBuf>, conv_id: &str, quer
     let conn = rusqlite_open(&db_path)?;
     let e = cs_core::explain(&conn, conv_id, query, cs_core::now_ms())?;
     println!("{:#}", serde_json::to_value(&e)?);
+    Ok(())
+}
+
+/// One conversation's messages, for a reader.
+///
+/// The whole point of `--json`: it is the only way a client that is not Rust can draw a
+/// conversation, and every rule it needs — head path, which messages are drawn, which matches
+/// may claim to have ranked it — is answered by `cs_core::blocks` rather than by the client.
+/// A missing conversation is a real failure and exits nonzero, because a client cannot tell an
+/// empty conversation from a wrong id if both print `[]`.
+pub fn show(
+    config_path: &Path,
+    db_path: Option<PathBuf>,
+    conv_id: &str,
+    query: &str,
+    json: bool,
+) -> Result<()> {
+    let cfg = Config::load(config_path)?;
+    let db_path = db_path.unwrap_or_else(|| cfg.default_db());
+    let conn = rusqlite_open(&db_path)?;
+    let terms = cs_core::Query::exact(query).marking_terms();
+    let blocks = cs_core::blocks::load(&conn, conv_id, &terms)?;
+    if blocks.is_empty() {
+        anyhow::bail!("no conversation {conv_id:?} in {} (or none of it is on the head path)", db_path.display());
+    }
+    let t = cs_core::Transcript::of(conv_id, &terms, blocks);
+    if json {
+        println!("{:#}", serde_json::to_value(&t)?);
+        return Ok(());
+    }
+    // Deliberately thin. The readable form is a table of contents, not a second renderer —
+    // `cs-tui` already owns the one that wraps, folds and marks, and a second one here would
+    // be the duplication `blocks` exists to prevent.
+    println!("{} — {} messages, {} drawn, {} thread(s)", t.conv_id, t.count, t.drawn, t.threads);
+    for m in &t.messages {
+        if !m.drawn {
+            continue;
+        }
+        let first = m.block.text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+        let head: String = first.chars().take(96).collect();
+        let mark = if m.block.marks.is_empty() { ' ' } else { '*' };
+        println!("{mark} {:>5}  {:<11} {:<9} {head}", m.block.seq, m.block.kind, m.block.role);
+    }
     Ok(())
 }
 

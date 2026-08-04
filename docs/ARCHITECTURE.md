@@ -219,6 +219,7 @@ can already answer the question.
 | which of them reach the index, and what each contributes | `cs index` — a source that contributes nothing gets a row saying **why**, because a silently missing row is how 2,011 ChatGPT conversations once vanished from a run that reported success (`6eb.7`) |
 | whether the ranking is any good | `cs eval run` for the score — `—` rather than a number until the set is judged, which is the honest answer today (`evals/README.md`). `cs needs` for what has actually been searched for |
 | whether a specific conversation is findable | `cs explain <conv-id> <query>` |
+| what one conversation actually contains | `cs show <conv-id> [query]`. `--json` is the client contract (ADR 12): it carries the fold rules' answers — which messages are drawn, which matches may claim to have ranked it — so a non-Rust reader never re-derives them |
 
 Counts those commands print describe **the last rebuild, not the code**: on 2026-07-30 the
 index on this machine held 2,935 conversations across three sources and no `gemini-cli` rows at

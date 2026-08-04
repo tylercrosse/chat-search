@@ -6,8 +6,11 @@
 //! bugs rather than compile errors.
 //!
 //! `time` holds what every client needs and no client should re-derive: the clock, and the
-//! rule for naming the local day an instant fell on.
+//! rule for naming the local day an instant fell on. `blocks` is the same idea one level up:
+//! which messages a reader draws and which matches may claim to have ranked the conversation,
+//! answered once for the TUI, `cs show --json`, and everything downstream of that JSON.
 
+pub mod blocks;
 pub mod destination;
 pub mod eval;
 pub mod highlight;
@@ -19,6 +22,7 @@ pub mod schema;
 pub mod search;
 pub mod time;
 
+pub use blocks::{Block, Density, Fold, MarkKind, Transcript, WireBlock};
 pub use destination::{destinations, Destination};
 pub use eval::{Grade, Judged, QueryScore, Report};
 pub use index::{

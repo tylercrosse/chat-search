@@ -1,9 +1,9 @@
-//! The conversation, folded (docs/TUI-DESIGN.md §8).
+//! The conversation, drawn (docs/TUI-DESIGN.md §8).
 //!
-//! Renders from `message` rows, so `role`, `kind` and `on_head_path` are read rather than
-//! guessed back out of prose. fast-resume cannot do this — it flattens messages into one
-//! string and re-derives structure by sniffing sigils, which loses the role of every
-//! paragraph after the first.
+//! The *rules* — which messages are drawn, how each kind folds by default, and which matches
+//! may claim to have ranked the conversation — live in [`cs_core::blocks`], because the TUI is
+//! no longer the only thing that has to answer them. What is left here is this terminal's
+//! answer to them: rows, wrapping, gutters, sigils and styles.
 //!
 //! Folding is the whole design. Prose is 24% of this corpus; `tool_call` and `tool_result`
 //! are 33% each and `reasoning` 8% (measured 2026-07-30 over 168k messages). Rendering all
@@ -13,86 +13,14 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use cs_core::highlight::{self, Span as Mark};
+use cs_core::blocks::{self, Block, Density, Fold, MarkKind};
+use cs_core::highlight::Span as Mark;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use rusqlite::Connection;
 
 use crate::text;
 use crate::theme::Theme;
-
-/// How much of every message is shown by default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Density {
-    /// Prose in full, everything else collapsed.
-    Full,
-    /// One line per message — the whole conversation as a map.
-    Outline,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Fold {
-    Collapsed,
-    Expanded,
-}
-
-pub struct Block {
-    pub msg_id: String,
-    pub role: String,
-    pub kind: String,
-    pub seq: i64,
-    pub on_path: bool,
-    pub text: String,
-    /// A subagent strand. Worth marking rather than hiding: it is part of what happened, but
-    /// it is not the conversation you were having.
-    pub is_sidechain: bool,
-    /// This result reports a failure. Set by the importer from the source's own signal.
-    pub is_error: bool,
-    pub thread_key: String,
-    /// Byte offsets into `text` of the terms this message matched, from the same matcher that
-    /// ranked it (`cs_core::highlight`).
-    ///
-    /// Held on the block rather than recomputed at render time because locating them means
-    /// tokenizing the message — ~25 µs fixed plus ~60 ns per byte through the scratch table —
-    /// and `lines` runs on every frame, so marking there would pay that on every wheel notch
-    /// and every keystroke. Computed once per `(conversation, query)` in [`Preview::load`],
-    /// which is §8's "build once, not per frame" with the cache key made structural: the whole
-    /// `Preview` is thrown away when either half of the key changes.
-    marks: Vec<Mark>,
-}
-
-impl Block {
-    /// Whether this message is drawn at all.
-    ///
-    /// A *successful* `tool_result` is omitted rather than collapsed: the result is a blob
-    /// whose existence the call already implies, so a line reading `↳ 1.2 KB` spends a row
-    /// repeating what `⚙ Read(schema.rs)` just said.
-    ///
-    /// A failed one is kept, because "the tool broke here" is recognition information in a
-    /// way a successful result is not — it is often the thing that makes a conversation the
-    /// one you were looking for. `Message::is_error` comes from each source's own signal
-    /// (Claude Code's `is_error`, Codex's `metadata.exit_code`), never from the text.
-    pub fn drawn(&self) -> bool {
-        self.kind != "tool_result" || self.is_error
-    }
-
-    /// Which layer-3 style a match inside this block is entitled to.
-    ///
-    /// Everything drawn here gets marked, because marking runs over a scratch table that
-    /// indexes whatever text it is handed and knows nothing about the corpus index. For most
-    /// kinds those two agree. For one they do not: a `reasoning` block carries no postings
-    /// (`Kind::is_indexed`), so a word highlighted in it is a word `cs search` will not find
-    /// and `cs explain` reports zero hits for. Drawing that in `match_hl` states that the
-    /// match is why the conversation is on screen, which it cannot be.
-    ///
-    /// Derived from `Kind::ALL` rather than testing for `"reasoning"`, so this answer follows
-    /// the indexing rule instead of restating a snapshot of it (chat-search-8mb).
-    fn mark_style(&self, theme: &Theme) -> Style {
-        let unranked =
-            cs_core::Kind::ALL.iter().any(|k| !k.is_indexed() && k.as_str() == self.kind);
-        if unranked { theme.match_unranked } else { theme.match_hl }
-    }
-}
 
 pub struct Preview {
     pub conv_id: String,
@@ -134,74 +62,13 @@ struct LayoutKey {
 }
 
 impl Preview {
-    /// Read one conversation's messages.
+    /// Read one conversation's messages and open on the first that matched.
     ///
-    /// Head path only. A message edited away is still searchable and still indexed, but
-    /// showing it inline without saying so would present an abandoned branch as the
-    /// conversation — see the off-path toggle in §8, which is not built yet.
-    /// `terms` come from [`cs_core::search::marking_terms`] — not from splitting the query here,
-    /// so the preview marks exactly what the ranker matched, trailing prefix star included. An
-    /// empty slice marks nothing, which is the honest state for a query that was never run.
+    /// The read, the head-path rule and the marking pass are [`cs_core::blocks::load`]; what is
+    /// added here is the anchor, which is a property of a pane that has somewhere to scroll to
+    /// rather than of the conversation.
     pub fn load(conn: &Connection, conv_id: &str, terms: &[String]) -> rusqlite::Result<Self> {
-        // `seq` is per *thread*, not per conversation — ADR 4 makes a conversation a DAG and
-        // `thread_key` carries which strand a message belongs to. Ordering by `seq` alone
-        // therefore interleaves every thread at once: on a real 9-thread conversation it put
-        // all nine opening user turns first, then all nine first replies, which reads as
-        // nonsense. Main thread before sidechains, each strand contiguous. `idx_message_thread`
-        // is (conv_id, thread_key, seq), which exists for exactly this.
-        let mut stmt = conn.prepare_cached(
-            "SELECT id, role, kind, seq, on_head_path, text, is_sidechain, thread_key, is_error
-             FROM message WHERE conv_id = ?1 AND on_head_path = 1
-             ORDER BY is_sidechain, thread_key, seq",
-        )?;
-        let blocks = stmt
-            .query_map(rusqlite::params![conv_id], |r| {
-                Ok(Block {
-                    msg_id: r.get(0)?,
-                    role: r.get(1)?,
-                    kind: r.get(2)?,
-                    seq: r.get(3)?,
-                    on_path: r.get::<_, i64>(4)? != 0,
-                    text: r.get(5)?,
-                    is_sidechain: r.get::<_, i64>(6)? != 0,
-                    thread_key: r.get(7)?,
-                    is_error: r.get::<_, i64>(8)? != 0,
-                    marks: Vec::new(),
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-
-        // Only what is drawn: a successful `tool_result` is never rendered, so locating its
-        // matches would buy nothing, and this corpus is a third such messages by count.
-        //
-        // Deliberately *not* asked of the corpus index, even though `fts_prose` now holds
-        // postings for every one of these rows and could mark them without an insert
-        // (chat-search-6eb.30). The TUI's final token is always a prefix (`the*`, `commits*`),
-        // and fts5 answers a prefix by walking its vocabulary for every term that starts that
-        // way — per query, across all 180k messages. Against a scratch table holding this one
-        // conversation that expansion is free, which is why `spans_many` stays the right call
-        // here and why `cs_core::highlight::spans_for` routes a prefix the same way.
-        //
-        // Measured on the corpus's longest conversation (1,479 drawn blocks, 942 KB): marking
-        // everything through the scratch table is a flat 110–126 ms whatever the query, while
-        // asking the index which messages match first is 64 ms for `borrow checker`, 242 ms for
-        // `commits` and 17.9 *seconds* for `the`. Predictable beats occasionally faster.
-        let mut blocks = blocks;
-        if !terms.is_empty() {
-            // One trip through the highlighter for the whole conversation. Marking cost is per
-            // *call*, not per byte — the same 937 KB took 224 ms as 1,468 calls and 53 ms as
-            // one — so the number of messages, not their size, was what made opening a long
-            // conversation slow.
-            let marks = {
-                let drawn: Vec<&str> =
-                    blocks.iter().filter(|b| b.drawn()).map(|b| b.text.as_str()).collect();
-                highlight::spans_many(&drawn, terms)
-            };
-            for (block, found) in blocks.iter_mut().filter(|b| b.drawn()).zip(marks) {
-                block.marks = found;
-            }
-        }
-
+        let blocks = blocks::load(conn, conv_id, terms)?;
         let focus = anchor(&blocks);
         Ok(Self {
             conv_id: conv_id.to_string(),
@@ -226,15 +93,14 @@ impl Preview {
 
     /// Resolve a block's fold: an explicit override, else the default for its kind under the
     /// current density.
+    ///
+    /// The override is session state and lives here; the default is a rule every client shares
+    /// and lives in core.
     pub fn fold_of(&self, block: &Block) -> Fold {
         if let Some(explicit) = self.overrides.get(&block.msg_id) {
             return *explicit;
         }
-        match (self.density, block.kind.as_str()) {
-            (Density::Outline, _) => Fold::Collapsed,
-            (Density::Full, "prose") => Fold::Expanded,
-            (Density::Full, _) => Fold::Collapsed,
-        }
+        self.density.default_fold(&block.kind)
     }
 
     pub fn cycle_density(&mut self) {
@@ -431,7 +297,7 @@ impl Preview {
                         // repeated on every wrapped row, which is what keeps a long paragraph
                         // and a fenced block visually distinct all the way down.
                         let marks = rebase(&block.marks, at, raw.len(), 0);
-                        let body = text::marked_runs(raw, &marks, base, block.mark_style(theme));
+                        let body = text::marked_runs(raw, &marks, base, mark_style(block, theme));
                         for wrapped in wrap_body(indent.clone(), body, theme, width) {
                             out.push(Row::body(i, wrapped));
                         }
@@ -496,16 +362,21 @@ fn speaker(block: &Block) -> String {
     if block.is_sidechain { format!("{who} [subagent]") } else { who.to_string() }
 }
 
-/// Distinct strands in this conversation, for the header.
-pub fn thread_count(blocks: &[Block]) -> usize {
-    let mut keys: Vec<&str> = blocks.iter().map(|b| b.thread_key.as_str()).collect();
-    keys.sort_unstable();
-    keys.dedup();
-    keys.len()
-}
-
 fn speaker_style(block: &Block, theme: &Theme) -> Style {
     if block.role == "user" { theme.accent } else { theme.header }
+}
+
+/// This terminal's answer to [`MarkKind`] — which layer-3 style a match is entitled to.
+///
+/// Core decides *whether* a match may claim to have ranked the conversation; the two styles
+/// here are how that claim is said out loud. They are told apart by a text modifier rather than
+/// a colour, because §7 forbids encoding anything in colour alone and `NO_COLOR` is exactly
+/// where a reader most needs to know which of the two they are looking at.
+fn mark_style(block: &Block, theme: &Theme) -> Style {
+    match block.mark_kind() {
+        MarkKind::Ranked => theme.match_hl,
+        MarkKind::Unranked => theme.match_unranked,
+    }
 }
 
 /// One line standing in for a whole message, with any matches in it marked.
@@ -545,7 +416,7 @@ fn collapsed_runs(block: &Block, theme: &Theme) -> Vec<Span<'static>> {
             (format!("{sigil}{line}"), marks, Style::new())
         }
     };
-    text::marked_runs(&body, &marks, style, block.mark_style(theme))
+    text::marked_runs(&body, &marks, style, mark_style(block, theme))
 }
 
 /// Marks rebased from `block.text` onto a line lifted out of it at `at`, then shifted by the
@@ -709,6 +580,7 @@ fn tool_summary(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cs_core::highlight;
 
     fn block(kind: &str, role: &str, id: &str, text: &str) -> Block {
         Block {
@@ -879,7 +751,7 @@ mod tests {
             b("sub-a", true, 0, "a0"),
             b("sub-a", true, 1, "a1"),
         ];
-        assert_eq!(thread_count(&blocks), 2);
+        assert_eq!(blocks::thread_count(&blocks), 2);
         let p = preview(blocks);
         let order: Vec<&str> = p.drawn().map(|x| x.msg_id.as_str()).collect();
         assert_eq!(order, ["m0", "m1", "a0", "a1"]);
@@ -1168,15 +1040,18 @@ mod tests {
     }
 
     #[test]
-    fn which_kinds_mark_quietly_follows_the_indexing_rule_rather_than_a_copy_of_it() {
-        // If `Kind::is_indexed` changes its mind, this changes with it. A `== "reasoning"`
-        // test here would be a second copy of that rule, quietly drifting from the first.
+    fn each_mark_kind_gets_the_style_that_says_what_it_claims() {
+        // The mapping only. *Which* kinds mark quietly is core's rule and is tested there
+        // against `Kind::is_indexed`; asserting it again here would be the second copy of that
+        // rule this move exists to delete.
         let theme = Theme::plain();
         for kind in cs_core::Kind::ALL {
             let b = marked(kind.as_str(), "assistant", "a", "the borrow rules", "borrow");
-            let expected =
-                if kind.is_indexed() { theme.match_hl } else { theme.match_unranked };
-            assert_eq!(b.mark_style(&theme), expected, "{kind:?}");
+            let expected = match b.mark_kind() {
+                MarkKind::Ranked => theme.match_hl,
+                MarkKind::Unranked => theme.match_unranked,
+            };
+            assert_eq!(mark_style(&b, &theme), expected, "{kind:?}");
         }
     }
 

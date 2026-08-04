@@ -178,6 +178,8 @@ The indexes were `content=''` until 2026-08-01. External content stores no more 
 
 **Why.** This is the un-boxing move — it lets the daemon question stay open and makes a core rewrite contained. Measured: the query is 1–3 ms in every runtime and the entire spread between runtimes is process startup, so the seam choice matters more than the language.
 
+**Where it is written down.** [JSON-CONTRACT.md](./JSON-CONTRACT.md), field by field, for `cs search --json`. It was not, for the first week of the seam being real, and "one JSON contract" turned out not to mean the same thing to the code and to a client: the first surface to decode it without reading the Rust structs typed a nullable field as non-optional and threw at row 54 of a 60-row page (chat-search-me9.27). A contract nobody wrote down is a contract each client reconstructs by observation, and observation only ever reaches the states that happen to be common.
+
 **Revisit when.** A transport other than argv is actually needed. Decision 14 settled daemon vs subprocess in favour of subprocess (2026-07-29), so argv is the only transport in play; `--stdio` is the next one up, and a socket only after that.
 
 ---

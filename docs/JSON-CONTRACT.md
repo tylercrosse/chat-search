@@ -248,8 +248,23 @@ about them.
 
 ## How this stays true
 
-`crates/cs/tests/json_contract.rs` builds an index whose conversations exercise every state
-above — untitled, zero-message, no `cwd`, no `ts`, no destination — runs the real binary
-against it, and asserts the exact key set of every object as well as which of them are null.
-Adding a field to `Hit` or `Group` fails that test, which is the point: the failure is the
-reminder that this file is now wrong.
+**The three field tables above are read by a test.** `crates/cs/tests/json_contract.rs` parses
+them out of this file, builds an index whose conversations exercise every state described —
+untitled, zero-message, no `cwd`, no `ts`, no destination — runs the real binary against it,
+and checks both directions:
+
+- every key the binary emits has a row here, and every row here names a key the binary emits;
+- a key this file calls `never` is null nowhere in the response;
+- a key this file calls **nullable** *is* null somewhere. That is the half that stops this
+  document rotting: a field made non-null at the source would otherwise leave the prose telling
+  a client to handle a state that can no longer occur.
+
+So the tables are the contract rather than a description of it, and the parser is deliberately
+literal: a field row opens with the key backticked in the first column, and the third column is
+read for the words *nullable* and *absent*. Reformatting a table breaks the test rather than
+silently unhooking it, which is the failure mode worth having — a pin that quietly stops
+matching anything is worse than no pin, because it still reads as one.
+
+Adding a field to `Hit` or `Group` therefore fails the suite until a row lands here. That is
+the point: the failure is the reminder, because the version of this file that goes stale is one
+nobody was forced to update.

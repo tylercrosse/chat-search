@@ -238,7 +238,7 @@ carries what would falsify it, so a doubtful reader settles it in about a second
 | OpenCode capture, and any OpenCode importer | bundle layout (ADR 18) is unimplemented, so the configured `opencode` source is skipped by `cs scan` and `cs archive` alike, and `import_source` has no arm for it | `grep -rn "Layout::Bundle" crates/` — skips and a reserved id, no capture path |
 | Incremental indexing | ADR 10 — full rebuild is ~10.6s, and patching an FTS index through deletes is where the bugs live | `cs index` opens with `open_fresh`; nothing else in `cs` writes to `index.db` |
 | A daemon | rejected on measurement 2026-07-29 (ADR 14): ~3 ms of spawn-and-open, against a socket protocol, a lifecycle, and a stale-cache failure mode over a database designed to be deleted | — |
-| Raycast, VS Code, menu-bar surfaces | ADR 12's JSON contract exists precisely so these stay a weekend rather than a refactor | `cs --help` lists the surfaces that exist |
+| Raycast, VS Code, menu-bar surfaces | ADR 12's JSON contract exists precisely so these stay a weekend rather than a refactor, and [JSON-CONTRACT.md](./JSON-CONTRACT.md) is what one decodes | `cs --help` lists the surfaces that exist |
 | Redaction | ADR 15, still `open`, and it gates anything leaving this machine | — |
 
 ### Built in part — the state neither a table nor the code admits to

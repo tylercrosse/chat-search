@@ -14,6 +14,8 @@ Terms are marked **[schema]** where they correspond to a table, column, or enum 
 
 **Thread** **[schema, planned]** A single linear stream of messages inside a conversation. Every conversation has one _main thread_; each subagent invocation adds another. This is the level that maps one-to-one with a transcript file for Codex and Claude Code, which is why "one file, one conversation" is wrong.
 
+A thread is _inside_ a conversation. A **sitting** (see [Search](#search)) runs the other way — several conversations read as one — and the two must not borrow each other's name.
+
 **Message** **[schema]** One immutable node. Never updated in place; corrections arrive as new messages. Carries `parent_id`, making the messages of a conversation a DAG rather than a list.
 
 **Kind** **[schema]** What a message _is_, as distinct from who sent it. Exactly one of:
@@ -144,10 +146,13 @@ Repeated tokens of one facet **union** — `agent:codex agent:claude-code` selec
 
 **Mode** Whether a query can be run — `Empty` (nothing searchable typed), `TooShort` (a lone term below the prefix floor), or `Searchable`. `cs-core` owns the fact, a client owns what to show for it. The distinction is a measured ranking cost rather than a matter of taste: `h*` is 2510 ms against `hov*` at 16 ms, because BM25 scores every matching row before it can sort.
 
+**Sitting** **[read-time, `cs_core::sittings`]** Several conversations read back as the one chat they were. Google Takeout exports an activity log with no conversation key at any nesting level, so a twenty-turn Gemini chat is twenty conversations in the index; records of one `(source, surface)` separated by less than 30 minutes of silence are one sitting, keyed on the conversation that opened it. 1,271 activity records fold to 462 rows.
+
+**Not a thread**, which is a linear stream _inside_ a conversation and runs the other way. Not a conversation either: it has no id, and it never gets one. A conversation id is permanent (ADR 16), so an id derived from a gap threshold would change the day the threshold did and duplicate the corpus — which is why this is computed at read time, in temp tables, where being wrong costs a rebuild of nothing. A **row** is what a result set returns: a conversation, or a sitting standing for several.
+
 **Need** **[`queries.jsonl`]** One thing somebody went looking for, which is what the query log folds down to — deliberately not one distinct query string. `l`, `la`, `lau` … `launchd` typed in under two seconds is one need; the same query run three times to take a median is one need searched once; a pick made with nothing typed is no need at all, because nothing was asked. The unit `chat-search-6eb.21` harvests an eval set in, and the reason its "20+ distinct queries" trigger cannot be read off a count of distinct strings (ADR 22).
 
 **Driven span** **[`queries.jsonl`]** An authored assertion that a stretch of the query log was machine-driven — a benchmark, a smoke test — rather than typed by somebody who wanted an answer. Authored rather than detected because nothing in a search event separates the two: a query typed to measure latency is ordinary text and goes unpicked, which is also exactly what an abandoned search looks like. Appended, never rewritten, and deletable if it was wrong.
-
 ---
 
 ## Vendor translation
@@ -181,4 +186,5 @@ Words to avoid, because they are ambiguous across sources:
 - **"Session"** unqualified — native tools use it for both the conversation and a single process run. Say _conversation_ or _thread_.
 - **"Chat"** — fine in UI copy, not in code or schema.
 - **"Branch"** unqualified — say _fork_, _subagent thread_, or _edit-branch_.
+- **"Thread"** for a group of _conversations_ — say _sitting_. A thread is inside a conversation; a sitting is made of several. `chat-search-o1i.5` is filed under the wrong one of these, which is how easily it happens.
 - **"Resume"** — Codex's subagent files were misread as resumes. If a genuine resume mechanism turns up, name it then, with evidence.

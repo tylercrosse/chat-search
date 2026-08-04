@@ -57,8 +57,12 @@
 //! not do, because a conversation id must be permanent and an id derived from a heuristic
 //! changes the day the heuristic does. Every conversation in the corpus would get a new id
 //! the first time someone tuned the gap threshold, and the archive would gain a duplicate
-//! copy of all of it. Turning the log back into threads belongs at *read* time, where being
-//! wrong is free, and is filed as chat-search-o1i.5.
+//! copy of all of it.
+//!
+//! Turning the log back into chats happens at *read* time instead, where being wrong is free:
+//! [`cs_core::sittings`] folds records less than 30 minutes apart into one **sitting** and the
+//! search layer returns it as one row. Nothing it computes is stored, and nothing it computes
+//! is an id — which is the whole reason the two halves are separate (chat-search-o1i.5).
 //!
 //! `native_id` is therefore the record's own `time`. It is unique — 1,173 and 145 distinct
 //! within each file, and zero collisions across them, measured — it is a property of the

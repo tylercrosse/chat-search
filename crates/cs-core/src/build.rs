@@ -154,8 +154,10 @@ impl IndexBuild {
     /// Start a build, refusing if another one is already running.
     ///
     /// A killed build leaves its half-written file behind. That file is worth nothing — the
-    /// archive can produce it again — so a fresh build removes it rather than resuming it,
-    /// which is the reasoning that makes [`index::open_fresh`] delete rather than empty.
+    /// archive can produce it again — so a fresh build deletes it rather than resuming or
+    /// emptying it. Deleting is also the only thing that works: `CREATE TABLE IF NOT EXISTS`
+    /// will not add a column a newer schema introduced, so a reused file is a rebuild that
+    /// silently keeps the old shape.
     pub fn begin(target: &Path) -> Result<Self, BuildError> {
         let temp = building_path(target);
         let claim = claim_path(target);

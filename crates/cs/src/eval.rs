@@ -587,8 +587,7 @@ fn trunc(s: &str, n: usize) -> String {
 fn open_index(config_path: &Path, db_path: Option<PathBuf>) -> Result<rusqlite::Connection> {
     let cfg = cs_archive::Config::load(config_path)?;
     let path = db_path.unwrap_or_else(|| cfg.default_db());
-    rusqlite::Connection::open(&path)
-        .with_context(|| format!("opening {} (run `cs index` first?)", path.display()))
+    Ok(cs_core::open_for_read(&path)?.conn)
 }
 
 #[cfg(test)]

@@ -33,8 +33,9 @@ pub fn index(
     let db_path = db_path.unwrap_or_else(|| cfg.default_db());
 
     let started = std::time::Instant::now();
-    let mut conn = cs_core::open_fresh(db_path.to_str().context("db path is not utf-8")?)
-        .context("opening index")?;
+    // Built beside the live index, never over it: until `commit` renames it into place every
+    // query is still answered, in full, out of the previous build (chat-search-me9.28).
+    let mut build = cs_core::IndexBuild::begin(&db_path).context("starting the build")?;
 
     let mut reports = Vec::new();
     let mut totals = cs_core::IndexStats::default();
@@ -60,12 +61,15 @@ pub fn index(
                 Err(_) => failed += 1,
             }
         }
-        let stats = cs_core::write_conversations_with(&mut conn, convs.iter(), opts)
+        let stats = cs_core::write_conversations_with(build.conn(), convs.iter(), opts)
             .with_context(|| format!("indexing {}", source.id))?;
         reports.push(source_report(&source.id, files.len(), failed, &stats, t0));
         accumulate(&mut totals, &stats);
     }
 
+    // Before the summary, and inside the timing: what the numbers below describe is the index
+    // a client can now query, not a file that was written and might yet fail to arrive.
+    build.commit().context("swapping the new index into place")?;
     let ms = started.elapsed().as_millis() as u64;
     if json {
         println!("{:#}", serde_json::json!({
@@ -159,7 +163,8 @@ pub fn search(
     let cfg = Config::load(config_path)?;
     let db_path = db_path.unwrap_or_else(|| cfg.default_db());
     let t0 = std::time::Instant::now();
-    let conn = rusqlite_open(&db_path)?;
+    let index = open_index(&db_path, json)?;
+    let conn = &index.conn;
     // `--source` desugars into the query's own filters rather than living beside them: one
     // home for a filter, whether it arrived as a flag or as `agent:` in the text.
     let parsed = if prefix { cs_core::Query::typeahead(text) } else { cs_core::Query::exact(text) }
@@ -187,9 +192,15 @@ pub fn search(
             rejected.join(", ")
         );
     }
+    // The JSON carries this as a field; a terminal gets the sentence. Either way it is a note
+    // and not a warning: what came back is the previous build's answer in full, not a partial
+    // one, because the new index is swapped in whole (chat-search-me9.28).
+    if index.state == cs_core::IndexState::Rebuilding && !json {
+        eprintln!("note: a rebuild is running — these results are the previous index's");
+    }
 
     if !flat {
-        let groups = cs_core::search_grouped(&conn, &parsed, &q)?;
+        let groups = cs_core::search_grouped(conn, &parsed, &q)?;
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         // Typeahead is excluded: `--prefix` fires once per keystroke, so logging it would
         // bury the handful of real queries under every prefix of each of them. A client
@@ -197,10 +208,10 @@ pub fn search(
         if !prefix {
             log_search(&cfg, text, source, &groups, ms);
         }
-        return render_groups(&groups, text, &rejected, ms, json);
+        return render_groups(&groups, text, &rejected, index.state, ms, json);
     }
 
-    let hits = cs_core::search(&conn, &parsed, &q)?;
+    let hits = cs_core::search(conn, &parsed, &q)?;
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
 
     if json {
@@ -211,6 +222,7 @@ pub fn search(
             // means what it says. What narrowed is which filters land in it — since
             // `chat-search-6eb.11` only a value nothing can select on does.
             "results": hits, "unapplied_filters": rejected,
+            "index_state": index.state.as_str(),
         }));
     } else if hits.is_empty() {
         println!("no results for {text:?}");
@@ -273,7 +285,10 @@ pub fn pick(
 ) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let db_path = db_path.unwrap_or_else(|| cfg.default_db());
-    let conn = rusqlite_open(&db_path)?;
+    // No `--json` here: what this prints on success is a shell line, so an error body would
+    // be a second language on the same stream.
+    let index = open_index(&db_path, false)?;
+    let conn = &index.conn;
 
     let parsed = cs_core::Query::exact(text).with_source(source);
     let (mut shown, n) = if parsed.mode() == cs_core::Mode::Empty {
@@ -389,8 +404,9 @@ fn trunc(s: &str, n: usize) -> String {
 pub fn explain(config_path: &Path, db_path: Option<PathBuf>, conv_id: &str, query: &str) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let db_path = db_path.unwrap_or_else(|| cfg.default_db());
-    let conn = rusqlite_open(&db_path)?;
-    let e = cs_core::explain(&conn, conv_id, query, cs_core::now_ms())?;
+    let index = open_index(&db_path, true)?;
+    let conn = &index.conn;
+    let e = cs_core::explain(conn, conv_id, query, cs_core::now_ms())?;
     println!("{:#}", serde_json::to_value(&e)?);
     Ok(())
 }
@@ -411,9 +427,10 @@ pub fn show(
 ) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let db_path = db_path.unwrap_or_else(|| cfg.default_db());
-    let conn = rusqlite_open(&db_path)?;
+    let index = open_index(&db_path, json)?;
+    let conn = &index.conn;
     let terms = cs_core::Query::exact(query).marking_terms();
-    let blocks = cs_core::blocks::load(&conn, conv_id, &terms)?;
+    let blocks = cs_core::blocks::load(conn, conv_id, &terms)?;
     if blocks.is_empty() {
         anyhow::bail!("no conversation {conv_id:?} in {} (or none of it is on the head path)", db_path.display());
     }
@@ -438,14 +455,23 @@ pub fn show(
     Ok(())
 }
 
-fn rusqlite_open(path: &Path) -> Result<rusqlite::Connection> {
-    let conn = rusqlite::Connection::open(path)
-        .with_context(|| format!("opening {} (run `cs index` first?)", path.display()))?;
-    // A schema change otherwise surfaces as `no such column` from inside a query, which
-    // describes SQLite rather than the situation. The index is a pure function of the
-    // archive (ADR 1), so the remedy never varies.
-    cs_core::ensure_current(&conn).map_err(anyhow::Error::msg)?;
-    Ok(conn)
+/// Open the index for reading, or say why not in a form a client can branch on.
+///
+/// The `--json` audience gets an error *body* on stdout beside the nonzero exit. ADR 14 makes
+/// the exit code part of the interface, but the code alone cannot say which situation it was,
+/// and what arrived beside it was one English sentence — so the first non-Rust client to read
+/// this contract classified index health by substring-matching another program's prose
+/// (chat-search-me9.22). `code` is the contract; the message stays free to be reworded.
+fn open_index(db_path: &Path, json: bool) -> Result<cs_core::Reader> {
+    cs_core::open_for_read(db_path).map_err(|why| {
+        if json {
+            println!(
+                "{:#}",
+                serde_json::json!({"error": {"code": why.code(), "message": why.to_string()}})
+            );
+        }
+        anyhow::Error::new(why)
+    })
 }
 
 /// Conversation-grouped output: the conversation is the result, its best matching messages
@@ -456,6 +482,7 @@ fn render_groups(
     groups: &[cs_core::Group],
     query: &str,
     rejected: &[String],
+    state: cs_core::IndexState,
     ms: f64,
     json: bool,
 ) -> Result<()> {
@@ -464,6 +491,11 @@ fn render_groups(
             "query": query, "ms": (ms * 100.0).round() / 100.0,
             "count": groups.len(), "grouped": true, "results": groups,
             "unapplied_filters": rejected,
+            // `ready` or `rebuilding`, and both mean the results are complete — the index is
+            // swapped in whole, so a client never has to wonder whether an empty answer is an
+            // answer. `rebuilding` says only that a newer index is on the way, which is what
+            // lets a client offer to ask again rather than believing this is the final word.
+            "index_state": state.as_str(),
         }));
         return Ok(());
     }

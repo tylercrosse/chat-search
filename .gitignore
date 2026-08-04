@@ -1,5 +1,6 @@
 target/
 poc/rust/target/
+poc/swift/.build/
 .DS_Store
 
 # Never commit transcripts, archives or indexes: they contain conversation content,

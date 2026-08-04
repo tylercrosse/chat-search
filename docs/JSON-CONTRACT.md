@@ -42,6 +42,7 @@ substring-matching English).
 | `grouped` | `true` | **absent under `--flat`** | Present and always `true` in the default shape. `--flat` omits the key rather than emitting `false`, so a decoder modelling one envelope for both shapes must treat it as optional. See [Known warts](#known-warts). |
 | `results` | array | never; may be empty | `Group[]` by default, `Hit[]` under `--flat`. |
 | `unapplied_filters` | array of string | never; may be empty | Filter tokens whose *value* selects nothing, e.g. `agent:notathing`. They parsed as filters and were then not applied, so the result set is wider than the query asked for. Non-empty is not an error and the exit status stays 0; a client that ignores this silently shows unfiltered results for a filtered query (`chat-search-6eb.11`). |
+| `index_state` | string | never | What is at the index path: `ready` or `rebuilding` on any answered search, and `no_index` or `building` in the error body of one that could not be. **Both answering states mean the results are complete** — since `chat-search-me9.28` a rebuild assembles a sibling and swaps it in whole, so a client never has to wonder whether a thin answer is a partial one. `rebuilding` says only that a newer index is on its way, which is what lets a client offer to ask again rather than presenting this as the last word. Branch on the name, never on the sentence beside it (ADR 12). |
 
 Object keys are emitted in alphabetical order. That is an artefact of how the response is
 built, not a promise — decode by name.

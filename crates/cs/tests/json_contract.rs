@@ -134,7 +134,12 @@ impl Fixture {
         )
         .unwrap();
 
-        let mut conn = cs_core::open_fresh(f.db().to_str().unwrap()).unwrap();
+        // `open`, not the retired `open_fresh`: chat-search-me9.28 moved rebuilds behind
+        // `IndexBuild`, which assembles a sibling and swaps it in. There is nothing to clear
+        // here — the fixture owns a fresh temp directory — so the deletion `open_fresh` did
+        // first has no work to do, and going through a build would test the build rather than
+        // the contract this file is about.
+        let mut conn = cs_core::open(f.db().to_str().unwrap()).unwrap();
         cs_core::write_conversations(&mut conn, corpus().iter()).unwrap();
         f
     }

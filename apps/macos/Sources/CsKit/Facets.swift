@@ -9,6 +9,11 @@ import Foundation
 // **Nothing here assembles an `agent:` token.** That is the point. A client that built its own
 // would be the second, partial parser §5 costs out at six reconciliation methods in the tool it
 // was lifted from, and the two parsers would agree until the day the grammar moved.
+//
+// Three sections, and the differences between them are all on the far side of the seam: a second
+// source widens the `agent:` token, a second span *replaces* the `date:` one because two dates
+// intersect, and one `dir:` fragment lights every directory beneath it. None of that is visible
+// here. Every chip carries a finished query, so this file is three shapes and no rules.
 
 /// The rail for one query.
 public struct FacetRail: Decodable, Sendable {
@@ -23,6 +28,71 @@ public struct FacetRail: Decodable, Sendable {
     /// provisional.
     public let indexState: String
     public let sources: SourceFacet
+    /// The `date:` and `dir:` rails, which arrived after `sources` did (`chat-search-1ld`).
+    ///
+    /// Optional because this app finds its own `cs` on disk and can be pointed at an older one: a
+    /// section that build does not emit is one this window simply does not draw, where a required
+    /// key would cost the whole rail — sources included — on a decode error. The same reading as
+    /// `ChipState.unrecognised`, one direction on.
+    public let dates: DateFacet?
+    public let dirs: DirFacet?
+}
+
+/// The `date:` rail: the All chip, then the spans, newest first.
+public struct DateFacet: Decodable, Sendable {
+    /// `date:` — the token these chips write.
+    public let keyword: String
+    public let all: AllChip
+    public let values: [DateChip]
+}
+
+/// One span: how far back it reaches, what is in it, and the click.
+public struct DateChip: Decodable, Sendable, Identifiable {
+    /// The `date:` value the query text will carry — `today`, `>1mo`.
+    public let value: String
+    /// The same span in words. Carried rather than mapped here because `>1mo` is syntax, and a
+    /// table of four English phrases in this file would be the rail's rules written twice.
+    public let label: String
+    public let state: ChipState
+    /// What the index holds inside this span. The spans nest, so these do not sum to the corpus:
+    /// each answers "how many if I go back this far".
+    public let conversations: Int
+    /// The whole query text after clicking this chip. It **replaces** whatever `date:` was there
+    /// — two date tokens intersect, so a rail that added beside would narrow to the overlap — and
+    /// that rule is the grammar's, which is why this arrives finished.
+    public let query: String
+
+    public var id: String { value }
+}
+
+/// The `dir:` rail: the All chip, then the busiest directories the index holds.
+public struct DirFacet: Decodable, Sendable {
+    /// `dir:` — the token these chips write.
+    public let keyword: String
+    public let all: AllChip
+    /// Busiest first. Not every directory: see `indexed`.
+    public let values: [DirChip]
+    /// Distinct directories in the index, which may be more than there are chips.
+    public let indexed: Int
+    /// Conversations that record no directory at all, which no `dir:` token can reach. Most of
+    /// this corpus — only the agent sources have a working directory — so a rail that did not say
+    /// so would read as a filter over everything (`chat-search-6eb.26`).
+    public let undirected: Int
+}
+
+/// One directory: the census fact, the query fact, and the click.
+public struct DirChip: Decodable, Sendable, Identifiable {
+    /// The `cwd` as recorded, which is what `dir:` selects on. A path and not a project name:
+    /// deriving one collapsed seven unrelated directories onto a single label, and the
+    /// alternative read the live filesystem (`chat-search-6eb.26`). Shortening it for display is
+    /// this side's business; naming it is nobody's.
+    public let value: String
+    public let state: ChipState
+    public let conversations: Int
+    /// The whole query text after clicking this chip.
+    public let query: String
+
+    public var id: String { value }
 }
 
 /// The `agent:` rail: the All chip, then one chip per source the machine knows about.

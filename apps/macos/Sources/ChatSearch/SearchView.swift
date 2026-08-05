@@ -21,13 +21,26 @@ struct SearchView: View {
             field
             rule
             indexBanner
-            content
+            unappliedBanner
+            openBanner
+            HStack(spacing: 0) {
+                SourceRail(model: model)
+                Rectangle().fill(theme.color(.rule)).frame(width: 1)
+                content
+            }
             rule
             footer
         }
         .frame(minWidth: 720, minHeight: 480)
         .background(theme.color(.bg))
         .onAppear { focused = true }
+        // Bound here rather than on the list, because the field keeps focus for the whole
+        // session — one process per keystroke means there is never a moment to hand it away —
+        // and a key press reaches the focused view first. This is the TUI's arrangement, where
+        // there is one input box and Enter on it opens the cursor's row.
+        .onKeyPress(.upArrow) { model.moveSelection(by: -1); return .handled }
+        .onKeyPress(.downArrow) { model.moveSelection(by: 1); return .handled }
+        .onKeyPress(.return) { model.openSelected(); return .handled }
     }
 
     /// `Divider()` draws a system separator, which is a colour this app did not choose. One point
@@ -79,7 +92,41 @@ struct SearchView: View {
         }
     }
 
-    private func banner(icon: String, text: String, askAgain: Bool) -> some View {
+    /// A filter token whose value selects nothing.
+    ///
+    /// **Exit status 0 and not an error**, which is exactly why it needs drawing: the results
+    /// below are wider than the query asked for, and a client that ignores this shows unfiltered
+    /// results for a filtered query and it looks like it worked (`chat-search-6eb.11`). The
+    /// tokens are quoted as typed, because `agent:` and `date:nope` fail for different reasons
+    /// and the one that says which is the text.
+    @ViewBuilder
+    private var unappliedBanner: some View {
+        if !model.unappliedFilters.isEmpty {
+            banner(
+                icon: "line.3.horizontal.decrease.circle",
+                text: "\(model.unappliedFilters.joined(separator: ", ")) — not a value this can "
+                    + "select on, so it is not filtering",
+                askAgain: false)
+        }
+    }
+
+    /// What the last attempt to open a conversation said. Only ever non-empty after an Enter, and
+    /// cleared by the next keystroke: a sentence about a row is stale the moment the list is not
+    /// that list.
+    ///
+    /// Drawn in the error tone, unlike the two above, because every message that reaches here is
+    /// something that did not happen — including "this source has no way to reopen", which is a
+    /// fact about the source rather than a fault but is still an Enter that opened nothing.
+    @ViewBuilder
+    private var openBanner: some View {
+        if let failure = model.openFailure {
+            banner(icon: "exclamationmark.triangle", text: failure, askAgain: false, tone: .err)
+        }
+    }
+
+    private func banner(
+        icon: String, text: String, askAgain: Bool, tone: ColorToken = .ink2
+    ) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
@@ -106,7 +153,7 @@ struct SearchView: View {
                 }
             }
             .font(theme.font(.sub))
-            .foregroundStyle(theme.color(.ink2))
+            .foregroundStyle(theme.color(tone))
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -133,7 +180,7 @@ struct SearchView: View {
                 // whole corpus through all three containers and this is the only one that
                 // recycles — 5.2 MB scrolling 3,200 rows against LazyVStack's 65.6 MB and plain
                 // VStack's 566 MB. The question is answered, so the app does not offer the others.
-                List(model.conversations) { conv in
+                List(model.conversations, selection: $model.selected) { conv in
                     ResultRow(conv: conv)
                         .listRowInsets(
                             EdgeInsets(
@@ -142,7 +189,15 @@ struct SearchView: View {
                                 bottom: theme.metric(.rowPaddingBottom),
                                 trailing: theme.metric(.rowPaddingX))
                         )
-                        .listRowBackground(theme.color(.bg))
+                        .listRowBackground(
+                            theme.color(model.selected == conv.id ? .selBg : .bg)
+                        )
+                        // Getting back to the conversation, by the two gestures a list offers:
+                        // double-click here, Enter from the search field, which never gives up
+                        // focus. Both land on `Group.destinations`, which is data rather than a
+                        // string to sniff, and both record the pick on the way past.
+                        .onTapGesture(count: 2) { model.open(conv) }
+                        .contextMenu { openMenu(conv) }
                 }
                 .listStyle(.plain)
                 // The list is the page, so it takes the page's ground rather than the system's
@@ -169,6 +224,33 @@ struct SearchView: View {
             placeholder("cs not found", detail, icon: "exclamationmark.triangle", tone: theme.color(.err))
         case .failed(let detail):
             placeholder("cs failed", detail, icon: "exclamationmark.triangle", tone: theme.color(.err))
+        }
+    }
+
+    /// Where this conversation can be reopened, best first — and, when that list is empty, the
+    /// sentence saying so rather than a menu with nothing in it.
+    ///
+    /// A menu and not a modal: `cs_core::destinations` returns at most one entry for every source
+    /// today, so a picker would be a dialog nobody is ever asked. docs/TUI-DESIGN.md §6's rule is
+    /// to skip the modal when there is one answer; this shows the answer, and has room for the
+    /// second the day a source offers one.
+    @ViewBuilder
+    private func openMenu(_ conv: Conversation) -> some View {
+        if conv.destinations.isEmpty {
+            Text("\(conv.source) conversations cannot be reopened from here")
+        } else {
+            ForEach(Array(conv.destinations.enumerated()), id: \.offset) { _, destination in
+                Button(label(for: destination)) { model.open(conv) }
+            }
+        }
+    }
+
+    /// Named after what the reader would be taken to, not after the variant.
+    private func label(for destination: Destination) -> String {
+        switch destination {
+        case .terminal(let argv): "Resume in a terminal — \(argv.first ?? "")"
+        case .web: "Open in the browser"
+        case .unsupported(let kind): "\(kind): this build cannot open it"
         }
     }
 

@@ -250,7 +250,7 @@ struct SearchView: View {
             Text("\(conv.source) conversations cannot be reopened from here")
         } else {
             ForEach(Array(conv.destinations.enumerated()), id: \.offset) { _, destination in
-                Button(label(for: destination)) { model.open(conv) }
+                Button(label(for: destination)) { model.open(conv, at: destination) }
             }
         }
     }

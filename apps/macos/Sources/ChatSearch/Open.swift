@@ -24,10 +24,15 @@ import Foundation
 @MainActor
 enum Opener {
     /// What happened, said the way it should appear on screen. `nil` means it opened.
-    static func open(_ conv: Conversation, query: String, limit: Int, client: CsClient) async
-        -> String?
-    {
-        guard let destination = conv.destinations.first else {
+    ///
+    /// `destination` names one of the conversation's own; `nil` takes the front of the list,
+    /// which is docs/TUI-DESIGN.md §6's sticky default — the table is ordered best first and
+    /// that order *is* the answer when nobody is asked.
+    static func open(
+        _ conv: Conversation, at destination: Destination? = nil, query: String, limit: Int,
+        client: CsClient
+    ) async -> String? {
+        guard let destination = destination ?? conv.destinations.first else {
             // Recorded anyway, then said out loud. `destinations` is best-first and empty means
             // the source offers nothing, which is a property of the source and not of this row.
             await record(conv, query: query, limit: limit, client: client)

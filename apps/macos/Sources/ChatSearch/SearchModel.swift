@@ -78,12 +78,10 @@ final class SearchModel {
                 return
             } catch CsError.unhealthy(let h) {
                 guard !Task.isCancelled else { return }
-                self.health = h
-                self.conversations = []
+                self.refused(h)
             } catch {
                 guard !Task.isCancelled else { return }
-                self.health = .failed(String(describing: error))
-                self.conversations = []
+                self.refused(.failed(String(describing: error)))
             }
         }
         refreshRail(for: text)
@@ -121,6 +119,16 @@ final class SearchModel {
         self.query = query
     }
 
+    /// No answer, so nothing that describes one may stay on screen. `unappliedFilters` in
+    /// particular: it names tokens in a query that *was* answered, and left standing it would
+    /// report the last successful search's filters against a screen saying there is no index.
+    private func refused(_ health: IndexHealth) {
+        self.health = health
+        conversations = []
+        unappliedFilters = []
+        selected = nil
+    }
+
     /// Move the cursor. Wraps at neither end, so holding a key does not roll off the bottom and
     /// come back somewhere unexpected.
     func moveSelection(by delta: Int) {
@@ -141,14 +149,16 @@ final class SearchModel {
         open(conv)
     }
 
-    func open(_ conv: Conversation) {
+    /// Open a conversation. `destination` names one of its own, for the menu that offers a
+    /// choice; `nil` takes the best, which is what Enter and a double-click mean.
+    func open(_ conv: Conversation, at destination: Destination? = nil) {
         // The finished query, which is what is recorded. Read now rather than inside the task:
         // typing continues while this runs, and the pick belongs to the query it was made from.
         let text = query
         Task { [weak self] in
             guard let self else { return }
             self.openFailure = await Opener.open(
-                conv, query: text, limit: self.limit, client: self.client)
+                conv, at: destination, query: text, limit: self.limit, client: self.client)
         }
     }
 

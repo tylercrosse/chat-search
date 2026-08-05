@@ -101,7 +101,43 @@ public struct CsClient: Sendable {
         try await invoke(arguments(query: query, limit: limit, prefix: prefix, flat: true))
     }
 
+    /// `cs show <id> <query> --json`: one conversation, whole.
+    ///
+    /// The query is passed rather than dropped so that a highlight in the transcript means what
+    /// it means in the results list — core resolves it through the same grammar and marks the
+    /// same terms. An empty one marks nothing, which is the honest state for a conversation
+    /// opened without a search behind it.
+    public func show(_ convId: String, query: String = "") async throws -> Transcript {
+        try await read(arguments(show: convId, query: query)).body
+    }
+
+    public func arguments(show convId: String, query: String) -> [String] {
+        // The query is positional and defaulted, so it is passed even when empty rather than
+        // omitted: `cs show <id> --json` would parse `--json` into the query slot.
+        var args = ["show", convId, query, "--json"]
+        if let db { args += ["--db", db.path] }
+        if let config { args += ["--config", config.path] }
+        return args
+    }
+
     private func invoke<Response: Envelope>(_ args: [String]) async throws -> QueryResult<Response> {
+        let (response, run, decode): (Response, Run, Double) = try await read(args)
+        return QueryResult(
+            response: response,
+            timing: Timing(
+                launch: run.launch, process: run.process, decode: decode,
+                serverMs: response.ms, bytes: run.stdout.count))
+    }
+
+    /// Spawn, read the exit status as part of the interface, decode.
+    ///
+    /// Generic over the body rather than over `Envelope`, because `cs show` answers with a
+    /// transcript — no `ms`, no `index_state` — and yet refuses with exactly the same shape as a
+    /// search does. That half of the contract is the half worth writing once: the classifier
+    /// below is what this client had instead of substring-matching another program's prose.
+    private func read<Body: Decodable & Sendable>(_ args: [String]) async throws
+        -> (body: Body, run: Run, decode: Double)
+    {
         let run = try await spawn(args)
 
         // The refusal is on stdout with the exit status, so both are needed to say what happened.
@@ -115,19 +151,13 @@ public struct CsClient: Sendable {
         let t = ContinuousClock.now
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let response: Response
+        let body: Body
         do {
-            response = try decoder.decode(Response.self, from: run.stdout)
+            body = try decoder.decode(Body.self, from: run.stdout)
         } catch {
             throw CsError.undecodable(String(describing: error), run.stdout)
         }
-        let decode = t.duration(to: .now).ms
-
-        return QueryResult(
-            response: response,
-            timing: Timing(
-                launch: run.launch, process: run.process, decode: decode,
-                serverMs: response.ms, bytes: run.stdout.count))
+        return (body, run, t.duration(to: .now).ms)
     }
 
     public struct Run: Sendable {

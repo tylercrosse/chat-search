@@ -195,8 +195,14 @@ pub fn search(
     // and reports a whole number. `--prefix` is typeahead over argv — one process per
     // keystroke — and is the one caller that should leave the floor standing, because the
     // total of a query somebody is still typing is a number nobody is reading.
+    //
+    // A failure here fails the search rather than falling back to the floor. `settle` leaves a
+    // true answer behind and a long-running client may well go on drawing it, but the counting
+    // pass is the ranking query minus the scoring: if it cannot run, the rows that just came
+    // back out of the same index are not trustworthy either, and printing them under a number
+    // labelled `settled: false` would read as the ordinary typeahead case.
     if !prefix {
-        answer.settle(&index)?;
+        answer.settle(&index).context("counting what the query selects")?;
     }
     if !json {
         notes(&answer.unapplied_filters, answer.index_state);

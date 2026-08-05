@@ -15,9 +15,11 @@
 //! drift into describing states the code stopped producing, which is the same failure one
 //! remove.
 //!
-//! Driven through the real binary, because the contract is the bytes on stdout. Calling
-//! `search_grouped` and serializing the result would miss the envelope entirely, and the
-//! envelope is where `grouped` and `unapplied_filters` live.
+//! Driven through the real binary, because the contract is the bytes on stdout. Since
+//! `chat-search-me9.36.2` the CLI serializes a `cs_core::Answer` rather than assembling an
+//! envelope, so this could in principle serialize one here — but the thing being pinned is what
+//! a client receives, and only the binary can be wrong about that in the ways that have
+//! actually happened.
 //!
 //! [`docs/JSON-CONTRACT.md`]: ../../../docs/JSON-CONTRACT.md
 
@@ -269,23 +271,34 @@ fn corpus() -> Vec<Conversation> {
     vec![ordinary, untitled, undated, abandoned, unreachable]
 }
 
-/// Every object the three shapes of response produce, flattened: envelopes are excluded, and
-/// hits are yielded from both the nested and the flat shape because the document claims they
-/// are the same object in both places.
-fn rows(f: &Fixture) -> (Vec<Value>, Vec<Value>) {
+/// Every row object the two replies produce, kept apart by shape. Envelopes are excluded —
+/// they have their own pin.
+///
+/// `Match` and `Hit` are no longer the same object: a nested match states message fields only,
+/// because the group above it has already named the conversation, while a flat hit names its
+/// own parent because there is no parent row to name it. So each is collected from the one
+/// reply that emits it, and the document has a table for each.
+fn shapes(f: &Fixture) -> Vec<(&'static str, BTreeMap<String, Nullability>, Vec<Value>)> {
     let mut groups = Vec::new();
-    let mut hits = Vec::new();
+    let mut matches = Vec::new();
 
     for query in ["", TERM] {
         for group in f.search(query, &[]).get("results").unwrap().as_array().unwrap() {
-            hits.extend(group.get("hits").unwrap().as_array().unwrap().iter().cloned());
+            matches.extend(group.get("matches").unwrap().as_array().unwrap().iter().cloned());
             groups.push(group.clone());
         }
     }
-    hits.extend(f.search(TERM, &["--flat"]).get("results").unwrap().as_array().unwrap().clone());
+    let hits = f.search(TERM, &["--flat"]).get("hits").unwrap().as_array().unwrap().clone();
 
-    assert!(!groups.is_empty() && !hits.is_empty(), "the fixture returned nothing to check");
-    (groups, hits)
+    assert!(
+        !groups.is_empty() && !matches.is_empty() && !hits.is_empty(),
+        "the fixture returned nothing to check"
+    );
+    vec![
+        ("Group", documented("## `Group`"), groups),
+        ("Match", documented("## `Match`"), matches),
+        ("Hit", documented("## `Hit`"), hits),
+    ]
 }
 
 // ------------------------------------------------------------------ the pins
@@ -293,12 +306,8 @@ fn rows(f: &Fixture) -> (Vec<Value>, Vec<Value>) {
 #[test]
 fn the_binary_emits_exactly_the_keys_the_contract_documents() {
     let f = Fixture::new();
-    let (groups, hits) = rows(&f);
 
-    for (label, table, rows) in [
-        ("Group", documented("## `Group`"), groups),
-        ("Hit", documented("## `Hit`"), hits),
-    ] {
+    for (label, table, rows) in shapes(&f) {
         let expected: BTreeSet<String> = table.keys().cloned().collect();
         for row in rows {
             assert_eq!(
@@ -311,28 +320,58 @@ fn the_binary_emits_exactly_the_keys_the_contract_documents() {
 }
 
 #[test]
-fn the_envelope_carries_grouped_and_flat_drops_it() {
-    // The one key the document calls *absent* rather than null, and the reason a client cannot
-    // model both shapes with one non-optional field (chat-search-me9.32).
+fn the_two_envelopes_are_two_shapes_rather_than_one_with_a_discriminator() {
+    // What `chat-search-me9.32` was filed to decide, decided by deletion. `grouped` was present
+    // in one shape and absent in the other, so a decoder modelling both as one envelope had to
+    // type it optional and then branch on it to learn whether `results` held conversations or
+    // messages. Now `results` is always conversations, `--flat` answers under `hits`, and
+    // neither envelope has a key that is sometimes missing.
     let f = Fixture::new();
-    let table = documented("## The envelope");
-    let always = keys_where(&table, |n| n != Nullability::Absent);
-    let absent_when_flat = keys_where(&table, |n| n == Nullability::Absent);
+    let grouped = documented("## The envelope");
+    let flat = documented("## The `--flat` envelope");
 
-    assert!(!absent_when_flat.is_empty(), "the envelope table stopped documenting an absent key");
-    assert_eq!(keys(&f.search(TERM, &[])), table.keys().cloned().collect::<BTreeSet<_>>());
-    assert_eq!(keys(&f.search(TERM, &["--flat"])), always);
+    assert_eq!(keys(&f.search(TERM, &[])), grouped.keys().cloned().collect::<BTreeSet<_>>());
+    assert_eq!(keys(&f.search(TERM, &["--flat"])), flat.keys().cloned().collect::<BTreeSet<_>>());
+
+    // The three-state machinery stays and currently describes no key at all. That is the
+    // assertion: a sometimes-absent key is a second type for a decoder, and this says one has
+    // not crept back in.
+    for (which, table) in [("grouped", &grouped), ("flat", &flat)] {
+        assert!(
+            keys_where(table, |n| n == Nullability::Absent).is_empty(),
+            "the {which} envelope documents a sometimes-absent key again"
+        );
+        assert!(!table.contains_key("grouped"), "the {which} discriminator is back");
+    }
+}
+
+#[test]
+fn a_one_shot_search_reports_a_settled_total_rather_than_a_floor() {
+    // Why `cs search` pays for the second counting pass before printing: a one-shot caller has
+    // no later idle moment to spend it in, so the only caller left holding a floor is
+    // `--prefix`, which is one process per keystroke and whose total nobody is reading yet.
+    let f = Fixture::new();
+
+    let answer = f.search(TERM, &[]);
+    assert_eq!(answer["settled"], true);
+    assert_eq!(answer["count"], answer["total"], "nothing was truncated at --limit 50");
+
+    // And the no-query browse list counts the corpus it is filtered to rather than the set some
+    // ranking pass happened to reach, because it ranked nothing.
+    let browse = f.search("", &[]);
+    assert_eq!(browse["settled"], true);
+    assert_eq!(browse["total"], corpus().len());
+    assert!(
+        browse["total"].as_u64() > answer["total"].as_u64(),
+        "the fixture no longer holds a conversation the term misses"
+    );
 }
 
 #[test]
 fn a_key_the_contract_calls_never_null_is_null_nowhere() {
     let f = Fixture::new();
-    let (groups, hits) = rows(&f);
 
-    for (label, table, rows) in [
-        ("Group", documented("## `Group`"), groups),
-        ("Hit", documented("## `Hit`"), hits),
-    ] {
+    for (label, table, rows) in shapes(&f) {
         for key in keys_where(&table, |n| n == Nullability::Never) {
             for row in &rows {
                 assert!(
@@ -350,12 +389,8 @@ fn every_key_the_contract_calls_nullable_is_null_somewhere() {
     // missing title, say — would leave every other assertion here passing while the document
     // told a client to handle a state that can no longer happen.
     let f = Fixture::new();
-    let (groups, hits) = rows(&f);
 
-    for (label, table, rows) in [
-        ("Group", documented("## `Group`"), groups),
-        ("Hit", documented("## `Hit`"), hits),
-    ] {
+    for (label, table, rows) in shapes(&f) {
         for key in keys_where(&table, |n| n == Nullability::Nullable) {
             assert!(
                 rows.iter().any(|row| row[&key].is_null()),
@@ -380,7 +415,7 @@ fn an_empty_array_is_not_a_null() {
     assert_eq!(by_id("gemini-cli:no-destination")["destinations"], serde_json::json!([]));
     assert_eq!(by_id("chatgpt-export:abandoned")["kind_runs"], serde_json::json!([]));
     for group in results {
-        assert_eq!(group["hits"], serde_json::json!([]), "an empty query matches nothing");
+        assert_eq!(group["matches"], serde_json::json!([]), "an empty query matches nothing");
         assert_eq!(group["match_seqs"], serde_json::json!([]));
     }
 }
@@ -424,7 +459,7 @@ fn a_span_is_a_pair_of_utf8_byte_offsets_into_the_snippet_it_marks() {
     // in front of the match and this asserts the difference is real rather than incidental.
     let f = Fixture::new();
     let hits = f.search(TERM, &["--flat"]);
-    let marked = hits["results"]
+    let marked = hits["hits"]
         .as_array()
         .unwrap()
         .iter()

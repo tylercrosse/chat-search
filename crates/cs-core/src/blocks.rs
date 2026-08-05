@@ -332,8 +332,8 @@ fn read_record(conn: &Connection, conv_id: &str) -> rusqlite::Result<Vec<Block>>
                 marks: Vec::new(),
             })
         })?
-        .collect();
-    blocks
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(blocks)
 }
 
 /// Distinct strands in this conversation.
@@ -416,6 +416,7 @@ impl Transcript {
         Ok(Transcript::of(conv_id, terms, blocks, sitting))
     }
 
+    /// The same thing from parts already in hand, for a caller that read the blocks itself.
     pub fn of(
         conv_id: &str,
         terms: &[String],

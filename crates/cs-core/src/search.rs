@@ -412,7 +412,7 @@ pub struct Explain {
     /// id that would have appeared in the result set and not necessarily the one asked about.
     pub conv_id: String,
     /// Set when the id names several activity-log records the search layer reads as one chat.
-    pub sitting: Option<crate::sittings::Sitting>,
+    pub sitting: Option<Sitting>,
     pub exists: bool,
     pub messages: i64,
     pub prose_messages: i64,
@@ -473,10 +473,10 @@ pub fn explain(
     now_ms: i64,
 ) -> rusqlite::Result<Explain> {
     crate::sittings::ensure(conn)?;
-    let sitting = crate::sittings::Sitting::of(conn, conv_id)?;
     // Never empty, so `records[0]` is always a real id and every `IN` below has something in
     // it. It is the id as given when nothing was folded, and the opener otherwise.
     let records = crate::sittings::resolve(conn, conv_id)?;
+    let sitting = Sitting::of(conn, conv_id)?;
     let ids = || params_from_iter(records.iter());
     // `?1, ?2, …`, sized to the sitting. Built rather than bound as a list because SQLite has
     // no array parameter; the values themselves are still bound, never interpolated.
@@ -595,8 +595,7 @@ pub fn explain(
     // the conversation that holds it and folds afterwards, so a sitting whose middle record
     // passes is a row the query can still return — reporting it excluded because its opener
     // was filtered out would blame the filter for a result that is there.
-    let mut binds: Vec<Value> =
-        records.iter().map(|id| Value::Text(id.clone())).collect();
+    let mut binds: Vec<Value> = records.iter().map(|id| Value::Text(id.clone())).collect();
     let filters = filter_sql(&parsed, now_ms, &mut binds);
     let excluded_by_filter = exists
         && !filters.is_empty()

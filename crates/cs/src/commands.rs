@@ -565,8 +565,8 @@ pub fn show(
         // Said before the counts, because they are the whole sitting's and a reader who typed
         // one id deserves to know why the number is not the one on the record they named.
         println!(
-            "{} records read as one sitting — nothing recorded the boundary; {} minutes of \
-             silence ends one",
+            "{} records read as one sitting — a reconstruction, not something the export \
+             recorded; {} minutes of silence ends one",
             sitting.members.len(),
             sitting.gap_ms / 60_000
         );

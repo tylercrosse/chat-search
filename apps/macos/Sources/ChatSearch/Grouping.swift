@@ -30,7 +30,10 @@ enum Grouping: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .none: "ranked, ungrouped"
         case .project: "cwd · 34% of conversations, 92% of messages"
-        case .run: "ended_at · the only signal covering 100%"
+        // The widest signal there is, and not 100%: `ended_at` is nullable on the wire and null on
+        // 2 conversations. Printing "covers 100%" beside a residue group counting the ones it did
+        // not cover is the exact screen this axis's residue exists to produce.
+        case .run: "ended_at · every conversation but the 2 with no last message"
         case .source: "archetype is ~87% predicted by it"
         }
     }
@@ -152,8 +155,8 @@ enum Grouping: String, CaseIterable, Identifiable, Sendable {
         }
         flush()
 
-        // `ended_at` covers 100% of the corpus and is nullable on the wire regardless: 2
-        // conversations never had a last message. They are in the answer, so they are on screen.
+        // `ended_at` is the widest signal the corpus has and it is still nullable: 2 conversations
+        // never had a last message. They are in the answer, so they are on the screen.
         let undated = rows.filter { $0.endedAt == nil }
         if !undated.isEmpty { groups.append(ConversationGroup(residue: undated)) }
         return groups

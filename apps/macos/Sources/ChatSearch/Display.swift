@@ -103,28 +103,45 @@ enum Display {
     /// One local day, formatted the way `poc/ui`'s `dayLabel` formats it: `Aug 5`, and
     /// `Oct 25 ’25` once the year is not this one.
     ///
-    /// **This reformats a day and never derives one.** `ended_date` arrives as a local
-    /// `YYYY-MM-DD` rendered once by the core, precisely so that three clients do not each get
-    /// their own chance to derive the day in UTC — the bug `AGENTS.md` names as the reason a rule
-    /// lives in exactly one place. Everything here is string work over that value: no `Date`, no
-    /// calendar, no timezone, so nothing about *which* day this is is decided in this process.
+    /// **This reformats the day the core rendered and never decides which day it is.**
+    /// `ended_date` arrives as a local `YYYY-MM-DD` rendered once in `cs-core`, precisely so that
+    /// three clients do not each get their own chance to derive the day in UTC — the bug
+    /// `AGENTS.md` names as the reason a rule lives in exactly one place. Every field below is
+    /// read out of that string.
     ///
-    /// A value that is not `YYYY-MM-DD` is shown exactly as it arrived. The alternative is a
-    /// client that invents a day for a shape it does not recognise, which is the same failure one
-    /// step further along.
+    /// The one thing it does ask a calendar is which year is *this* year, to decide whether the
+    /// year is worth printing — and it asks a **Gregorian** one by name. `Calendar.current` honours
+    /// the region's calendar setting, so on a Japanese, Buddhist, Hebrew or Islamic calendar it
+    /// answers 8, 2569, 5786 or 1448, none of which ever equals the `YYYY` on the wire: every
+    /// label in the app would carry the year suffix this line exists to suppress. A client
+    /// deciding a calendar question for itself is the shape of the original bug, so the calendar
+    /// is named rather than inherited.
+    ///
+    /// A value that is not `YYYY-MM-DD` is shown exactly as it arrived, down to the field widths.
+    /// The alternative is a client that invents a day for a shape it does not recognise, which is
+    /// the same failure one step further along.
     static func day(_ endedDate: String?, now: Date = .now) -> String {
         guard let endedDate else { return "—" }
         let parts = endedDate.split(separator: "-")
-        guard parts.count == 3, let month = Int(parts[1]), (1...12).contains(month),
-            let dayOfMonth = Int(parts[2])
+        guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+            let month = Int(parts[1]), (1...12).contains(month),
+            let dayOfMonth = Int(parts[2]), (1...31).contains(dayOfMonth)
         else { return endedDate }
         // The year only when it is not this one. Eleven months of corpus means most spans sit
         // inside one year, and printing it on every label is noise in a cell that is already
         // narrow.
-        let suffix = parts[0] == String(Calendar.current.component(.year, from: now))
+        let suffix = parts[0] == String(gregorian.component(.year, from: now))
             ? "" : " ’\(parts[0].suffix(2))"
         return "\(months[month - 1]) \(dayOfMonth)\(suffix)"
     }
+
+    /// A Gregorian calendar in the machine's own zone: the zone is what makes "today" the user's
+    /// today, and the identifier is what stops a region setting renumbering the year underneath it.
+    private static let gregorian: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return calendar
+    }()
 
     private static let months = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",

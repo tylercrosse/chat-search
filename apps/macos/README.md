@@ -336,7 +336,7 @@ question was answered once (`chat-search-me9.22`) and sections do not un-answer 
 | --- | --- | --- |
 | `none` | — | the ranking, ungrouped |
 | `project` | `cwd`, verbatim | 34% of conversations and **92% of all messages** |
-| `run` | `ended_at`, clustered at 12h | 100% — the only signal that covers the whole corpus |
+| `run` | `ended_at`, clustered at 12h | the widest there is — every conversation but the 2 with no last message |
 | `source` | `source` | archetype is ~87% predicted by it |
 | `topic` | — | drawn, and not offered |
 
@@ -359,8 +359,15 @@ axis you asked for.
 as one undivided run; 12h gives 1–15 and tracks the day count exactly (chat-search 6 of 6,
 personal-site 4 of 4, ga 7 of 7). It is applied to `ended_at` as a *duration between instants*,
 which has no timezone in it. The local day is a different question and is not answered here:
-`ended_date` arrives rendered by the core, and `Display.day` only reformats it — `Aug 5`,
-`Oct 25 ’25` — so the rule the local-date bug produced stays in its one place.
+`ended_date` arrives rendered by the core, and `Display.day` reads the fields out of that string —
+`Aug 5`, `Oct 25 ’25` — so the rule the local-date bug produced stays in its one place.
+
+It asks a calendar exactly one thing, which year is *this* year, and it asks a **Gregorian** one by
+name. `Calendar.current` honours the region's calendar setting, so on a Japanese, Buddhist, Hebrew
+or Islamic calendar it answers 8, 2569, 5786 or 1448 — none of which ever equals the `YYYY` on the
+wire, and every label in the app would then carry the year suffix that comparison exists to
+suppress. Inheriting a calendar is how a client ends up deciding a calendar question for itself,
+which is the shape of the bug this paragraph is about.
 
 The group head is `poc/ui`'s `.pj-head` minus two cells. **No twisty**, because these do not fold
 (below). **No source badges**: the prototype puts a strip of tiny source icons on every header, and

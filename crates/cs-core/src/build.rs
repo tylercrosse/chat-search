@@ -128,6 +128,16 @@ pub enum BuildError {
         source: std::io::Error,
     },
 
+    /// The index was swapped in and then could not be read back as this binary's own. There is
+    /// nothing to put back — the build it replaced was renamed away — so the remedy is the
+    /// remedy for everything else about the index: run `cs index` again.
+    #[error("the new index at {path} was swapped in but does not read back as current: {source}")]
+    NotCurrent {
+        path: PathBuf,
+        #[source]
+        source: Unreadable,
+    },
+
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 }
@@ -203,8 +213,18 @@ impl IndexBuild {
     /// torn one. The shipped index is therefore in rollback-journal mode, and readers open it
     /// read-only ([`open_for_read`]), so nothing writes a log against it either.
     ///
+    /// Then read back, because a caller that prints a summary is describing an index a client
+    /// can query and has no other way to know it has one. Everything upstream of here returns a
+    /// `Result` and every caller propagates it, so the only way to publish a bad index is for
+    /// something to go wrong without saying so — which is precisely the case a summary printed
+    /// on the strength of "nothing returned an error" cannot distinguish (chat-search-6eb.35).
+    /// After the rename rather than before it: what a reader opens is the file at the target,
+    /// and a database that reads correctly beside its journal can read differently once it has
+    /// been renamed away from one.
+    ///
     /// Measured at 257–367 ms over a 334 MB index — the checkpoint and the rename together,
-    /// against 14–26 s of import.
+    /// against 14–26 s of import. The read-back adds well under a millisecond over a 355 MB
+    /// index — it opens the file and asks for one row.
     pub fn commit(mut self) -> Result<(), BuildError> {
         let conn = self.conn.take().expect("a build commits once");
         conn.pragma_update(None, "journal_mode", "DELETE")?;
@@ -218,6 +238,10 @@ impl IndexBuild {
         for suffix in ["-wal", "-shm"] {
             let _ = std::fs::remove_file(sibling(&self.target, suffix));
         }
+        // Through the door every reader uses, so that "the build succeeded" and "a query would
+        // work" are the same claim rather than two that can drift apart.
+        open_for_read(&self.target)
+            .map_err(|source| BuildError::NotCurrent { path: self.target.clone(), source })?;
         // Last, so that the window in which a reader is told a build is running ends only
         // once the new index is the one being read.
         let _ = std::fs::remove_file(claim_path(&self.target));
@@ -477,5 +501,27 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(open_for_read(&db).unwrap_err().code(), "index_stale");
+    }
+
+    #[test]
+    fn a_build_that_cannot_be_read_back_as_current_does_not_report_success() {
+        let dir = tmpdir();
+        let db = dir.join("index.db");
+        build(&db, &[conv("a", "first")]);
+
+        let mut second = IndexBuild::begin(&db).unwrap();
+        index::write_conversations(second.conn(), [conv("b", "second")].iter()).unwrap();
+        // Standing in for every way a swapped-in index can fail to be the one its caller is
+        // about to describe. Which way does not matter: what matters is that the version is
+        // read back rather than inferred from nothing having returned an error, which is how a
+        // rebuild came to print `3002 conversations` over an index still on the previous
+        // importer version (chat-search-6eb.35).
+        second.conn().execute("DELETE FROM build_info", []).unwrap();
+
+        let err = second.commit().unwrap_err();
+        assert!(matches!(err, BuildError::NotCurrent { .. }), "{err}");
+        // The build is over however it ended, and a claim outliving it would tell every reader
+        // from now on that one is still running.
+        assert!(!claim_path(&db).exists(), "a failed commit left its claim behind");
     }
 }

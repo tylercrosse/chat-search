@@ -174,6 +174,24 @@ fn the_state_can_be_asked_for_rather_than_discovered_by_failing_a_query() {
 }
 
 #[test]
+fn a_rebuild_that_never_landed_prints_no_summary() {
+    let f = Fixture::new();
+    // A directory where the index belongs. The build itself runs to completion and the rename
+    // that would publish it cannot, which is the shape of every failure the summary must not
+    // survive: the numbers describe an index a client can query, so they have to be downstream
+    // of the swap rather than of the write (chat-search-6eb.35).
+    let blocked = f.home.join("blocked.db");
+    std::fs::create_dir_all(&blocked).unwrap();
+
+    let out = f.cs(&["index", "--db", blocked.to_str().unwrap()]);
+    assert!(!out.status.success(), "a rebuild that never landed exited zero");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    for line in ["conversations ·", "index: "] {
+        assert!(!stdout.contains(line), "printed {line:?} for an index never swapped in: {stdout}");
+    }
+}
+
+#[test]
 fn a_rebuild_leaves_no_journal_beside_the_index_it_swapped_in() {
     let f = Fixture::new();
     f.index();

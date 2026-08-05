@@ -137,14 +137,26 @@ fn one_clock_answers_the_whole_reply() {
 }
 
 #[test]
-fn a_directory_no_dir_token_can_carry_is_counted_and_not_offered() {
-    // `chat-search-me9.8.16`: whitespace separates words, so `dir:/home/t/My Documents` is a
-    // filter *and* a search term. It is still a directory the index holds, and the count says so
-    // — what the rail may not do is hand over a click it cannot prove.
+fn a_directory_with_a_space_in_it_is_offered_and_its_click_round_trips() {
+    // `chat-search-me9.8.16`. Whitespace used to separate words unconditionally, so
+    // `dir:/home/t/My Documents` was a filter *and* a search term and the rail dropped the chip
+    // rather than hand over a click it could not prove. The grammar quotes it now — and this is
+    // the path that check has to survive: the quoted string crosses a process boundary as one
+    // argv element, is parsed by a second run of the binary, and lights the chip it came from.
     let f = Fixture::new(true);
     let rail = f.rail("");
-    assert!(chip(&rail, "dirs", "/home/t/My Documents").is_none(), "offered a click that lies");
-    assert_eq!(rail["dirs"]["indexed"], 2, "and yet the index holds two directories");
+    let click = chip(&rail, "dirs", "/home/t/My Documents")
+        .expect("the directory is reachable by clicking")["query"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(click.trim(), r#"dir:"/home/t/My Documents""#);
+    let after = f.rail(&click);
+    assert_eq!(chip(&after, "dirs", "/home/t/My Documents").unwrap()["state"], "include");
+    assert_eq!(chip(&after, "dirs", "/home/t/dev/web-app").unwrap()["state"], "off");
+    assert_eq!(after["dirs"]["all"]["selected"], false);
+
+    assert_eq!(rail["dirs"]["indexed"], 2, "and the index still holds two directories");
     assert_eq!(rail["dirs"]["undirected"], 1, "and one conversation records none at all");
     assert_eq!(chip(&rail, "dirs", "/home/t/dev/web-app").unwrap()["conversations"], 2);
 }
@@ -168,8 +180,8 @@ fn corpus() -> Vec<Conversation> {
     vec![
         conv("a", Some("/home/t/dev/web-app"), today()),
         conv("b", Some("/home/t/dev/web-app"), today() - 200 * DAY),
-        // A path no `dir:` token can carry, which is a fact about the grammar rather than about
-        // this directory: it is indexed, searchable, and counted.
+        // A path that needs quoting to be written into a `dir:` token, which is the whole of
+        // `chat-search-me9.8.16` in one row of the corpus.
         conv("c", Some("/home/t/My Documents"), today() - 3 * DAY),
         conv("d", None, today() - 3 * DAY),
     ]

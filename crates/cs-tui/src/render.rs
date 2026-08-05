@@ -34,7 +34,8 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
     let left = Span::styled("cs", app.theme.accent);
     // Two cells for the label and one so the tally never abuts it.
     let room = (area.width as usize).saturating_sub(3);
-    let right = tally(app.groups.len(), app.matched, app.indexed, app.last_ms, room);
+    let a = &app.answer;
+    let right = tally(a.count, a.total, a.settled, app.indexed, a.ms, room);
     let pad = (area.width as usize)
         .saturating_sub(2)
         .saturating_sub(text::width(&right));
@@ -56,7 +57,7 @@ fn header(frame: &mut Frame, area: Rect, app: &App) {
 ///
 /// The corpus total goes first when the line will not fit. It is the only one of the three
 /// that does not move as you type, and a number that never changes is the one you stop reading.
-fn tally(shown: usize, matched: cs_core::Total, indexed: i64, ms: f64, room: usize) -> String {
+fn tally(shown: usize, total: usize, settled: bool, indexed: i64, ms: f64, room: usize) -> String {
     let latency = format!("{ms:.1}ms");
     // `31 of 31` rather than a bare `31`, because "this is all of them" is the answer being
     // asked for as much as "this is 100 of 1515" — and a form that appears only sometimes
@@ -64,15 +65,17 @@ fn tally(shown: usize, matched: cs_core::Total, indexed: i64, ms: f64, room: usi
     //
     // A query that selects the whole corpus — every blank one — is the exception: it would
     // otherwise print the same number twice and present it as two facts.
-    let total = match matched {
-        cs_core::Total::Exact(n) if n as i64 == indexed => None,
-        cs_core::Total::Exact(n) => Some(n.to_string()),
-        // An unsettled total is drawn as unknown rather than as the floor `Total::AtLeast`
-        // carries. The floor is an artifact of where the scan stopped — about half the truth
-        // on this corpus — and a number that lands, is read, and then doubles is worse than
-        // one that never claimed to be ready. It resolves within `SETTLE` of the last
-        // keystroke, so this is what a broad prefix shows while it is still being typed.
-        cs_core::Total::AtLeast(_) => Some("…".to_string()),
+    let total = if !settled {
+        // An unsettled total is drawn as unknown rather than as the floor the answer carries.
+        // The floor is an artifact of where the scan stopped — about half the truth on this
+        // corpus — and a number that lands, is read, and then doubles is worse than one that
+        // never claimed to be ready. It resolves within `SETTLE` of the last keystroke, so this
+        // is what a broad prefix shows while it is still being typed.
+        Some("…".to_string())
+    } else if total as i64 == indexed {
+        None
+    } else {
+        Some(total.to_string())
     };
     let full = match &total {
         None => format!("{shown} of {indexed} indexed   {latency}"),
@@ -264,7 +267,7 @@ fn header_row(
     group: usize,
     selected: bool,
 ) {
-    let Some(g) = app.groups.get(group) else { return };
+    let Some(g) = app.answer.results.get(group) else { return };
     let row_style = if selected { app.theme.selected } else { Style::new() };
     fill(frame, body, y, row_style);
     let dy = y - body.y;
@@ -284,7 +287,7 @@ fn header_row(
     cell(frame, body, cols.title, dy, &format!("{marker} {title}"), row_style);
 
     cell(frame, body, cols.dir, dy, &text::display_dir(g.cwd.as_deref().unwrap_or(""), home().as_deref()), merge(row_style, app.theme.dim, selected));
-    cell(frame, body, cols.density, dy, &cs_core::search::match_density(&g.match_seqs, g.msg_count), row_style);
+    cell(frame, body, cols.density, dy, &cs_core::match_density(&g.match_seqs, g.msg_count), row_style);
     cell(frame, body, cols.msgs, dy, &g.user_turns.to_string(), row_style);
     cell(frame, body, cols.age, dy, &age_of(g.ended_at, app.now), merge(row_style, app.theme.dim, selected));
 }
@@ -301,7 +304,7 @@ fn hit_row(
     hit: usize,
     selected: bool,
 ) {
-    let Some(h) = app.groups.get(group).and_then(|g| g.hits.get(hit)) else { return };
+    let Some(h) = app.answer.results.get(group).and_then(|g| g.matches.get(hit)) else { return };
     let row_style = if selected { app.theme.selected } else { Style::new() };
     fill(frame, body, y, row_style);
     let dy = y - body.y;
@@ -533,12 +536,13 @@ mod tests {
         }
     }
 
-    use cs_core::Total;
+    /// A settled total, as every query narrow enough to finish typing produces.
+    const SETTLED: bool = true;
 
     #[test]
     fn the_tally_names_the_conversations_the_limit_hid() {
         assert_eq!(
-            super::tally(100, Total::Exact(1515), 3019, 3.25, 80),
+            super::tally(100, 1515, SETTLED, 3019, 3.25, 80),
             "100 of 1515 matched / 3019 indexed   3.2ms"
         );
     }
@@ -548,7 +552,7 @@ mod tests {
         // The whole point of the number is telling these two apart, so the case where nothing
         // was hidden has to state it — not leave the reader to notice an absence.
         assert_eq!(
-            super::tally(31, Total::Exact(31), 3019, 0.44, 80),
+            super::tally(31, 31, SETTLED, 3019, 0.44, 80),
             "31 of 31 matched / 3019 indexed   0.4ms"
         );
     }
@@ -557,7 +561,7 @@ mod tests {
     fn a_query_that_selects_the_whole_corpus_states_that_number_once() {
         // Which is every blank query, so this is the line the TUI opens on.
         assert_eq!(
-            super::tally(100, Total::Exact(3019), 3019, 3.25, 80),
+            super::tally(100, 3019, SETTLED, 3019, 3.25, 80),
             "100 of 3019 indexed   3.2ms"
         );
     }
@@ -569,7 +573,13 @@ mod tests {
         // drawing it would put a wrong number on screen for as long as anyone kept typing,
         // and then double it.
         assert_eq!(
-            super::tally(50, Total::AtLeast(1338), 3019, 61.6, 80),
+            super::tally(50, 1338, !SETTLED, 3019, 61.6, 80),
+            "50 of … matched / 3019 indexed   61.6ms"
+        );
+        // Including when the floor happens to equal the corpus size, which the settled form
+        // states once and this form must not: the two say different things.
+        assert_eq!(
+            super::tally(50, 3019, !SETTLED, 3019, 61.6, 80),
             "50 of … matched / 3019 indexed   61.6ms"
         );
     }
@@ -579,12 +589,12 @@ mod tests {
         // The corpus size is the only one of the three that does not move as you type, so it
         // is the one worth the least. Losing the latency instead — which is what clipping at
         // the right edge would do — costs the reading that says whether a slow query is slow.
-        let narrow = super::tally(100, Total::Exact(1515), 3019, 3.2, 24);
+        let narrow = super::tally(100, 1515, SETTLED, 3019, 3.2, 24);
         assert_eq!(narrow, "100/1515   3.2ms");
         assert!(text::width(&narrow) <= 24, "and it actually fits");
 
         // And a blank query keeps a number rather than shedding down to `100/`.
-        assert_eq!(super::tally(100, Total::Exact(3019), 3019, 3.2, 24), "100/3019   3.2ms");
+        assert_eq!(super::tally(100, 3019, SETTLED, 3019, 3.2, 24), "100/3019   3.2ms");
     }
 
     /// The renderer and the click handler both derive the top row from this. If they ever

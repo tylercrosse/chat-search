@@ -118,7 +118,7 @@ Against that: the index grows 317 → 400 MB (+26%), postings 41 → 123 MB (3x,
 
 Do not re-litigate this without first repricing the BM25 scoring, because that is where the time is. The harness both sets of numbers came from is in commit 015e661 of this branch, deleted after use.
 
-**Revisit when.** Corpus exceeds ~50 GB, or hybrid ranking needs something FTS5 can't do. The open question on ranking cost is no longer the prefix expansion but the candidate ceiling: `search_grouped` pulls `limit * 50` rows, and `ORDER BY bm25(...)` scores the whole match set to fill it (chat-search-6eb.29).
+**Revisit when.** Corpus exceeds ~50 GB, or hybrid ranking needs something FTS5 can't do. The open question on ranking cost is no longer the prefix expansion but the candidate ceiling: the ranking pass (`search::rank`) pulls `limit * 50` rows, and `ORDER BY bm25(...)` scores the whole match set to fill it (chat-search-6eb.29).
 
 ---
 
@@ -724,7 +724,7 @@ Three ways the log lies about itself, all of which would have survived into the 
 | a pick with `q = ""` | a grade-3 | the recent list, browsed |
 
 The first and third are decidable from the events. The second is not, and that is the whole
-difficulty: a query typed to measure `search_grouped` is ordinary text and goes unpicked, which
+difficulty: a query typed to measure the ranking is ordinary text and goes unpicked, which
 is exactly what an abandoned search — the signal 6eb.21 most wants to keep — also looks like.
 
 **Decision.** Two rules over the events, and one thing authored.

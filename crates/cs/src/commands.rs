@@ -164,14 +164,12 @@ pub fn search(
 ) -> Result<()> {
     let cfg = Config::load(config_path)?;
     let db_path = db_path.unwrap_or_else(|| cfg.default_db());
-    let t0 = std::time::Instant::now();
     let index = open_index(&db_path, json)?;
-    let conn = &index.conn;
     // `--source` desugars into the query's own filters rather than living beside them: one
     // home for a filter, whether it arrived as a flag or as `agent:` in the text.
     let parsed = if prefix { cs_core::Query::typeahead(text) } else { cs_core::Query::exact(text) }
         .with_source(source);
-    let q = cs_core::SearchOptions {
+    let opts = cs_core::SearchOptions {
         limit,
         field: if tools { cs_core::Field::Tools } else { cs_core::Field::Prose },
         include_off_path,
@@ -184,85 +182,92 @@ pub fn search(
         ..cs_core::SearchOptions::new(cs_core::now_ms())
     };
 
+    if flat {
+        let answer = cs_core::FlatAnswer::of(&index, &parsed, &opts)?;
+        if !json {
+            notes(&answer.unapplied_filters, answer.index_state);
+        }
+        return render_flat(&answer, json);
+    }
+
+    let mut answer = cs_core::answer(&index, &parsed, &opts)?;
+    // A one-shot search has no later moment to spend the second pass in, so it spends it here
+    // and reports a whole number. `--prefix` is typeahead over argv — one process per
+    // keystroke — and is the one caller that should leave the floor standing, because the
+    // total of a query somebody is still typing is a number nobody is reading.
+    //
+    // A failure here fails the search rather than falling back to the floor. `settle` leaves a
+    // true answer behind and a long-running client may well go on drawing it, but the counting
+    // pass is the ranking query minus the scoring: if it cannot run, the rows that just came
+    // back out of the same index are not trustworthy either, and printing them under a number
+    // labelled `settled: false` would read as the ordinary typeahead case.
+    if !prefix {
+        answer.settle(&index).context("counting what the query selects")?;
+    }
+    if !json {
+        notes(&answer.unapplied_filters, answer.index_state);
+    }
+    // Typeahead is excluded: `--prefix` fires once per keystroke, so logging it would
+    // bury the handful of real queries under every prefix of each of them. A client
+    // doing typeahead records the finished query with `cs pick` instead.
+    if !prefix {
+        log_search(&cfg, &parsed, text, source, &answer);
+    }
+    render_answer(&answer, json)
+}
+
+/// What a terminal is told beside the results, which a `--json` client reads as two fields.
+///
+/// Both are taken off the answer rather than recomputed from the query and the reader, so the
+/// sentence a person reads and the key a program branches on are one statement made twice
+/// rather than two that have to be kept in step.
+fn notes(unapplied_filters: &[String], index_state: &str) {
     // A filter token whose value selects nothing has to say so. Returning unfiltered results
     // for a query that names a filter is a worse answer than returning none, because it looks
     // like it worked (chat-search-me9.15 is the discoverability half of the same gap).
-    let rejected = parsed.rejected();
-    if !rejected.is_empty() && !json {
+    if !unapplied_filters.is_empty() {
         eprintln!(
             "note: {} — not a value this can select on, so it is not filtering",
-            rejected.join(", ")
+            unapplied_filters.join(", ")
         );
     }
-    // The JSON carries this as a field; a terminal gets the sentence. Either way it is a note
-    // and not a warning: what came back is the previous build's answer in full, not a partial
-    // one, because the new index is swapped in whole (chat-search-me9.28).
-    if index.state == cs_core::IndexState::Rebuilding && !json {
+    // A note and not a warning: what came back is the previous build's answer in full, not a
+    // partial one, because the new index is swapped in whole (chat-search-me9.28).
+    if index_state == cs_core::IndexState::Rebuilding.as_str() {
         eprintln!("note: a rebuild is running — these results are the previous index's");
     }
-
-    if !flat {
-        let groups = cs_core::search_grouped(conn, &parsed, &q)?;
-        let ms = t0.elapsed().as_secs_f64() * 1000.0;
-        // Typeahead is excluded: `--prefix` fires once per keystroke, so logging it would
-        // bury the handful of real queries under every prefix of each of them. A client
-        // doing typeahead records the finished query with `cs pick` instead.
-        if !prefix {
-            log_search(&cfg, text, source, &groups, ms);
-        }
-        return render_groups(&groups, text, &rejected, index.state, ms, json);
-    }
-
-    let hits = cs_core::search(conn, &parsed, &q)?;
-    let ms = t0.elapsed().as_secs_f64() * 1000.0;
-
-    if json {
-        // Field names here are a contract a GUI consumes verbatim — additive changes only.
-        println!("{:#}", serde_json::json!({
-            "query": text, "ms": (ms * 100.0).round() / 100.0, "count": hits.len(),
-            // `unapplied_filters` keeps its name: it is a published field (ADR 12) and still
-            // means what it says. What narrowed is which filters land in it — since
-            // `chat-search-6eb.11` only a value nothing can select on does.
-            "results": hits, "unapplied_filters": rejected,
-            "index_state": index.state.as_str(),
-        }));
-    } else if hits.is_empty() {
-        println!("no results for {text:?}");
-        println!("  if you expected one, `cs explain <conv-id> {text:?}` says why it missed");
-    } else {
-        for (i, h) in hits.iter().enumerate() {
-            let mut flags = Vec::new();
-            if !h.on_head_path { flags.push("edited-away") }
-            if h.is_sidechain { flags.push("subagent") }
-            if h.deleted_upstream { flags.push("deleted-upstream") }
-            let flag = if flags.is_empty() { String::new() } else { format!("  [{}]", flags.join(" ")) };
-            println!("{:>2}. {} · {}{}", i + 1, h.source, h.title.as_deref().unwrap_or("(untitled)"), flag);
-            println!("    {}", h.snippet);
-            if let Some(d) = h.destinations.first() {
-                println!("    {}", d.shell_line(None));
-            }
-            println!();
-        }
-        println!("{} results · {:.1} ms", hits.len(), ms);
-    }
-    Ok(())
 }
 
 /// Record a search. Never fails the search it is describing — see `querylog::append`.
-fn log_search(cfg: &Config, text: &str, source: Option<&str>, groups: &[cs_core::Group], ms: f64) {
-    if !cfg.recording_queries() || cs_core::Query::exact(text).mode() == cs_core::Mode::Empty {
+///
+/// `ms` is read off the answer rather than measured again. It used to be rounded here, in a
+/// third copy of `(ms * 100.0).round() / 100.0`, so the number a need was recorded under and
+/// the number the same search printed could differ in the last place — and the log is what a
+/// later tuning run compares against.
+///
+/// `text` rather than the parsed query, because `--source` desugars into the query's own
+/// filters and the log already carries `source` beside `q`. Folding on the desugared text would
+/// split one need in two depending on how the filter was spelled at the shell.
+fn log_search(
+    cfg: &Config,
+    parsed: &cs_core::Query,
+    text: &str,
+    source: Option<&str>,
+    answer: &cs_core::Answer,
+) {
+    if !cfg.recording_queries() || parsed.mode() == cs_core::Mode::Empty {
         return;
     }
     let shown = cs_core::querylog::truncate_shown(
-        groups.iter().map(|g| g.conv_id.clone()).collect(),
+        answer.results.iter().map(|g| g.conv_id.clone()).collect(),
     );
     let _ = cs_core::querylog::append(&cfg.query_log(), &cs_core::querylog::Event::Search {
         ts: cs_core::now_ms(),
         q: text.to_string(),
         source: source.map(String::from),
         shown,
-        n: groups.len(),
-        ms: (ms * 100.0).round() / 100.0,
+        n: answer.count,
+        ms: answer.ms,
     });
 }
 
@@ -274,7 +279,8 @@ fn log_search(cfg: &Config, text: &str, source: Option<&str>, groups: &[cs_core:
 /// The result list is recomputed here rather than passed in, because the caller is a shell
 /// script holding a chosen line and not much else. It costs a few milliseconds and it keeps
 /// the recorded rank honest about what this ranking would return, which is what a later
-/// tuning run needs to compare against.
+/// tuning run needs to compare against. It asks through `answer` like every other client, so
+/// the ranking a pick is placed in is the one a search would have shown it in.
 pub fn pick(
     config_path: &Path,
     db_path: Option<PathBuf>,
@@ -299,8 +305,11 @@ pub fn pick(
         (Vec::new(), 0)
     } else {
         let q = cs_core::SearchOptions { limit, ..cs_core::SearchOptions::new(cs_core::now_ms()) };
-        let groups = cs_core::search_grouped(&conn, &parsed, &q)?;
-        let ids: Vec<String> = groups.iter().map(|g| g.conv_id.clone()).collect();
+        let ids: Vec<String> = cs_core::answer(&index, &parsed, &q)?
+            .results
+            .into_iter()
+            .map(|g| g.conv_id)
+            .collect();
         let n = ids.len();
         (ids, n)
     };
@@ -570,49 +579,42 @@ pub fn show(
 /// and what arrived beside it was one English sentence — so the first non-Rust client to read
 /// this contract classified index health by substring-matching another program's prose
 /// (chat-search-me9.22). `code` is the contract; the message stays free to be reworded.
+///
+/// The body is a `Refusal`, which is core's shape rather than a fifth envelope assembled at the
+/// printer: a refusal and the reply it stands in for are two halves of one contract, and this
+/// was the half that lived furthest from it.
 fn open_index(db_path: &Path, json: bool) -> Result<cs_core::Reader> {
-    cs_core::open_for_read(db_path).map_err(|why| {
-        if json {
-            println!(
-                "{:#}",
-                serde_json::json!({"error": {"code": why.code(), "message": why.to_string()}})
-            );
+    match cs_core::open_for_read(db_path) {
+        Ok(reader) => Ok(reader),
+        Err(why) => {
+            if json {
+                println!("{:#}", serde_json::to_value(cs_core::Refusal::from(&why))?);
+            }
+            Err(anyhow::Error::new(why))
         }
-        anyhow::Error::new(why)
-    })
+    }
 }
 
 /// Conversation-grouped output: the conversation is the result, its best matching messages
 /// nest beneath it. Mirrors the shape docs search engines settled on, and it also dissolves
 /// the duplicate-hit problem — a conversation's main thread and its subagents collapse into
 /// one entry instead of competing for slots.
-fn render_groups(
-    groups: &[cs_core::Group],
-    query: &str,
-    rejected: &[String],
-    state: cs_core::IndexState,
-    ms: f64,
-    json: bool,
-) -> Result<()> {
+///
+/// Both surfaces read the same `Answer`. Serializing it *is* the wire, the way serializing a
+/// `Transcript` already is for `cs show --json`, so the terminal cannot come to describe a
+/// different search than the JSON does — which is what four hand-built envelopes made possible.
+fn render_answer(answer: &cs_core::Answer, json: bool) -> Result<()> {
     if json {
-        println!("{:#}", serde_json::json!({
-            "query": query, "ms": (ms * 100.0).round() / 100.0,
-            "count": groups.len(), "grouped": true, "results": groups,
-            "unapplied_filters": rejected,
-            // `ready` or `rebuilding`, and both mean the results are complete — the index is
-            // swapped in whole, so a client never has to wonder whether an empty answer is an
-            // answer. `rebuilding` says only that a newer index is on the way, which is what
-            // lets a client offer to ask again rather than believing this is the final word.
-            "index_state": state.as_str(),
-        }));
+        println!("{:#}", serde_json::to_value(answer)?);
         return Ok(());
     }
-    if groups.is_empty() {
+    let query = &answer.query;
+    if answer.results.is_empty() {
         println!("no results for {query:?}");
         println!("  if you expected one, `cs explain <conv-id> {query:?}` says why it missed");
         return Ok(());
     }
-    for (i, g) in groups.iter().enumerate() {
+    for (i, g) in answer.results.iter().enumerate() {
         let mut meta = vec![g.source.clone()];
         // Rendered by cs-core, not here: this is the same string the JSON hands a GUI, so
         // the terminal and every other client cannot disagree about which day a session was.
@@ -629,25 +631,67 @@ fn render_groups(
             g.title.as_deref().unwrap_or("(untitled)")
         );
         println!("    {}", meta.join(" · "));
-        for h in &g.hits {
-            let tag = if h.is_sidechain {
+        for m in &g.matches {
+            let tag = if m.is_sidechain {
                 "  [subagent]"
-            } else if !h.on_head_path {
+            } else if !m.on_head_path {
                 "  [edited away]"
             } else {
                 ""
             };
-            println!("      {}{}", h.snippet, tag);
+            println!("      {}{}", m.snippet, tag);
         }
-        if g.match_count > g.hits.len() {
-            println!("      +{} more match(es)", g.match_count - g.hits.len());
+        if g.match_count > g.matches.len() {
+            println!("      +{} more match(es)", g.match_count - g.matches.len());
         }
         if let Some(d) = g.destinations.first() {
             println!("    {}", d.shell_line(g.cwd.as_deref()));
         }
         println!();
     }
-    println!("{} conversations · {:.1} ms", groups.len(), ms);
+    // What `--limit` hides and the rows cannot recover: a hundred results out of a hundred and
+    // a hundred out of two thousand are the same hundred lines. Printed only once settled,
+    // because an unsettled total is a floor and about half the truth on this corpus — a number
+    // to be ranged, not shown. `--prefix` is the only caller that leaves one standing.
+    match (answer.settled && answer.total > answer.count, answer.ms) {
+        (true, ms) => println!("{} of {} conversations · {} ms", answer.count, answer.total, ms),
+        (false, ms) => println!("{} conversations · {} ms", answer.count, ms),
+    }
+    Ok(())
+}
+
+/// `--flat`: matching messages, ungrouped, each naming the conversation it came out of.
+///
+/// A second envelope rather than a mode of the first — see `FlatAnswer`, which says why. The
+/// terminal listing is correspondingly its own: one line per message, where the grouped one
+/// nests messages under a conversation heading.
+fn render_flat(answer: &cs_core::FlatAnswer, json: bool) -> Result<()> {
+    if json {
+        println!("{:#}", serde_json::to_value(answer)?);
+        return Ok(());
+    }
+    let query = &answer.query;
+    if answer.hits.is_empty() {
+        println!("no results for {query:?}");
+        println!("  if you expected one, `cs explain <conv-id> {query:?}` says why it missed");
+        return Ok(());
+    }
+    for (i, h) in answer.hits.iter().enumerate() {
+        let mut flags = Vec::new();
+        if !h.on_head_path { flags.push("edited-away") }
+        if h.is_sidechain { flags.push("subagent") }
+        if h.deleted_upstream { flags.push("deleted-upstream") }
+        let flag = if flags.is_empty() { String::new() } else { format!("  [{}]", flags.join(" ")) };
+        println!("{:>2}. {} · {}{}", i + 1, h.source, h.title.as_deref().unwrap_or("(untitled)"), flag);
+        println!("    {}", h.snippet);
+        if let Some(d) = h.destinations.first() {
+            println!("    {}", d.shell_line(None));
+        }
+        println!();
+    }
+    // No total beside it, unlike the grouped listing: the number worth settling counts
+    // conversations, and this list is not about conversations.
+    println!("{} results · {} ms", answer.count, answer.ms);
     Ok(())
 }
 

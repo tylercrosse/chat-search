@@ -14,7 +14,7 @@
 //! # One door, and the routing behind it
 //!
 //! [`answer`] is the whole of asking. An empty or too-short query is answered out of the recent
-//! list *inside* this call, so no caller has to know [`crate::search::recent`] exists: the TUI's
+//! list *inside* this call, so no caller has to know the recent route exists at all: the TUI's
 //! old habit of blanking its own query text to force that branch has nothing left to force, and
 //! a client that never learns the two routes apart cannot send a question down the wrong one.
 //!
@@ -54,8 +54,14 @@ const V: u32 = 1;
 
 /// What `cs search --json` emits, and what every other client reads.
 ///
-/// The field order here is the order on the wire, envelope first and results last, so a human
-/// reading the raw JSON meets the summary before the payload.
+/// Declared envelope first and results last so the struct reads in the order the reply is
+/// understood. That is *not* the order a client sees: the CLI renders through
+/// `serde_json::to_value`, whose `Map` is a `BTreeMap` in this workspace, so keys arrive
+/// alphabetically — `count` first and `v` last, with `results` in the middle. Only a serializer
+/// that walks the struct directly would honour the declaration order, and neither surface does.
+///
+/// `docs/JSON-CONTRACT.md` is where that is stated for clients, along with the instruction that
+/// follows from it: decode by name, because the order is an artefact and not a promise.
 #[derive(Debug, Clone, Serialize)]
 pub struct Answer {
     pub v: u32,
@@ -82,9 +88,9 @@ pub struct Answer {
     pub total: usize,
     /// Whether `total` is the whole number rather than a floor.
     ///
-    /// Two flat scalars rather than one polymorphic key: the [`Total`] enum stays honest inside
-    /// Rust, and a Swift `Codable` never meets a value that is sometimes a number and sometimes
-    /// an object.
+    /// Two flat scalars rather than one polymorphic key: the `Total` enum stays honest inside
+    /// this crate, where it is now the only thing that reads it, and a Swift `Codable` never
+    /// meets a value that is sometimes a number and sometimes an object.
     pub settled: bool,
     /// Filter tokens that named a value nothing can be selected on — `date:nope`, a half-typed
     /// `agent:`. Returning unfiltered results for a query that names a filter is a worse answer
@@ -252,8 +258,7 @@ pub struct Group {
     ///
     /// **Empty unless [`SearchOptions::shape`] asked for it**, which is not the same thing as a
     /// conversation with nothing in it — see that flag for what filling it costs, and
-    /// [`crate::search::Group::kind_runs`] for the two coordinate spaces this and `match_seqs`
-    /// live in.
+    /// `search::Group::kind_runs` for the two coordinate spaces this and `match_seqs` live in.
     pub kind_runs: Vec<crate::blocks::Run>,
     /// Gone from the source, kept here (ADR 9).
     pub deleted_upstream: bool,
@@ -280,8 +285,9 @@ pub struct Match {
     /// **Opaque ordering** — see [`Group::score`], which this is the message-level half of.
     pub score: f64,
     /// A window of the message around what matched, whitespace flattened, ellipses included.
-    /// Prefixed with `⟨no match⟩ ` when the match could not be located — the same fact
-    /// `snippet_spans` states by being empty.
+    /// Prefixed with `⟨no match⟩ ` when the match could not be located — the sentence a
+    /// reader gets, and not the same statement as an empty `snippet_spans`, which also covers a
+    /// match that never had a lexical term to locate.
     pub snippet: String,
     /// Where the matched words are in `snippet`, in the units [`Answer::mark_offsets`] names.
     ///
@@ -878,11 +884,17 @@ mod tests {
 
     #[test]
     fn a_snippet_and_its_spans_are_one_statement_made_twice() {
-        // `snippet_spans` may be empty, and a client must be able to tell which case it is in
-        // without re-tokenizing anything: the string says it for a reader, the list for a
-        // decoder, and they never disagree. Today only a match this crate's own tokenizer
-        // cannot find produces the empty case; a semantic match will produce it routinely,
-        // which is why the contract promises it now rather than after a client has shipped.
+        // While matching is lexical the two channels agree: a match this crate's own tokenizer
+        // cannot find is the only thing that empties the spans, so the prefix a reader sees and
+        // the empty list a decoder sees are one fact stated twice, and neither has to be
+        // re-derived from the other.
+        //
+        // That agreement is a property of this matcher, not a promise to clients.
+        // docs/JSON-CONTRACT.md promises only that the spans may be empty, because a ranking
+        // that matches on meaning will empty them for a result that holds no query term and is
+        // not "no match" in any sense worth printing. So this test failing when that lands is
+        // the signal to decide what the prefix means then — not licence to keep the equality by
+        // labelling a semantic hit as unmatched.
         let r = reader(&corpus(), IndexState::Ready);
         let a = answer(&r, &Query::exact("borrow"), &opts()).unwrap();
         for g in &a.results {

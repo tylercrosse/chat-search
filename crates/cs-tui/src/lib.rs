@@ -69,8 +69,8 @@ pub fn run(db_path: PathBuf, log: LogSink<'_>, opts: Opts) -> anyhow::Result<Exi
     // is an error nobody reads. Missing, half-built and stale are separate answers here
     // (`cs_core::IndexState`), which is what stops a first run being told its brand-new index
     // predates the schema.
-    let conn = cs_core::open_for_read(&db_path)?.conn;
-    let mut app = state::App::new(conn, &opts, theme::Theme::detect(theme::no_color_env()))?;
+    let reader = cs_core::open_for_read(&db_path)?;
+    let mut app = state::App::new(reader, &opts, theme::Theme::detect(theme::no_color_env()))?;
 
     // The guard owns the restore, so a `?` out of the loop below leaves a usable terminal
     // rather than a raw-mode shell with no echo.
@@ -157,7 +157,7 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
         // wake the process forever to redraw an unchanged screen, and a settle that fails
         // returns false so this falls through to the blocking read below rather than retrying
         // at 4 Hz against an index that is not going to answer.
-        if app.needs_count() && !event::poll(SETTLE).unwrap_or(false) && app.settle_count() {
+        if app.unsettled() && !event::poll(SETTLE).unwrap_or(false) && app.settle() {
             continue;
         }
 

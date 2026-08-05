@@ -83,16 +83,16 @@ the same screen — and "keep typing" and "you have seen everything" are opposit
 drawn from the same rows. `50 of 50 matched` states the complete case rather than going quiet,
 because a form that appears only sometimes makes the reader infer meaning from an absence.
 
-**A keystroke never pays for it.** `search_grouped_counted` reads the total off the ranking
-pass, which already visits every matching message unless it stops at its own `limit * 50` scan
+**A keystroke never pays for it.** `cs_core::answer` reads the total off the ranking pass,
+which already visits every matching message unless it stops at its own `limit * 50` scan
 ceiling — so every query narrow enough to finish typing is answered for free. The rest come
-back `Total::AtLeast`, and the header draws `50 of … matched` rather than the floor that
+back `settled: false`, and the header draws `50 of … matched` rather than the floor the answer
 carries: the floor is an artifact of where the scan stopped, about half the truth on this
 corpus, and a number that lands, is read, and then doubles is worse than one that never
 claimed to be ready.
 
-**`count_matching` settles it 250 ms after the last keystroke**, from the event loop, gated on
-there being anything to settle (`App::needs_count`). That timing is the whole design rather
+**`Answer::settle` settles it 250 ms after the last keystroke**, from the event loop, gated on
+there being anything to settle (`App::unsettled`). That timing is the whole design rather
 than a detail. Settling costs 5–36 ms against this corpus and only ever on a broad prefix —
 which is exactly a query on its way somewhere, whose total nobody is reading yet. Charging it
 per keystroke spent the milliseconds at the one moment they bought nothing; charging it to the
@@ -635,7 +635,7 @@ Both are currently wrong in our own code — see `6eb.20`. Two rules for the pre
   and `highlight()` functions, so hand-rolling is forced; it must still tokenize and Porter-stem
   the way the index does, or a stemmed hit highlights nothing. `6eb.10` fuzzy-on-failure would
   make a substring highlighter useless outright.
-- **Anchor on the best hit, not the earliest.** `search_grouped` already ranks per message before
+- **Anchor on the best hit, not the earliest.** The ranking already scores per message before
   grouping, so the best-hit message id is known at hydrate time. Scroll there on selection.
 
 ### Off-path branches

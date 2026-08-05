@@ -9,7 +9,7 @@
 use std::collections::HashSet;
 
 use cs_core::querylog::{self, Event};
-use cs_core::search::Group;
+use cs_core::{Answer, Group, Reader};
 use rusqlite::Connection;
 
 use crate::preview::Preview;
@@ -25,19 +25,23 @@ use crate::theme::Theme;
 pub const MIN_QUERY_CHARS: usize = cs_core::search::MIN_PREFIX_LEN;
 
 pub struct App {
-    conn: Connection,
+    /// The index, and what was at its path when it was opened. A [`Reader`] rather than a bare
+    /// connection because [`cs_core::answer`] takes one: that is how `index_state` reaches an
+    /// answer by construction instead of by a caller remembering to attach it.
+    reader: Reader,
     /// Corpus size, for the header's "shown / indexed". Read once: the index is rebuilt by a
     /// separate process, never mutated underneath us.
     pub indexed: i64,
-    /// How many conversations the current query selects, `limit` ignored — the header's
-    /// middle number.
+    /// The reply the screen is drawn from — the ranked conversations, how many the query
+    /// selects with `limit` ignored, and how long it took (ADR 23).
     ///
-    /// [`cs_core::Total::AtLeast`] while a broad query's real total is still unknown; the
-    /// event loop settles it once typing stops ([`App::settle_count`]).
+    /// The same type `cs search --json` emits, assembled by `cs-core` rather than here: the
+    /// TUI is one of its clients, not a second author of the reply. `total` is a floor while
+    /// `settled` is false, which the event loop resolves once typing stops ([`App::settle`]).
     ///
-    /// Written only by a search that succeeded, so a failed one leaves the previous count
-    /// beside the previous rows rather than claiming the query matched nothing.
-    pub matched: cs_core::Total,
+    /// Written only by a search that succeeded, so a failed one leaves the previous answer
+    /// beside the rows it describes rather than claiming the query matched nothing.
+    pub answer: Answer,
     /// Per-source counts for the facet bar, index-derived and sorted for a stable order.
     ///
     /// A configured source holding zero rows is absent here, which is exactly the gap
@@ -58,7 +62,6 @@ pub struct App {
     pub cursor: usize,
     pub limit: i64,
 
-    pub groups: Vec<Group>,
     pub rows: Vec<Row>,
     pub selected: usize,
     pub expanded: HashSet<String>,
@@ -71,7 +74,6 @@ pub struct App {
     /// Shown in the footer in place of the key hints. Set by a failed search, cleared by the
     /// next one that succeeds.
     pub status: Option<String>,
-    pub last_ms: f64,
     pub theme: Theme,
 
     /// Whether a `Pick` was emitted this session. Decides if quitting should emit the
@@ -81,36 +83,44 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(conn: Connection, opts: &crate::Opts, theme: Theme) -> rusqlite::Result<Self> {
-        let indexed =
-            conn.query_row("SELECT COUNT(*) FROM conversation", [], |r| r.get(0)).unwrap_or(0);
-        let facets = read_facets(&conn);
+    pub fn new(reader: Reader, opts: &crate::Opts, theme: Theme) -> rusqlite::Result<Self> {
+        let indexed = reader
+            .conn
+            .query_row("SELECT COUNT(*) FROM conversation", [], |r| r.get(0))
+            .unwrap_or(0);
+        let facets = read_facets(&reader.conn);
         // `--source` is desugared here, once, and never again: `with_source` rewrites the
         // query *text*, so what lands in the box is a query the user could have typed and the
         // flag has nowhere left to live. This is the whole of the flag's life in this crate.
         let query =
             cs_core::Query::typeahead(&opts.query).with_source(opts.source.as_deref()).raw().to_string();
+        let now = cs_core::now_ms();
+        let limit = if opts.limit > 0 { opts.limit } else { 100 };
+        // The opening search runs here rather than through `search` below, because an `Answer`
+        // is core's to make and there is no empty one to hold until the first query arrives.
+        // Failing out of it is also right: `run` calls this before the alternate screen is
+        // entered, so an index that cannot be read says so on a terminal somebody can read.
+        let answer =
+            cs_core::answer(&reader, &cs_core::Query::typeahead(&query), &options(now, limit))?;
         let mut app = App {
-            conn,
+            reader,
             indexed,
-            matched: cs_core::Total::Exact(0),
+            answer,
             facets,
-            now: cs_core::now_ms(),
+            now,
             cursor: query.chars().count(),
             query,
-            limit: if opts.limit > 0 { opts.limit } else { 100 },
-            groups: Vec::new(),
+            limit,
             rows: Vec::new(),
             selected: 0,
             expanded: HashSet::new(),
             show_preview: true,
             preview: None,
             status: None,
-            last_ms: 0.0,
             theme,
             picked: false,
         };
-        app.search();
+        app.adopt();
         Ok(app)
     }
 
@@ -121,48 +131,43 @@ impl App {
     /// truth is "the index could not be read".
     pub fn search(&mut self) {
         self.now = cs_core::now_ms();
-        let t0 = std::time::Instant::now();
-        // No blanking of the query text. `search_grouped` routes anything that is not
-        // `Searchable` to the recent list itself, so this used to hand it an empty string to
+        // One door, and no blanking of the query text: `answer` routes anything that is not
+        // `Searchable` to the recent list itself. This used to hand it an empty string to
         // force a branch it would have taken anyway — and that rewrite is what made
         // `rows::build` see a different answer here than in `rebuild_rows`.
-        let query = self.parsed();
-        let q = self.options();
+        //
         // `nested = 0`: no snippets. Building one means tokenizing the whole message, because
         // the highlighter has to agree with the ranker about which words matched
         // (chat-search-6eb.20) — and the row model draws hits only for an expanded
         // conversation, so per keystroke this would pay for 150 snippets and draw none.
         // Measured at limit 50 on the 180k-message index, that is a further 4–21 ms on top of
         // the ranking; it was 11–35 ms before chat-search-6eb.30 batched the marking.
-        // Counted, because "50 shown" says nothing about whether there were 51 or 2,000. This
-        // call never pays for that number: it reports what the ranking pass could see for
-        // free and leaves the rest to `settle_count`, off the keystroke.
-        match cs_core::search_grouped_counted(&self.conn, &query, &q) {
-            Ok(found) => {
-                self.last_ms = t0.elapsed().as_secs_f64() * 1000.0;
-                self.matched = found.matched;
-                self.groups = found.groups;
+        //
+        // The total arrives with it and costs nothing: it is what the ranking pass saw on its
+        // way past. Whatever that pass could not see is left to [`App::settle`], off the
+        // keystroke — this path never pays for a second query.
+        match cs_core::answer(&self.reader, &self.parsed(), &options(self.now, self.limit)) {
+            Ok(answer) => {
+                self.answer = answer;
                 self.status = None;
-                self.rows = rows::build(&self.groups, &self.expanded, !query.is_searchable());
-                // A query edit is a new question, so the cursor belongs on the best answer to
-                // it. Following the previously-selected conversation here — which an earlier
-                // version did — drags the cursor down the ranking as the query narrows: type
-                // one more letter and you are looking at rank 15 of a list whose top just
-                // changed. Preservation is for rebuilds the user did not ask for (an
-                // expansion toggle, and the background reindex of `6eb.16`), which is why it
-                // lives in `rebuild_rows` and not here.
-                self.selected = 0;
-                self.sync_preview();
+                self.adopt();
             }
             Err(e) => self.status = Some(format!("search failed: {e}")),
         }
     }
 
-    /// How this session searches. One place, because [`App::settle_count`] has to count the
-    /// set [`App::search`] ranked and not one resembling it — `now_ms` included, since a
-    /// `date:` filter resolved against a second instant selects a second set of conversations.
-    fn options(&self) -> cs_core::SearchOptions {
-        cs_core::SearchOptions { limit: self.limit, ..cs_core::SearchOptions::new(self.now) }
+    /// Everything downstream of a freshly landed [`App::answer`]: rows, cursor, preview.
+    fn adopt(&mut self) {
+        self.rows =
+            rows::build(&self.answer.results, &self.expanded, !self.parsed().is_searchable());
+        // A query edit is a new question, so the cursor belongs on the best answer to it.
+        // Following the previously-selected conversation here — which an earlier version did —
+        // drags the cursor down the ranking as the query narrows: type one more letter and you
+        // are looking at rank 15 of a list whose top just changed. Preservation is for rebuilds
+        // the user did not ask for (an expansion toggle, and the background reindex of
+        // `6eb.16`), which is why it lives in `rebuild_rows` and not here.
+        self.selected = 0;
+        self.sync_preview();
     }
 
     /// Whether the header is still showing a total nobody has established.
@@ -170,42 +175,37 @@ impl App {
     /// True only after a query broad enough for the ranking scan to stop at its ceiling, which
     /// in practice means a two-or-three letter prefix of a common word — a query on its way
     /// somewhere, not one anybody is reading the total of.
-    pub fn needs_count(&self) -> bool {
-        matches!(self.matched, cs_core::Total::AtLeast(_))
+    pub fn unsettled(&self) -> bool {
+        !self.answer.settled
     }
 
-    /// Establish the total the search declined to pay for. Returns whether it now has one.
+    /// Establish the total the search declined to pay for. Returns whether the header changed.
     ///
-    /// Called when the user has stopped typing, which is the whole point: the count costs
-    /// 5–36 ms on exactly the broad prefixes that produce an unsettled total, and those are
-    /// exactly the queries whose total is worth nothing while it is still being typed. Moving
-    /// it here spends the milliseconds at the one moment the number is read instead.
+    /// Called when the user has stopped typing, which is the whole point: the second pass costs
+    /// what [`cs_core::Answer::settle`] measures, on exactly the broad prefixes that leave a
+    /// total unsettled — which are exactly the queries whose total is worth nothing while they
+    /// are still being typed. Leaving it to this moment spends the milliseconds at the one
+    /// moment the number is read instead.
     ///
     /// This is not the generation-counting `me9.4` closed and ADR 14 rules out. There is no
-    /// concurrency to get wrong: the count runs on the event loop like everything else, from
-    /// the query and clock the last search used, and a keystroke arriving first simply
-    /// replaces the whole state before this is ever reached.
+    /// concurrency to get wrong: the count runs on the event loop like everything else, and a
+    /// keystroke arriving first simply replaces the whole answer before this is ever reached.
+    /// Which set gets counted is not this crate's decision at all any more — the answer replays
+    /// its own receipt, so there is no query, clock or options struct here to get wrong.
     ///
     /// A failure leaves the total unsettled and says nothing. The floor on screen is still
     /// true, the rows it describes are still there, and the loop blocks for the next event
     /// rather than retrying — so a broken index costs one query per keystroke, not a spin.
-    pub fn settle_count(&mut self) -> bool {
-        if !self.needs_count() {
-            return false;
-        }
-        let Ok(total) = cs_core::count_matching(&self.conn, &self.parsed(), &self.options()) else {
-            return false;
-        };
-        // True even when the number equals the floor it replaces: the header was drawing the
-        // unsettled marker, not the floor, so every success is a change on screen.
-        self.matched = cs_core::Total::Exact(total);
-        true
+    pub fn settle(&mut self) -> bool {
+        self.answer.settle(&self.reader).unwrap_or(false)
     }
 
     /// Rebuild the row vector without re-querying, keeping the cursor on `previous`.
     fn rebuild_rows(&mut self, previous: Option<&str>) {
-        self.rows = rows::build(&self.groups, &self.expanded, !self.parsed().is_searchable());
-        self.selected = rows::reselect(&self.rows, &self.groups, previous, self.selected);
+        let blank = !self.parsed().is_searchable();
+        self.rows = rows::build(&self.answer.results, &self.expanded, blank);
+        self.selected =
+            rows::reselect(&self.rows, &self.answer.results, previous, self.selected);
         self.sync_preview();
     }
 
@@ -294,11 +294,11 @@ impl App {
         // Folds and scroll are dropped with the old preview, and that is the same rule
         // `cycle_density` and the post-search reselect already follow: an edited query is a new
         // question, so a fold decided against the old one is not evidence about this one.
-        self.preview = wanted.and_then(|id| Preview::load(&self.conn, &id, &terms).ok());
+        self.preview = wanted.and_then(|id| Preview::load(&self.reader.conn, &id, &terms).ok());
     }
 
     pub fn selected_group(&self) -> Option<&Group> {
-        self.groups.get(self.rows.get(self.selected)?.group())
+        self.answer.results.get(self.rows.get(self.selected)?.group())
     }
 
     pub fn selected_conv(&self) -> Option<&str> {
@@ -365,7 +365,7 @@ impl App {
             return;
         };
         let expanding = rows::toggle(&mut self.expanded, &conv);
-        if expanding && self.groups.iter().all(|g| g.hits.is_empty()) {
+        if expanding && self.answer.results.iter().all(|g| g.matches.is_empty()) {
             self.hydrate_hits();
         }
         self.rebuild_rows(Some(&conv));
@@ -375,18 +375,22 @@ impl App {
     ///
     /// A failure leaves the existing groups alone: an expansion that cannot find its
     /// snippets should show the conversation without them, not empty the list.
+    ///
+    /// Only the rows are taken from the second answer. The envelope around them — the total,
+    /// whether it is settled, the milliseconds in the header — describes the search the user
+    /// ran, and this is that same ranking with its snippets fetched rather than a new question
+    /// to report on.
     fn hydrate_hits(&mut self) {
         let query = self.parsed();
         if !query.is_searchable() {
             return;
         }
         let q = cs_core::SearchOptions {
-            limit: self.limit,
             nested: rows::MAX_HITS,
-            ..cs_core::SearchOptions::new(self.now)
+            ..options(self.now, self.limit)
         };
-        if let Ok(groups) = cs_core::search_grouped(&self.conn, &query, &q) {
-            self.groups = groups;
+        if let Ok(hydrated) = cs_core::answer(&self.reader, &query, &q) {
+            self.answer.results = hydrated.results;
         }
     }
 
@@ -423,7 +427,7 @@ impl App {
     /// resolves to its parent, because the conversation is what was opened.
     pub fn pick_event(&mut self) -> Option<Event> {
         let conv_id = self.selected_conv()?.to_owned();
-        let shown: Vec<String> = self.groups.iter().map(|g| g.conv_id.clone()).collect();
+        let shown: Vec<String> = self.answer.results.iter().map(|g| g.conv_id.clone()).collect();
         let n = shown.len();
         let rank = shown.iter().position(|c| *c == conv_id).map(|i| i + 1);
         self.picked = true;
@@ -451,7 +455,7 @@ impl App {
         if self.picked || self.browsing() {
             return None;
         }
-        let shown: Vec<String> = self.groups.iter().map(|g| g.conv_id.clone()).collect();
+        let shown: Vec<String> = self.answer.results.iter().map(|g| g.conv_id.clone()).collect();
         let n = shown.len();
         Some(Event::Search {
             ts: cs_core::now_ms(),
@@ -460,9 +464,21 @@ impl App {
             source: None,
             shown: querylog::truncate_shown(shown),
             n,
-            ms: self.last_ms,
+            // Measured and rounded once, in core, so the number a need is recorded under is the
+            // number the header was showing when it went unanswered.
+            ms: self.answer.ms,
         })
     }
+}
+
+/// How this session searches.
+///
+/// One place, but no longer because two calls have to agree: [`cs_core::Answer::settle`] replays
+/// the receipt of the ask it came from, so counting a set other than the one on screen is
+/// unwritable rather than a rule a caller follows. What is left is where `limit` and the clock
+/// this frame's ages are measured from are said once.
+fn options(now: i64, limit: i64) -> cs_core::SearchOptions {
+    cs_core::SearchOptions { limit, ..cs_core::SearchOptions::new(now) }
 }
 
 /// Char index to byte offset, saturating at the end so a caret past the last char is the
@@ -517,7 +533,10 @@ mod tests {
         assert!(!app.browsing(), "now the rows are matches and expansion means something");
     }
 
-    /// Two conversations, both matching `alpha`, ordered so the ranking has a choice to make.
+    /// A reader over an in-memory index holding `convs`.
+    ///
+    /// `Ready` because that is what a reader of a committed index reports, and the state is a
+    /// fact about the file rather than about the fixture.
     fn app_with(convs: &[(&str, &str)]) -> App {
         let mut conn = cs_core::open(":memory:").unwrap();
         let built: Vec<Conversation> = convs
@@ -552,7 +571,8 @@ mod tests {
             })
             .collect();
         cs_core::write_conversations(&mut conn, &built).unwrap();
-        App::new(conn, &crate::Opts { query: String::new(), source: None, limit: 50 }, Theme::plain())
+        let reader = Reader { conn, state: cs_core::IndexState::Ready };
+        App::new(reader, &crate::Opts { query: String::new(), source: None, limit: 50 }, Theme::plain())
             .unwrap()
     }
 
@@ -581,9 +601,9 @@ mod tests {
         for ch in "alpha".chars() {
             app.insert_char(ch);
         }
-        assert_eq!(app.groups.len(), 1, "one row, because that is all limit allows");
-        assert_eq!(app.matched, cs_core::Total::Exact(2), "and the header can still say two");
-        assert!(!app.needs_count(), "settled by the search itself, at no cost");
+        assert_eq!(app.answer.count, 1, "one row, because that is all limit allows");
+        assert_eq!(app.answer.total, 2, "and the header can still say two");
+        assert!(!app.unsettled(), "settled by the search itself, at no cost");
     }
 
     #[test]
@@ -599,18 +619,18 @@ mod tests {
             app.insert_char(ch);
         }
 
-        assert!(app.needs_count(), "the ranking scan stopped short, so the total is unknown");
+        assert!(app.unsettled(), "the ranking scan stopped short, so the total is unknown");
         assert!(
-            matches!(app.matched, cs_core::Total::AtLeast(n) if n < 600),
-            "and what it does hold is a floor, not the answer: {:?}",
-            app.matched
+            app.answer.total < 600,
+            "and what it does hold is a floor, not the answer: {}",
+            app.answer.total
         );
 
         // What the event loop does once the keyboard goes quiet.
-        assert!(app.settle_count(), "settling reports that the header now has a number");
-        assert_eq!(app.matched, cs_core::Total::Exact(600));
-        assert!(!app.needs_count(), "and does not ask to run again");
-        assert!(!app.settle_count(), "nor does a second call find anything to do");
+        assert!(app.settle(), "settling reports that the header now has a number");
+        assert_eq!((app.answer.total, app.answer.settled), (600, true));
+        assert!(!app.unsettled(), "and does not ask to run again");
+        assert!(!app.settle(), "nor does a second call find anything to do");
     }
 
     #[test]
@@ -621,14 +641,14 @@ mod tests {
         for ch in "alpha".chars() {
             app.insert_char(ch);
         }
-        let (rows, matched) = (app.groups.len(), app.matched);
-        assert_eq!(matched, cs_core::Total::Exact(2), "precondition: a search that worked");
+        let (rows, total) = (app.answer.results.len(), app.answer.total);
+        assert_eq!(total, 2, "precondition: a search that worked");
 
-        app.conn.execute_batch("DROP TABLE fts_prose").unwrap();
+        app.reader.conn.execute_batch("DROP TABLE fts_prose").unwrap();
         app.insert_char('x');
         assert!(app.status.is_some(), "the search failed");
-        assert_eq!(app.groups.len(), rows, "and left the rows alone");
-        assert_eq!(app.matched, matched, "along with the count that describes them");
+        assert_eq!(app.answer.results.len(), rows, "and left the rows alone");
+        assert_eq!(app.answer.total, total, "along with the count that describes them");
     }
 
     #[test]
@@ -721,8 +741,9 @@ mod tests {
         // `--source` is desugared once, at startup, into the same token a click writes. After
         // that the TUI has no notion of a source flag at all — which is the whole point.
         let conn = cs_core::open(":memory:").unwrap();
+        let reader = Reader { conn, state: cs_core::IndexState::Ready };
         let opts = crate::Opts { query: "alpha".into(), source: Some("Codex".into()), limit: 50 };
-        let mut app = App::new(conn, &opts, Theme::plain()).unwrap();
+        let mut app = App::new(reader, &opts, Theme::plain()).unwrap();
         assert_eq!(app.query, "agent:codex alpha");
         assert_eq!(app.selected_sources().include, ["codex"]);
         // So the chip it lit is the chip that turns it off.

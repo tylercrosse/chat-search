@@ -125,6 +125,23 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// The facet rail for a query: every source, what the query says about it, and the query
+    /// text clicking it would produce.
+    ///
+    /// For a client that is not a Rust program. docs/TUI-DESIGN.md §5 requires a facet bar to
+    /// be a projection of the query text rather than a selection kept beside it, and the
+    /// rewriting rules that make that work live in `cs_core::query` with the grammar. A client
+    /// in another process cannot call them, so this hands over the projection instead.
+    Facets {
+        /// The query the rail is a projection of. Same syntax as `cs search`.
+        #[arg(allow_hyphen_values = true, default_value = "")]
+        query: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// The client contract. docs/JSON-CONTRACT.md says what it emits.
+        #[arg(long)]
+        json: bool,
+    },
     /// Record that a search ended in opening this conversation, and print its resume command.
     ///
     /// The selection is the ground truth an eval set cannot invent: the query says what was
@@ -291,6 +308,7 @@ fn main() -> Result<()> {
         Command::Search { query: q, limit, db, source, tools, include_off_path, prefix, nested, flat, json } => {
             commands::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)
         }
+        Command::Facets { query: q, db, json } => facets(&config_path, db, &q, json),
         Command::Pick { conv_id, query: q, db, source, limit, quiet, kind } => {
             commands::pick(&config_path, db, &conv_id, &q, source.as_deref(), limit, quiet, kind.as_deref())
         }
@@ -842,7 +860,7 @@ fn status(config_path: &PathBuf, json: bool) -> Result<()> {
     // would be two derivations of one fact.
     let drift = cs_archive::drift::detect(&cfg.sources);
     let watched = inventory::watched(&cfg, &drift);
-    let inventoried = source_coverage(&db, &watched);
+    let inventoried = inventory::census(&db, &watched);
 
     if json {
         let sources: Vec<_> = inventoried
@@ -894,28 +912,56 @@ fn status(config_path: &PathBuf, json: bool) -> Result<()> {
     Ok(())
 }
 
-/// The inventory, with the index counts folded in if the index can be read.
+/// The facet rail for one query.
 ///
-/// A `cs status` that failed because there is no index yet would be useless on the run where
-/// it is needed most, so an unreadable index costs the counts and nothing else. Two of the
-/// four reasons — nothing there, and a build in progress — are already named by `index.state`
-/// beside this, so a zero under either is unambiguous. The other two are not, and say so on
-/// stderr rather than letting a real corpus report itself as empty.
-fn source_coverage(db: &Path, watched: &[cs_core::Watched]) -> Vec<cs_core::SourceCoverage> {
-    match cs_core::open_for_read(db) {
-        Ok(reader) => match cs_core::inventory::of(&reader.conn, watched) {
-            Ok(inventory) => return inventory,
-            Err(e) => eprintln!("counting conversations: {e} — the counts below read 0"),
-        },
-        Err(e) => {
-            let named = matches!(
-                e,
-                cs_core::Unreadable::NoIndex { .. } | cs_core::Unreadable::Building { .. }
+/// **This never refuses.** `cs search` cannot answer without a readable index and says so with
+/// a nonzero exit, but the rail can: on a first run the true rail is every configured source
+/// at zero, which is the state a client most needs to draw and the one an error would hide.
+/// `index_state` beside the counts is what says whether they are provisional.
+///
+/// The projection itself is `cs_core::facets`, because it is made of the grammar's rewriting
+/// rules and this crate is not where the grammar lives. All that happens here is the half
+/// `cs-core` is not allowed to know: which sources the config names, and which of their
+/// directories are on this disk (docs/TUI-DESIGN.md §1).
+fn facets(config_path: &PathBuf, db_path: Option<PathBuf>, text: &str, json: bool) -> Result<()> {
+    let cfg = Config::load(config_path)
+        .with_context(|| format!("reading {} (run `cs init` first?)", config_path.display()))?;
+    let db = db_path.unwrap_or_else(|| cfg.default_db());
+    let watched = inventory::watched(&cfg, &cs_archive::drift::detect(&cfg.sources));
+    // Typeahead, because a rail is a typeahead affordance — and it makes no difference to
+    // anything below anyway. The two readings differ only in whether the final term expands,
+    // which reaches `match_expr` and nothing the projection touches.
+    let query = cs_core::Query::typeahead(text);
+    let rail = cs_core::facets::sources(&query, &inventory::census(&db, &watched));
+
+    if json {
+        println!(
+            "{:#}",
+            serde_json::json!({
+                "v": 1,
+                // The query as parsed, so a client can tell which of several replies it holds
+                // — the same field, for the same reason, as the search envelope's.
+                "query": query.raw(),
+                "index_state": cs_core::IndexState::of(&db).as_str(),
+                "sources": rail,
+            })
+        );
+    } else {
+        println!("  {:<6} {:<14} {:>7}  {:<12} {}", "", "source", "convs", "coverage", "click");
+        let all = if rail.all.selected { "[all]" } else { " all " };
+        println!("  {all:<6} {:<14} {:>7}  {:<12} {:?}", "", "", "", rail.all.query);
+        for c in &rail.values {
+            let mark = match c.state {
+                cs_core::ChipState::Include => "[on]",
+                cs_core::ChipState::Exclude => "[not]",
+                cs_core::ChipState::Off => "",
+            };
+            println!(
+                "  {mark:<6} {:<14} {:>7}  {:<12} {:?}",
+                c.value, c.conversations, c.coverage, c.query
             );
-            if !named {
-                eprintln!("{e} — the counts below read 0");
-            }
         }
     }
-    cs_core::inventory::join(watched, &[])
+    Ok(())
 }
+

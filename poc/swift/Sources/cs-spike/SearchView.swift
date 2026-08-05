@@ -1,4 +1,5 @@
 import AppKit
+import CsKit
 import Observation
 import SwiftUI
 
@@ -147,7 +148,10 @@ struct SearchView: View {
     @ViewBuilder
     private var content: some View {
         switch model.health {
-        case .ready:
+        // The three answered states, which this instrument does not tell apart: `rebuilding` and
+        // `unrecognised` are what the *app* draws differently (`chat-search-me9.8.1`), and a bench
+        // that stopped showing rows on either would stop measuring the thing it is for.
+        case .ready, .rebuilding, .unrecognised:
             if model.conversations.isEmpty {
                 // Not an error state and not styled like one. An empty result is the most common
                 // thing a search says.
@@ -161,7 +165,7 @@ struct SearchView: View {
             placeholder(
                 "no index yet", "run `cs index` — this is a first-run state, not a failure\n\(detail)",
                 icon: "tray", tone: .secondary)
-        case .rebuilding(let detail):
+        case .building(let detail):
             placeholder(
                 "index is being built", "results arrive on their own when it finishes\n\(detail)",
                 icon: "arrow.triangle.2.circlepath", tone: .secondary)

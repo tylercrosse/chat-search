@@ -1,4 +1,5 @@
 import AppKit
+import CsKit
 import Foundation
 import QuartzCore
 import SwiftUI
@@ -372,8 +373,10 @@ enum Bench {
     static func describe(_ h: IndexHealth) -> String {
         switch h {
         case .ready: "ready"
+        case .rebuilding: "ready, one build behind"
+        case .unrecognised(let s): "answered, index state \"\(s)\" unknown to this client"
         case .noIndex(let d): "NO INDEX — \(d)"
-        case .rebuilding(let d): "BUILDING — \(d)"
+        case .building(let d): "BUILDING — \(d)"
         case .stale(let d): "UNREADABLE — \(d)"
         case .noBinary(let d): "NO BINARY — \(d)"
         case .failed(let d): "UNCLASSIFIED — \(d)"

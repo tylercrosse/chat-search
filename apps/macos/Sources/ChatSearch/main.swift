@@ -30,6 +30,10 @@ struct Options {
     var shot = false
     var shotQuery = "borrow checker"
     var shotPath = "/tmp/chat-search.png"
+    /// Open the longest conversation the query returned rather than the best one. The minimap's
+    /// hard case is length — `chat-search-me9.8.18` — and no query puts the corpus's longest
+    /// conversation first, so without this it cannot be reached from a script at all.
+    var longest = false
     /// The window's opening size. A verification affordance in the same family as the three
     /// above: the row's column plan has to hold at several widths (`chat-search-me9.8.2`), and a
     /// window that always opens at one size makes checking that a manual drag nobody repeats.
@@ -57,6 +61,7 @@ func parse(_ argv: [String]) -> Options {
         case "--shot": o.shot = true
         case "--query": if let v = next() { o.shotQuery = v }
         case "--out": if let v = next() { o.shotPath = v }
+        case "--longest": o.longest = true
         case "--help", "-h":
             print("""
                 chat-search [--db PATH] [--config PATH] [--bin PATH] [--limit N]
@@ -67,6 +72,7 @@ func parse(_ argv: [String]) -> Options {
                   --shot               search, open the first result, write the window to --out
                   --query TEXT         what --shot searches for (default "borrow checker")
                   --out PATH           where --shot writes its PNG (default /tmp/chat-search.png)
+                  --longest            --shot opens the longest conversation, not the best
                   --size WxH           open the window at this size (default 900x620)
                 """)
             exit(0)
@@ -131,9 +137,17 @@ final class AppHost: NSObject, NSApplicationDelegate {
         if !scripted { NSApp.activate(ignoringOtherApps: true) }
 
         if options.shot {
+            // A display link under `--shot` as well as under `--measure`: the drawer is driven
+            // through a scroll here, and whether that stutters is a number rather than a picture.
+            // `model.frames` is deliberately left alone — that one stamps keystrokes, which this
+            // run does not make.
+            let frames = FrameClock()
+            frames.attach(to: hosting)
+            self.frames = frames
             Task { @MainActor in
                 await Measure.shot(
-                    model: model, window: window, query: options.shotQuery, to: options.shotPath)
+                    model: model, window: window, query: options.shotQuery, to: options.shotPath,
+                    longest: options.longest, frames: frames)
                 NSApp.terminate(nil)
             }
             return

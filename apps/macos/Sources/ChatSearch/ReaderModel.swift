@@ -113,7 +113,17 @@ final class ReaderModel {
     // MARK: - The scroll relationship
 
     /// A row appeared or went away. Called from the transcript's rows and from nowhere else.
+    ///
+    /// Written straight through, which was not the first version. `onAppear` fires from inside
+    /// `NSTableView`'s row preparation and a fling changes twenty rows a frame, so this buffered
+    /// into an unobserved set and published once per turn of the run loop — and that turned out to
+    /// be a hand-rolled copy of what SwiftUI already does, since an observable write marks a view
+    /// dirty and the body runs at the next frame either way. Measured against each other on the
+    /// corpus's longest conversation, neither the frame tail nor the count of AppKit's reentrancy
+    /// warning could tell the two apart. The simpler one ships; `apps/macos/README.md` has both
+    /// sets of numbers.
     func rowAppeared(_ id: String) { onScreen.insert(id) }
+
     func rowDisappeared(_ id: String) { onScreen.remove(id) }
 
     /// A drag on the minimap, as a fraction of its height.

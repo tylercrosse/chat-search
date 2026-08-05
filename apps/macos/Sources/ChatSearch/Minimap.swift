@@ -108,6 +108,10 @@ struct MinimapLayout: Sendable {
         return blocks[drawnPositions[moved]].id
     }
 
+    /// Where a message sits in the conversation. The transcript's own rows are the only thing
+    /// that ever needs this; `--shot` reads it to say which stretch is on screen.
+    func position(of id: String) -> Int? { positionOfId[id] }
+
     /// The topmost of these messages, which is where the reader is.
     func firstOnScreen(of ids: Set<String>) -> String? {
         ids.compactMap { positionOfId[$0] }.min().map { blocks[$0].id }
@@ -154,22 +158,6 @@ struct Minimap: View {
     let reader: ReaderModel
     @Environment(\.theme) private var theme
 
-    /// `.mm-band`: 8px in from the left, 18px wide for a user turn and 28px for everything else.
-    /// **Band width encodes role** — cheap, and the one channel in this column that survives
-    /// greyscale, since the four hues are a luminance ramp and greyscale is exactly where a ramp
-    /// stops being four things.
-    private static let inset: CGFloat = 8
-    private static let userWidth: CGFloat = 18
-    private static let bandWidth: CGFloat = 28
-    /// A floor rather than a true height. At 2,431 messages in a 500pt column the average message
-    /// is a fifth of a point, and a band rounded to nothing is a message you cannot aim at.
-    private static let minimumBand: CGFloat = 1.5
-    /// `.mm-band`'s `height: hh - 0.12%`, in points. Only ever visible on a short conversation,
-    /// where the bands are tall enough to need telling apart.
-    private static let bandGap: CGFloat = 0.5
-    private static let tickWidth: CGFloat = 8
-    private static let tickHeight: CGFloat = 2.5
-    private static let tickInset: CGFloat = 3
     /// `Math.max(14, frac * h)` — a viewport box thinner than this is not a box, it is a line.
     private static let minimumViewport: CGFloat = 14
 
@@ -177,7 +165,7 @@ struct Minimap: View {
         GeometryReader { geometry in
             let height = geometry.size.height
             ZStack(alignment: .topLeading) {
-                bands
+                MinimapBands(layout: layout)
                 viewport(in: height)
             }
             .contentShape(Rectangle())
@@ -214,14 +202,71 @@ struct Minimap: View {
         }
     }
 
-    /// Every message, and a tick for every match.
-    ///
-    /// A `Canvas` and not a stack of views: this is 2,431 rectangles on the corpus's longest
-    /// conversation, and 2,431 `View`s with identity is the shape `chat-search-me9.22` measured at
-    /// 566 MB. Nothing here is hit-tested individually — the gesture above owns the whole column —
-    /// so there is nothing a view would have bought.
-    private var bands: some View {
+    /// Where the transcript is, as `List` is able to say it: the stretch of the conversation whose
+    /// rows are on screen. See `ReaderModel.onScreen` for what that is and is not.
+    @ViewBuilder
+    private func viewport(in height: CGFloat) -> some View {
+        if let span = layout.span(ofIds: reader.onScreen) {
+            let box = max(Self.minimumViewport, (span.upperBound - span.lowerBound) * height)
+            RoundedRectangle(cornerRadius: 2)
+                .fill(theme.color(.sel).opacity(0.12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 2)
+                        .strokeBorder(theme.color(.sel), lineWidth: 1))
+                .frame(height: box)
+                .offset(y: min(span.lowerBound * height, max(0, height - box)))
+                // The box reports; it does not take the click that was aimed past it.
+                .allowsHitTesting(false)
+        }
+    }
+}
+
+/// Every message as a band, and a tick for every match.
+///
+/// A view of its own and not a property of `Minimap`, which is a real optimisation and not a
+/// tidying: the viewport box changes on every frame of a scroll and this does not, so keeping the
+/// two apart is what stops 2,431 rectangles being redrawn sixty times a second. SwiftUI compares
+/// the stored `layout` to decide, and the arrays inside it are the same buffers until a new
+/// transcript lands — which is exactly when the bands *should* be drawn again, because that is
+/// when the marks moved.
+///
+/// A `Canvas` and not a stack of views: 2,431 `View`s with identity is the shape
+/// `chat-search-me9.22` measured at 566 MB. Nothing here is hit-tested individually — the gesture
+/// on the column owns every point of it — so there is nothing a view would have bought.
+///
+/// Not `private`, for one reason: `--shot` reads `renders` below, and a claim about how often
+/// something is drawn that nothing can check is a claim that stops being true quietly.
+struct MinimapBands: View {
+    let layout: MinimapLayout
+    @Environment(\.theme) private var theme
+
+    /// `.mm-band`: 8px in from the left, 18px wide for a user turn and 28px for everything else.
+    /// **Band width encodes role** — cheap, and the one channel in this column that survives
+    /// greyscale, since the four hues are a luminance ramp and greyscale is exactly where a ramp
+    /// stops being four things.
+    private static let inset: CGFloat = 8
+    private static let userWidth: CGFloat = 18
+    private static let bandWidth: CGFloat = 28
+    /// A floor rather than a true height. At 2,431 messages in a 500pt column the average message
+    /// is a fifth of a point, and a band rounded to nothing is a message you cannot aim at.
+    private static let minimumBand: CGFloat = 1.5
+    /// `.mm-band`'s `height: hh - 0.12%`, in points. Only ever visible on a short conversation,
+    /// where the bands are tall enough to need telling apart.
+    private static let bandGap: CGFloat = 0.5
+    private static let tickWidth: CGFloat = 8
+    private static let tickHeight: CGFloat = 2.5
+    private static let tickInset: CGFloat = 3
+
+    /// How many times these bands have actually been drawn, which `--shot` prints after driving a
+    /// fling. It is the only way to check the claim above: the split is worth having exactly as
+    /// long as this stays at 2 over a scroll that changes the box sixty times, and the day some
+    /// innocent-looking capture puts `reader` back inside this view it will read in the hundreds
+    /// instead.
+    @MainActor static var renders = 0
+
+    var body: some View {
         Canvas { context, size in
+            MinimapBands.renders += 1
             for pass in Pass.allCases {
                 for (index, block) in layout.blocks.enumerated() where Pass(block) == pass {
                     let top = layout.top(index) * size.height
@@ -250,31 +295,13 @@ struct Minimap: View {
         }
     }
 
-    /// Where the transcript is, as `List` is able to say it: the stretch of the conversation whose
-    /// rows are on screen. See `ReaderModel.onScreen` for what that is and is not.
-    @ViewBuilder
-    private func viewport(in height: CGFloat) -> some View {
-        if let span = layout.span(ofIds: reader.onScreen) {
-            let box = max(Self.minimumViewport, (span.upperBound - span.lowerBound) * height)
-            RoundedRectangle(cornerRadius: 2)
-                .fill(theme.color(.sel).opacity(0.12))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 2)
-                        .strokeBorder(theme.color(.sel), lineWidth: 1))
-                .frame(height: box)
-                .offset(y: min(span.lowerBound * height, max(0, height - box)))
-                // The box reports; it does not take the click that was aimed past it.
-                .allowsHitTesting(false)
-        }
-    }
-
     private func colour(of block: Block) -> Color {
         let base = theme.color(Display.bandToken(block))
         // `.mm-band.off` and `.mm-band.dim`. Dim rather than drop, and the two are different
         // numbers because they are different statements: `off` is a branch the conversation did
         // not take, `dim` is a message this reader is not being shown. Only the second happens
         // today — `cs show` returns the head path — and the first is written because the field is
-        // on the wire and the toggle that uses it is a thing §8 describes.
+        // on the wire and the toggle that uses it is a thing docs/TUI-DESIGN.md §8 describes.
         if !block.onPath { return base.opacity(0.3) }
         return block.drawn ? base : base.opacity(0.22)
     }

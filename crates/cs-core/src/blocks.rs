@@ -331,6 +331,24 @@ pub fn recognition_line(block: &Block) -> (usize, String) {
 /// 6.6% an `apply_patch` body, and 13.3% something neither. The keys below are the string-valued
 /// arguments that actually appear, in the order a reader would recognise the call by.
 pub fn tool_summary(text: &str) -> String {
+    let summary = summarise_call(text);
+    // One row, whatever the argument turned out to be. Enforced here rather than by each branch
+    // below, because a branch that forgot is exactly how this went wrong: the argv shape — the
+    // common one, and the one whose scripts carry heredocs and `&&` chains — kept its newlines
+    // while the two shapes either side of it stripped theirs, and 469 of this corpus's calls
+    // collapsed to something that was not a line.
+    //
+    // Split with `lines` rather than replacing `'\n'`, so a CRLF script collapses the same way
+    // and this agrees with [`offset_lines`] about where a line ends.
+    if summary.contains('\n') {
+        return summary.lines().collect::<Vec<_>>().join(" ");
+    }
+    summary
+}
+
+/// [`tool_summary`] before the one-row guarantee, which is the only reason this is split out:
+/// the guarantee needs one place to live, and this has five `return`s.
+fn summarise_call(text: &str) -> String {
     let mut lines = text.lines();
     let name = lines.next().unwrap_or("tool").trim().to_string();
     let rest: String = lines.collect::<Vec<_>>().join("\n");
@@ -360,7 +378,7 @@ pub fn tool_summary(text: &str) -> String {
     // one piece of information a reader wanted stripped out.
     if let Some(cmd) = json.get("command").or_else(|| json.get("cmd")) {
         if let Some(line) = cmd.as_str() {
-            return format!("{name} {}", line.replace('\n', " "));
+            return format!("{name} {line}");
         }
         if let Some(argv) = cmd.as_array() {
             let parts: Vec<&str> = argv.iter().filter_map(|v| v.as_str()).collect();
@@ -381,7 +399,7 @@ pub fn tool_summary(text: &str) -> String {
                 "description", "plan"]
     {
         if let Some(v) = json.get(key).and_then(|v| v.as_str()) {
-            return format!("{name} {}", v.replace('\n', " "));
+            return format!("{name} {v}");
         }
     }
     name
@@ -765,6 +783,39 @@ mod tests {
     }
 
     #[test]
+    fn a_collapsed_call_is_one_row_whatever_shape_the_arguments_arrived_in() {
+        // The sentence the old tests nearly proved. "A multi-line script still occupies one row"
+        // was asserted for a `command` string and for nothing else, so the argv shape — the
+        // common one, and the one that actually carries heredocs — kept its newlines. 469 calls
+        // in this corpus, each of them turning one outline row into three and putting a client's
+        // row count out of step with the TUI's.
+        let bodies = [
+            // argv, the shape that was wrong.
+            "shell\n{\"command\":[\"bash\",\"-lc\",\"cd /x && cat <<'EOF'\\nhello\\nEOF\"]}",
+            // argv that does not match the shell-flag-script shape, so it joins the parts.
+            "shell\n{\"cmd\":[\"printf\",\"one\\ntwo\"]}",
+            // the string spelling, which was already right.
+            "Bash\n{\"command\":\"echo one\\necho two\"}",
+            // a prose argument, which can be as multi-line as a script.
+            "Task\n{\"description\":\"do this\\nthen that\"}",
+            // and a patch, whose body is nothing but newlines.
+            "apply_patch\n*** Begin Patch\n*** Update File: a/b.rs\n@@\n-x\n+y",
+        ];
+        for body in bodies {
+            let line = tool_summary(body);
+            assert!(!line.contains('\n'), "{body:?} collapsed to {line:?}");
+            // And the flattening joins rather than deletes, so two commands cannot read as one
+            // word: `one\ntwo` is `one two`, never `onetwo`.
+            assert!(!line.contains("  "), "{body:?} collapsed to {line:?}");
+        }
+        assert_eq!(
+            tool_summary(bodies[0]),
+            "shell cd /x && cat <<'EOF' hello EOF",
+            "the script is still all there, on one row"
+        );
+    }
+
+    #[test]
     fn a_call_with_an_identifying_path_uses_it() {
         assert_eq!(tool_summary("Read\n{\"file_path\":\"/x/schema.rs\"}"), "Read /x/schema.rs");
     }
@@ -926,9 +977,23 @@ mod tests {
     fn every_kind_collapses_to_something_a_client_can_draw() {
         // A kind with no collapsed form would be a blank row in outline mode — the one mode
         // where a message *is* its collapsed line, so an empty one loses the message entirely.
+        // And one row means one row: outline mode is a message per line, so a collapsed form
+        // carrying a newline puts a client's row count out of step with the TUI's.
+        let bodies = [
+            "shell\n{\"command\":[\"bash\",\"-lc\",\"cd /x\\nls\"]}",
+            "**Planning**\nthe long version\nwith more lines",
+            "a first line\nand a second",
+        ];
         for kind in crate::Kind::ALL {
-            let b = block(kind.as_str(), "assistant", "a", "shell\n{\"command\":\"ls\"}");
-            assert!(!b.collapsed().text.is_empty(), "{kind:?} collapsed to nothing");
+            for body in bodies {
+                for is_error in [false, true] {
+                    let mut b = block(kind.as_str(), "assistant", "a", body);
+                    b.is_error = is_error;
+                    let c = b.collapsed();
+                    assert!(!c.text.is_empty(), "{kind:?}/{is_error} collapsed to nothing");
+                    assert!(!c.text.contains('\n'), "{kind:?}/{is_error} collapsed to {:?}", c.text);
+                }
+            }
         }
     }
 

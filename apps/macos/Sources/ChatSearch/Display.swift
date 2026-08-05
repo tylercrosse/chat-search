@@ -100,6 +100,62 @@ enum Display {
         }
     }
 
+    /// One local day, formatted the way `poc/ui`'s `dayLabel` formats it: `Aug 5`, and
+    /// `Oct 25 ’25` once the year is not this one.
+    ///
+    /// **This reformats a day and never derives one.** `ended_date` arrives as a local
+    /// `YYYY-MM-DD` rendered once by the core, precisely so that three clients do not each get
+    /// their own chance to derive the day in UTC — the bug `AGENTS.md` names as the reason a rule
+    /// lives in exactly one place. Everything here is string work over that value: no `Date`, no
+    /// calendar, no timezone, so nothing about *which* day this is is decided in this process.
+    ///
+    /// A value that is not `YYYY-MM-DD` is shown exactly as it arrived. The alternative is a
+    /// client that invents a day for a shape it does not recognise, which is the same failure one
+    /// step further along.
+    static func day(_ endedDate: String?, now: Date = .now) -> String {
+        guard let endedDate else { return "—" }
+        let parts = endedDate.split(separator: "-")
+        guard parts.count == 3, let month = Int(parts[1]), (1...12).contains(month),
+            let dayOfMonth = Int(parts[2])
+        else { return endedDate }
+        // The year only when it is not this one. Eleven months of corpus means most spans sit
+        // inside one year, and printing it on every label is noise in a cell that is already
+        // narrow.
+        let suffix = parts[0] == String(Calendar.current.component(.year, from: now))
+            ? "" : " ’\(parts[0].suffix(2))"
+        return "\(months[month - 1]) \(dayOfMonth)\(suffix)"
+    }
+
+    private static let months = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+
+    /// The days a group of conversations spans, both ends being local days the core rendered. One
+    /// day when the two ends are the same day, which is the common case for a run.
+    static func span(from earliest: String?, to latest: String?) -> String {
+        guard let earliest, let latest else { return "—" }
+        let start = day(earliest)
+        let end = day(latest)
+        return start == end ? start : "\(start) – \(end)"
+    }
+
+    /// A duration, coarse: `38m`, `6h 12m`, `3d`. Nil below a minute, where there is nothing worth
+    /// saying — a group of one conversation spans no time at all.
+    ///
+    /// A duration and not a clock, which is what makes it computable here: the gap between two
+    /// instants has no timezone in it, where `09:14 – 23:40` would be a second local-time rule in
+    /// a second language (see `day` above).
+    static func elapsed(ms: Int) -> String? {
+        switch ms {
+        case ..<minuteMs: nil
+        case ..<hourMs: "\(ms / minuteMs)m"
+        case ..<dayMs:
+            (ms % hourMs) / minuteMs == 0
+                ? "\(ms / hourMs)h" : "\(ms / hourMs)h \((ms % hourMs) / minuteMs)m"
+        default: "\(ms / dayMs)d"
+        }
+    }
+
     /// The literal prefix `cs` puts on a snippet whose match it could not locate in the text.
     ///
     /// `docs/JSON-CONTRACT.md` calls it a label rather than content, so the row draws it as one:

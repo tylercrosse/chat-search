@@ -122,7 +122,7 @@ final class AppHost: NSObject, NSApplicationDelegate {
         // and the system default is a grey nobody in this app chose.
         window.backgroundColor = Theme.shipped.nsColor(.bg)
         window.center()
-        let hosting = NSHostingView(rootView: SearchView(model: model))
+        let hosting = NSHostingView(rootView: Shell(model: model))
         window.contentView = hosting
         window.orderFrontRegardless()
         // A scripted run does not steal focus — `.accessory` above — which also keeps the number

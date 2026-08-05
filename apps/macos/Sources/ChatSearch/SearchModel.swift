@@ -34,6 +34,17 @@ final class SearchModel {
     /// a later one fails — a rail that blinked out on a hiccup would look like a corpus that had
     /// lost its sources.
     private(set) var rail: FacetRail?
+    /// Which of the two views is on screen. Grouping is not one of these, which is the whole
+    /// point of `chat-search-4ar.10`: three of the prototype's four views were `GROUP BY` over one
+    /// set, and only `Library` is a different thing rather than a different cut.
+    var surface: Surface = .search
+    /// The axis the one list is cut along, and the groups that fall out of it.
+    ///
+    /// Held here rather than in the view because the keyboard reads it: grouping changes the order
+    /// rows are drawn in, and a cursor that moved through the ranked order while the screen showed
+    /// the grouped one would open the row above or below the one under it.
+    private(set) var grouping: Grouping = .none
+    private(set) var groups: [ConversationGroup] = []
     /// Which row Enter would open. An id rather than an index: the list is replaced wholesale on
     /// every keystroke, and a position means a different conversation each time it is.
     var selected: String?
@@ -136,14 +147,37 @@ final class SearchModel {
         conversations = []
         unappliedFilters = []
         selected = nil
+        regroup()
+    }
+
+    /// Cut the list a different way. The same rows, in a different arrangement — no second
+    /// request, because grouping is a property of the answer in hand and not of the question.
+    func group(by axis: Grouping) {
+        guard axis != grouping else { return }
+        grouping = axis
+        regroup()
+    }
+
+    /// The rows in the order they are drawn, which is the order the cursor moves in.
+    ///
+    /// Ungrouped that is the ranking. Grouped it is the same rows gathered — `project` and
+    /// `source` preserve the ranking, `run` re-orders by time because a run cannot be found any
+    /// other way — and either way this is what the screen shows, which is what an arrow key means.
+    var rows: [Conversation] {
+        grouping == .none ? conversations : groups.flatMap(\.items)
+    }
+
+    private func regroup() {
+        groups = grouping.groups(of: conversations)
     }
 
     /// Move the cursor. Wraps at neither end, so holding a key does not roll off the bottom and
     /// come back somewhere unexpected.
     func moveSelection(by delta: Int) {
-        guard !conversations.isEmpty else { return }
-        let here = conversations.firstIndex { $0.id == selected } ?? 0
-        selected = conversations[min(max(here + delta, 0), conversations.count - 1)].id
+        let rows = self.rows
+        guard !rows.isEmpty else { return }
+        let here = rows.firstIndex { $0.id == selected } ?? 0
+        selected = rows[min(max(here + delta, 0), rows.count - 1)].id
     }
 
     /// Open the selected conversation where it lives.
@@ -190,11 +224,14 @@ final class SearchModel {
         settled = result.response.settled
         unappliedFilters = result.response.unappliedFilters
         lastTiming = result.timing
+        // Before the cursor is placed: grouped, the first row on the screen is the first row of
+        // the first group, which is not `conversations.first` on the one axis that re-orders.
+        regroup()
         // A filter that narrows the list can take the cursor's row out of it, and a cursor
         // pointing at something the list no longer contains is a cursor that opens the wrong
         // conversation on Enter. Fall back to the best row, which is the one it started on.
         if selected == nil || !conversations.contains(where: { $0.id == selected }) {
-            selected = conversations.first?.id
+            selected = rows.first?.id
         }
         // The keystroke is not finished until a frame carries it. Hand the start time to the
         // display link, which is the only thing that knows when that was.

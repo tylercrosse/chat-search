@@ -534,9 +534,10 @@ pub fn explain(config_path: &Path, db_path: Option<PathBuf>, conv_id: &str, quer
 ///
 /// The whole point of `--json`: it is the only way a client that is not Rust can draw a
 /// conversation, and every rule it needs — head path, which messages are drawn, which matches
-/// may claim to have ranked it — is answered by `cs_core::blocks` rather than by the client.
-/// A missing conversation is a real failure and exits nonzero, because a client cannot tell an
-/// empty conversation from a wrong id if both print `[]`.
+/// may claim to have ranked it, and which records are one sitting — is answered by
+/// `cs_core::blocks` rather than by the client. A missing conversation is a real failure and
+/// exits nonzero, because a client cannot tell an empty conversation from a wrong id if both
+/// print `[]`.
 pub fn show(
     config_path: &Path,
     db_path: Option<PathBuf>,
@@ -549,11 +550,10 @@ pub fn show(
     let index = open_index(&db_path, json)?;
     let conn = &index.conn;
     let terms = cs_core::Query::exact(query).marking_terms();
-    let blocks = cs_core::blocks::load(conn, conv_id, &terms)?;
-    if blocks.is_empty() {
+    let t = cs_core::Transcript::read(conn, conv_id, &terms)?;
+    if t.count == 0 {
         anyhow::bail!("no conversation {conv_id:?} in {} (or none of it is on the head path)", db_path.display());
     }
-    let t = cs_core::Transcript::of(conv_id, &terms, blocks);
     if json {
         println!("{:#}", serde_json::to_value(&t)?);
         return Ok(());
@@ -561,6 +561,16 @@ pub fn show(
     // Deliberately thin. The readable form is a table of contents, not a second renderer —
     // `cs-tui` already owns the one that wraps, folds and marks, and a second one here would
     // be the duplication `blocks` exists to prevent.
+    if let Some(sitting) = &t.sitting {
+        // Said before the counts, because they are the whole sitting's and a reader who typed
+        // one id deserves to know why the number is not the one on the record they named.
+        println!(
+            "{} records read as one sitting — nothing recorded the boundary; {} minutes of \
+             silence ends one",
+            sitting.members.len(),
+            sitting.gap_ms / 60_000
+        );
+    }
     println!("{} — {} messages, {} drawn, {} thread(s)", t.conv_id, t.count, t.drawn, t.threads);
     for m in &t.messages {
         if !m.drawn {

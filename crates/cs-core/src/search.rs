@@ -2205,6 +2205,59 @@ mod sitting_tests {
     }
 
     #[test]
+    fn opening_a_row_renders_the_sitting_the_row_counted() {
+        // chat-search-o1i.8: the search layer said six messages and three turns while the
+        // reader opened the same id and drew two, because `blocks::load` took the argument as a
+        // conversation and the row had stopped being one. The two numbers are asserted against
+        // each other rather than against a literal — the requirement is that the halves agree,
+        // and either of them alone can be right about a corpus the other never sees.
+        let conn = corpus();
+        let groups = grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        let folded = groups.iter().find(|g| g.conv_id == "g:1").unwrap();
+
+        let t = crate::Transcript::read(&conn, "g:1", &[]).unwrap();
+        assert_eq!(t.count as i64, folded.msg_count);
+        assert_eq!(t.conv_id, folded.conv_id);
+        assert_eq!(t.sitting.as_ref().unwrap().members, folded.sitting.as_ref().unwrap().members);
+
+        // In the sitting's order, records end to end, each record internally in reading order.
+        let ids: Vec<&str> = t.messages.iter().map(|m| m.block.msg_id.as_str()).collect();
+        assert_eq!(ids, ["g:1:m0", "g:1:m1", "g:2:m0", "g:2:m1", "g:3:m0", "g:3:m1"]);
+
+        // And numbered across the sitting, in the coordinate space the row's `match_seqs`
+        // already used. Per-record numbering would repeat 0 and 1 three times, and a client
+        // lining the two up would mark the opening turn three times over.
+        let seqs: Vec<i64> = t.messages.iter().map(|m| m.block.seq).collect();
+        assert_eq!(seqs, [0, 1, 2, 3, 4, 5]);
+        assert!(folded.match_seqs.iter().all(|s| seqs.contains(s)));
+    }
+
+    #[test]
+    fn any_member_of_a_sitting_opens_all_of_it_under_the_openers_name() {
+        // A client copying an id out of `Sitting.members` has no reason to prefer the first,
+        // and every one of them is a real permanent id the contract invites it to open. So the
+        // middle record opens the same transcript the row does — named for the opener, because
+        // a sitting has no id of its own (ADR 16) and naming it `g:2` would claim the reader is
+        // looking at one record.
+        let conn = corpus();
+        let opened = crate::Transcript::read(&conn, "g:1", &[]).unwrap();
+        for id in ["g:2", "g:3"] {
+            let t = crate::Transcript::read(&conn, id, &[]).unwrap();
+            assert_eq!(t.conv_id, "g:1", "{id} names the opener");
+            assert_eq!(t.count, opened.count, "{id} opens the whole sitting");
+        }
+
+        // The records outside it are untouched: an hour of silence and a different product are
+        // their own conversations, and each opens as itself with nothing to report.
+        for id in ["g:4", "a:1"] {
+            let t = crate::Transcript::read(&conn, id, &[]).unwrap();
+            assert_eq!(t.conv_id, id);
+            assert_eq!(t.count, 2);
+            assert!(t.sitting.is_none(), "{id} is one conversation and says so");
+        }
+    }
+
+    #[test]
     fn a_corpus_with_no_activity_log_in_it_is_unchanged_by_any_of_this() {
         // The fold has to be invisible to the 70% of this corpus that arrives as transcripts.
         // Both tables are empty for them, so every join finds nothing and every row is its

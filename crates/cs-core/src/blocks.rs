@@ -240,6 +240,13 @@ impl Block {
 
 /// Read one conversation's messages, with `terms` located in each.
 ///
+/// **The whole sitting when the id is part of one** (chat-search-o1i.8). Google Takeout shredded
+/// a chat into one record per turn, and a reader should not have to know which upstream tool
+/// happened to serialize a conversation in one piece — so the records come back concatenated,
+/// as the one transcript every other source already hands over. The seam is not erased: it is
+/// still `Sitting.members` on whatever answer carries this, and every block still names the
+/// record it came from in `msg_id`. What it is not is structural.
+///
 /// Head path only. A message edited away is still searchable and still indexed, but returning it
 /// inline without saying so would present an abandoned branch as the conversation — see the
 /// off-path toggle in §8, which is not built yet.
@@ -248,29 +255,11 @@ impl Block {
 /// caller marks exactly what the ranker matched, trailing prefix star included. An empty slice
 /// marks nothing, which is the honest state for a query that was never run.
 pub fn load(conn: &Connection, conv_id: &str, terms: &[String]) -> rusqlite::Result<Vec<Block>> {
-    // [`READING_ORDER`] carries why this is not `ORDER BY seq`, and is shared rather than
-    // repeated because the shape on a search row has to come out in the same order as this.
-    let mut stmt = conn.prepare_cached(&format!(
-        "SELECT id, role, kind, seq, on_head_path, text, is_sidechain, thread_key, is_error
-         FROM message WHERE conv_id = ?1 AND on_head_path = 1
-         {READING_ORDER}"
-    ))?;
-    let mut blocks = stmt
-        .query_map(rusqlite::params![conv_id], |r| {
-            Ok(Block {
-                msg_id: r.get(0)?,
-                role: r.get(1)?,
-                kind: r.get(2)?,
-                seq: r.get(3)?,
-                on_path: r.get::<_, i64>(4)? != 0,
-                text: r.get(5)?,
-                is_sidechain: r.get::<_, i64>(6)? != 0,
-                thread_key: r.get(7)?,
-                is_error: r.get::<_, i64>(8)? != 0,
-                marks: Vec::new(),
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    crate::sittings::ensure(conn)?;
+    let mut blocks = Vec::new();
+    for record in crate::sittings::resolve(conn, conv_id)? {
+        blocks.append(&mut read_record(conn, &record)?);
+    }
 
     // Only what is drawn: a successful `tool_result` is never rendered, so locating its matches
     // would buy nothing, and this corpus is a third such messages by count.
@@ -304,6 +293,49 @@ pub fn load(conn: &Connection, conv_id: &str, terms: &[String]) -> rusqlite::Res
     Ok(blocks)
 }
 
+/// One record's messages, unmarked, in [`READING_ORDER`].
+///
+/// Per record and concatenated by the caller rather than widened into one `IN (...)` query, for
+/// the reason [`crate::search`]'s `fill_shape` does the same with bands: the order messages are
+/// read in lives in `READING_ORDER`, and an `ORDER BY` that had to interleave the fold as well
+/// would be that rule written down twice. The concatenation order is the sitting's, which is
+/// what [`crate::sittings::resolve`] already returns.
+///
+/// `seq` is [`crate::sittings::POSITION`] — the message's place in the *row*, counting from the
+/// start of the sitting. Without it the second record's turns would land on 0 and 1 again, and a
+/// client lining `Group.match_seqs` up against this transcript would mark the wrong messages.
+/// The `LEFT JOIN` finds nothing for an ordinary conversation, so that expression is `seq + 0`
+/// and nothing outside the Takeout records moves.
+fn read_record(conn: &Connection, conv_id: &str) -> rusqlite::Result<Vec<Block>> {
+    let mut stmt = conn.prepare_cached(&format!(
+        "SELECT m.id, m.role, m.kind, {position}, m.on_head_path, m.text, m.is_sidechain,
+                m.thread_key, m.is_error
+         FROM message m
+         {join}
+         WHERE m.conv_id = ?1 AND m.on_head_path = 1
+         {READING_ORDER}",
+        position = crate::sittings::POSITION,
+        join = crate::sittings::OF_MESSAGE,
+    ))?;
+    let blocks = stmt
+        .query_map(rusqlite::params![conv_id], |r| {
+            Ok(Block {
+                msg_id: r.get(0)?,
+                role: r.get(1)?,
+                kind: r.get(2)?,
+                seq: r.get(3)?,
+                on_path: r.get::<_, i64>(4)? != 0,
+                text: r.get(5)?,
+                is_sidechain: r.get::<_, i64>(6)? != 0,
+                thread_key: r.get(7)?,
+                is_error: r.get::<_, i64>(8)? != 0,
+                marks: Vec::new(),
+            })
+        })?
+        .collect();
+    blocks
+}
+
 /// Distinct strands in this conversation.
 pub fn thread_count(blocks: &[Block]) -> usize {
     let mut keys: Vec<&str> = blocks.iter().map(|b| b.thread_key.as_str()).collect();
@@ -323,10 +355,24 @@ pub struct Transcript {
     /// cannot detect any other way — a rename breaks loudly and a new field is ignored, but a
     /// field that quietly starts meaning something else breaks silently.
     pub v: u32,
+    /// The conversation this is a transcript of — the record that *opened* it when `sitting` is
+    /// set, which is the same id `cs search` puts on the row.
+    ///
+    /// So it is not always the id that was asked for: `cs show` on any member of a sitting
+    /// answers for the whole sitting, and echoing the argument back would name one record of
+    /// the transcript as though it were all of it. A sitting acquires no id of its own (ADR 16)
+    /// and the opener's is real and permanent.
     pub conv_id: String,
     /// What the blocks were marked against, after the query grammar had its say. Emitted so a
     /// client can show *why* something is highlighted without re-parsing the query.
     pub terms: Vec<String>,
+    /// Set when these messages are several activity-log records read back as one chat.
+    ///
+    /// The seam kept as data rather than drawn: those records were separate HTTP requests with
+    /// no shared context on Google's side, so the boundary is real information, and a client
+    /// that wants to say "31 records, 30-minute gap" has it. A reader who does not care sees
+    /// one continuous conversation, which is the point of the fold.
+    pub sitting: Option<crate::sittings::Sitting>,
     /// Distinct strands (ADR 4). More than one means this conversation is a DAG and the
     /// messages arrive main-thread-first, each strand contiguous.
     pub threads: usize,
@@ -354,11 +400,36 @@ pub struct WireBlock {
 }
 
 impl Transcript {
-    pub fn of(conv_id: &str, terms: &[String], blocks: Vec<Block>) -> Self {
+    /// Everything `cs show --json` says about an id, read as one conversation.
+    ///
+    /// The entry point a client goes through, so that resolving the id, loading the messages and
+    /// naming what came back are one decision rather than three a caller has to sequence
+    /// correctly. `cs show` used to make the last of them itself, which is how the id it echoed
+    /// stayed right while the transcript under it was one record of thirty-one.
+    ///
+    /// Empty when there is no such conversation. Telling that from a conversation with nothing
+    /// on its head path is the caller's job — both are `count: 0` here, and only the caller
+    /// knows whether that deserves a nonzero exit.
+    pub fn read(conn: &Connection, conv_id: &str, terms: &[String]) -> rusqlite::Result<Self> {
+        let blocks = load(conn, conv_id, terms)?;
+        let sitting = crate::sittings::Sitting::of(conn, conv_id)?;
+        Ok(Transcript::of(conv_id, terms, blocks, sitting))
+    }
+
+    pub fn of(
+        conv_id: &str,
+        terms: &[String],
+        blocks: Vec<Block>,
+        sitting: Option<crate::sittings::Sitting>,
+    ) -> Self {
+        // Named by the opener rather than by whatever was asked for — see `conv_id`. `members`
+        // is never empty for a `Some`, because `Sitting::of` only builds one from two or more.
+        let conv_id = sitting.as_ref().map_or(conv_id, |s| s.members[0].as_str());
         Transcript {
             v: 1,
             conv_id: conv_id.to_string(),
             terms: terms.to_vec(),
+            sitting,
             threads: thread_count(&blocks),
             count: blocks.len(),
             drawn: blocks.iter().filter(|b| b.drawn()).count(),
@@ -545,6 +616,7 @@ mod tests {
             "claude-code:abc",
             &["borrow".to_string()],
             vec![block("prose", "user", "a", "the borrow checker"), ok, block("reasoning", "assistant", "b", "hm")],
+            None,
         );
         assert_eq!((t.count, t.drawn, t.threads, t.v), (3, 2, 1, 1));
         assert_eq!(t.mark_offsets, "utf8-bytes");

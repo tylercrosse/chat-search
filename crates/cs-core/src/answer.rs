@@ -889,8 +889,10 @@ mod tests {
         // And it is named on the wire, in the spelling `cs show --json` already uses, because
         // the two contracts move together or not at all (chat-search-me9.33).
         assert_eq!(a.mark_offsets, "utf8-bytes");
-        let transcript = serde_json::to_value(crate::Transcript::of("codex:c0", &[], Vec::new()))
-            .unwrap();
+        let transcript = serde_json::to_value(
+            crate::Transcript::read(&r.conn, "codex:c0", &[]).unwrap(),
+        )
+        .unwrap();
         assert_eq!(json(&a)["mark_offsets"], transcript["mark_offsets"]);
     }
 

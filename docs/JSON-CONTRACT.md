@@ -103,6 +103,7 @@ Identity is stated once, here, and never repeated inside `matches`.
 | `match_seqs` | array of integer | never; may be empty | Where the matches sit, as 0-based message positions, ascending. **Positions into `msg_count`**, which is *not* the coordinate space `kind_runs` uses — `chat-search-me9.25` is that gap. Empty when nothing matched. |
 | `kind_runs` | array of [`Run`](#run) | never; **may be empty** | What the conversation is made of, in reading order, run-length encoded. |
 | `deleted_upstream` | boolean | never | The conversation is gone from its source and kept here (ADR 9). |
+| `sitting` | [`Sitting`](#sitting) | **nullable** | Set only when this row stands for several conversations that were one chat. Null for every row that is one conversation, which is the whole corpus bar the Google Takeout records. |
 | `matches` | array of [`Match`](#match--one-matching-message) | never; may be empty | The best matching messages, up to `--nested` (default 3), best first. Truncate this rather than sampling it: the first entry is the message that won the ranking. Empty for an empty query, which returns conversations without matching anything. |
 
 ## `Match` — one matching message
@@ -214,6 +215,31 @@ branches on has to travel with the offsets it describes.
 Spans index the *returned string*, ellipsis and any `⟨no match⟩ ` prefix included. Nothing
 downstream can re-derive them: the window has been cut out of the message and its whitespace
 flattened, and the term that matched need not appear in the query (`commits` marks `Commit`).
+
+## `Sitting`
+
+```json
+{ "members": ["google-takeout:2026-07-28T16:27:48.790Z", "google-takeout:2026-07-28T16:31:02.104Z"], "gap_ms": 1800000 }
+```
+
+Present on a `Group` whose row stands for more than one conversation. Google Takeout exports an
+activity log with no conversation key at any nesting level, so a twenty-turn Gemini chat arrives
+as twenty conversations; `cs_core::sittings` reads the silences between them and puts them back
+together at read time (`chat-search-o1i.5`).
+
+| key | type | null? | |
+| --- | --- | --- | --- |
+| `members` | array of string | never | Every `conv_id` folded into this row, earliest first. The first is the row's own `conv_id`, and each is a real permanent id. |
+| `gap_ms` | integer | never | The silence that delimited the sitting. Carried so a client can say what produced the fold rather than implying the export drew the boundary. |
+
+**This is a reconstruction, and a client should say so.** The boundary is a heuristic over
+timestamps, not a fact the export recorded, which is why it is reported here instead of being
+folded silently into the row. It has no id and never gets one: an id derived from a gap
+threshold would change the day the threshold did, and conversation ids are permanent (ADR 16).
+
+`cs show <conv_id>` opens the *opening record*, not the sitting — the row says 22 messages and
+the reader says 2. That disagreement is `chat-search-o1i.8`, and until it closes a client that
+draws a sitting should expect the two halves to differ.
 
 ## `Run`
 

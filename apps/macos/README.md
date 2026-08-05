@@ -118,9 +118,41 @@ line resolves against the `PATH` the user has rather than the one a GUI process 
 
 **Every path records the pick**, including the two that open nothing. A conversation that was
 wanted and could not be reached is as much of a relevance judgement as one that was, and picks are
-the only judgements the query log has (docs/TUI-DESIGN.md §6). What it does *not* yet record is
-the other half — quitting with a query and no pick, the abandonment signal — which is
-`chat-search-pdw`.
+the only judgements the query log has (docs/TUI-DESIGN.md §6).
+
+### And the other half: quitting without opening anything
+
+Close the window with something in the search box and nothing opened, and the log gets one
+`Search`. That is the abandonment signal — *the ranking showed me nothing worth opening* — and it
+is the only thing `queries.jsonl` ever learns that is not a success. Without it a ranking is
+measured against the answers it did produce, which cannot find it wanting.
+
+| moment | event |
+| --- | --- |
+| a keystroke | **nothing** |
+| Enter, a double-click, a context menu | one `Pick`, through `cs pick` |
+| quit with a non-blank query and no pick | one `Search`, through `cs abandon` |
+
+`cs abandon` is a verb this bead added, because there was nothing to call. `cs search` records a
+`Search` on the non-`--prefix` path only — one line per keystroke would bury the handful of real
+queries under every prefix of each — and that is every path this app takes. It re-ranks the
+finished query on the far side rather than writing down what was on screen, for the reason
+`cs pick` recomputes a rank: the list here is a typeahead list of whatever was half-typed at the
+time, and a `Search` and the `Pick` it might have been are only comparable if both describe the
+same ask. It also decides what counts as a query with a need behind it, so nothing here re-derives
+that: whitespace, `??` and a bare filter record nothing.
+
+A pick answers the query it was made under and nothing after it. Type on and the box holds an
+unanswered query again, which is the ordinary way this gets used — you found one conversation and
+went looking for the next — so quitting there records that second search as abandoned.
+
+**The scripted runs are excluded at the time rather than afterwards.** `--measure` and `--shot`
+quit with their last phrase still in the box and nothing opened, which is precisely the shape of a
+person giving up, so each would otherwise append a need nobody had to a file that cannot be
+rebuilt from anything. Both run every `cs` with `CS_LOG_QUERIES=0` and say so in their output.
+That is ADR 22's convenience, set by the flag that made the run scripted rather than by somebody
+remembering to export it — and it is why nothing downstream has to tell a benchmark from a need,
+which ADR 22 is clear nothing can.
 
 ## The theme seam
 
@@ -386,10 +418,12 @@ number was taken again on what actually ships:
 swift run -c release chat-search --measure --config /tmp/scratch-config.toml
 ```
 
-**Give it a scratch `--config`.** Every named query it types appends to the archive's
-`queries.jsonl`, which is authored data and cannot be reconstructed; `archive_root` pointed at a
-temp directory plus `log_queries = false` is enough. Leave `--db` on the real index, which is what
-makes the number worth taking. It runs as an accessory app and does not steal focus, which is also
+**Give it a scratch `--config`.** Belt and braces rather than the mechanism: a scripted run
+already switches query logging off for every `cs` it spawns and prints a line saying so, but
+`archive_root` is where a stray write would land and `queries.jsonl` is authored data that cannot
+be reconstructed. A temp `archive_root` plus `log_queries = false` is enough. Leave `--db` on the
+real index, which is what makes the number worth taking. It runs as an accessory app and does not
+steal focus, which is also
 how §1 was measured — a latency taken in a frontmost app and one taken in a background app are not
 the same measurement.
 

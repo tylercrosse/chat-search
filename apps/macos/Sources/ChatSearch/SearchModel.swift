@@ -40,6 +40,13 @@ final class SearchModel {
     /// What the last open attempt said, or nil if it opened. Cleared by the next keystroke,
     /// because a message about a conversation is stale the moment the list is not that list.
     private(set) var openFailure: String?
+    /// Whether the query now in the box has been answered by opening something.
+    ///
+    /// A statement about *this* query rather than about the session, which is why the next
+    /// keystroke clears it: finding one conversation and then going looking for a second is the
+    /// ordinary way this gets used, and the second search going unanswered is precisely what
+    /// docs/TUI-DESIGN.md §6 wants written down.
+    private(set) var answered = false
 
     let client: CsClient
     /// The drawer beside the list. Held here rather than in the view because the query and what
@@ -72,6 +79,9 @@ final class SearchModel {
         // showing highlights for a question nobody is asking any more.
         reader.queryChanged(text)
         openFailure = nil
+        // `askAgain` comes through here too, with the text unchanged, and that is the reading
+        // this wants: asking the same question a second time is asking it again.
+        answered = false
         // Killing the superseded process rather than waiting for it. Without this, typing eight
         // characters leaves eight `cs` processes competing for the same index and the last one —
         // the only one whose answer is wanted — finishes last.
@@ -164,11 +174,36 @@ final class SearchModel {
         // The finished query, which is what is recorded. Read now rather than inside the task:
         // typing continues while this runs, and the pick belongs to the query it was made from.
         let text = query
+        // Set here rather than when the task returns, for the same reason `Opener` records on
+        // every path it takes: a conversation that was wanted and could not be reached is as
+        // much of a judgement as one that opened, so this query has had its answer either way.
+        answered = true
         Task { [weak self] in
             guard let self else { return }
             self.openFailure = await Opener.open(
                 conv, at: destination, query: text, limit: self.limit, client: self.client)
         }
+    }
+
+    /// The query this window should record as abandoned, or nil if there is nothing to record.
+    ///
+    /// docs/TUI-DESIGN.md §6's third row: quit with a non-blank query and no pick, and the log
+    /// gets one `Search`. The empty box is skipped here only to save spawning a process for
+    /// nothing — what counts as a query with a need behind it is `cs abandon`'s to say, and it
+    /// drops more than this could (whitespace, `"??"`, a filter with no text beside it).
+    var abandonedQuery: String? {
+        guard !answered, !query.isEmpty else { return nil }
+        return query
+    }
+
+    /// Write the abandonment down, at the one moment there is one to write.
+    ///
+    /// Blocking, on the way out. `cs abandon` re-ranks the finished query so that the list it
+    /// records is the one a `Pick` would have been placed in, which costs roughly what a search
+    /// costs — and quit is the one place in this app where there is no frame left to drop.
+    func recordAbandonment() {
+        guard let text = abandonedQuery else { return }
+        client.abandon(query: text, limit: limit)
     }
 
     /// Ask the same question again. Only offered while the index is `rebuilding`, where it means

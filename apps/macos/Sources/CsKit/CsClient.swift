@@ -44,11 +44,41 @@ public struct CsClient: Sendable {
     public var binary: URL
     public var db: URL?
     public var config: URL?
+    /// Whether this client's traffic is machine-driven — a benchmark, a scripted capture —
+    /// rather than somebody looking for something.
+    ///
+    /// Nothing about a search says which it was, and no rule over the log can recover the
+    /// difference afterwards: a query typed to measure latency is ordinary text and it goes
+    /// unpicked, which is exactly what an abandoned one looks like. So the run says so at the
+    /// time, by switching the log off for every `cs` it spawns. `cs-archive`'s config calls
+    /// `CS_LOG_QUERIES` "a convenience rather than the mechanism" because a person has to
+    /// remember to export it; a flag set from the flag that made the run scripted cannot forget.
+    public var driven: Bool
 
-    public init(binary: URL, db: URL? = nil, config: URL? = nil) {
+    public init(binary: URL, db: URL? = nil, config: URL? = nil, driven: Bool = false) {
         self.binary = binary
         self.db = db
         self.config = config
+        self.driven = driven
+    }
+
+    /// The environment every `cs` this client spawns runs in, or nil to leave the child with the
+    /// one this process has.
+    ///
+    /// **Assign it only when it is non-nil.** `Process.environment` is documented as nil meaning
+    /// "inherit", and it is — right up until something assigns nil to it, which hands the child
+    /// an *empty* environment instead. A `cs` with no `HOME` cannot expand `~`, so every command
+    /// fails with "no such file: ~/.config/chat-search/config.toml", which reads as a machine
+    /// that was never `cs init`-ed rather than as a client that erased the environment. Measured
+    /// on this Foundation, after `cs-spike contract` failed exactly that way.
+    ///
+    /// It is built by merging rather than replacing for the same reason: `cs` resolves `HOME`,
+    /// `PATH` and the user's timezone out of it, and a driven run is still a run on this machine.
+    private var childEnvironment: [String: String]? {
+        guard driven else { return nil }
+        return ProcessInfo.processInfo.environment.merging(["CS_LOG_QUERIES": "0"]) { _, new in
+            new
+        }
     }
 
     /// Resolution order: `CS_BIN`, then the release binary in the checkout this was built from,
@@ -174,6 +204,46 @@ public struct CsClient: Sendable {
         return String(decoding: run.stdout, as: UTF8.self).trimmed
     }
 
+    public func arguments(abandon query: String, limit: Int) -> [String] {
+        var args = ["abandon", query, "--limit", String(limit)]
+        if let db { args += ["--db", db.path] }
+        if let config { args += ["--config", config.path] }
+        return args
+    }
+
+    /// Record that a search ended in nothing being opened — the other half of `pick`.
+    ///
+    /// A `Search` with no `Pick` after it is the abandonment signal, and it is the only thing
+    /// the query log ever learns that is not a success (docs/TUI-DESIGN.md §6). There is no way
+    /// to get one out of `cs search`: that path logs on the non-`--prefix` route only, which is
+    /// every route a typeahead client does not take.
+    ///
+    /// **Whether the query is worth recording is not decided here.** `cs abandon` drops the
+    /// ones with no need behind them — whitespace, `"??"`, a filter with no text beside it —
+    /// and a client that re-derived that rule would be the second place it lived.
+    ///
+    /// Synchronous, which nothing else in this file is, and for a reason that does not
+    /// generalise: the only caller is `applicationWillTerminate`, where there is no interface
+    /// left to keep responsive and the process is about to stop existing. An `async` call there
+    /// would be a continuation nobody is alive to resume. Waiting is also what makes the line
+    /// observable — a spawn left to outlive its parent may or may not have written by the time
+    /// anything goes looking, and "exactly one event" has to be a checkable claim.
+    ///
+    /// Best effort, like every other write to that log: `cs` missing or refusing costs a data
+    /// point, and there is no window left to report it in.
+    public func abandon(query: String, limit: Int) {
+        let proc = Process()
+        proc.executableURL = binary
+        proc.arguments = arguments(abandon: query, limit: limit)
+        if let childEnvironment { proc.environment = childEnvironment }
+        // Nothing reads either stream, and an inherited stdout would print into whatever
+        // launched this app, after the window it belonged to has gone.
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        do { try proc.run() } catch { return }
+        proc.waitUntilExit()
+    }
+
     private func invoke<Response: Envelope>(_ args: [String]) async throws -> QueryResult<Response> {
         let (response, run, decode): (Response, Run, Double) = try await decoded(args)
         return QueryResult(
@@ -238,6 +308,7 @@ public struct CsClient: Sendable {
         let proc = Process()
         proc.executableURL = binary
         proc.arguments = args
+        if let childEnvironment { proc.environment = childEnvironment }
         let out = Pipe()
         let err = Pipe()
         proc.standardOutput = out

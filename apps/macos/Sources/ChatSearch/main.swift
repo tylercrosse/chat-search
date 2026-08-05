@@ -34,6 +34,11 @@ struct Options {
     /// above: the row's column plan has to hold at several widths (`chat-search-me9.8.2`), and a
     /// window that always opens at one size makes checking that a manual drag nobody repeats.
     var size = CGSize(width: 900, height: 620)
+
+    /// Nobody is typing into this run. Both scripted modes stay out of the front, so they can be
+    /// run beside whatever a person is actually doing — and out of the query log, because their
+    /// queries are a benchmark's rather than a need somebody had. See `CsClient.driven`.
+    var scripted: Bool { measure || shot }
 }
 
 func parse(_ argv: [String]) -> Options {
@@ -132,7 +137,7 @@ final class AppHost: NSObject, NSApplicationDelegate {
         // A scripted run does not steal focus — `.accessory` above — which also keeps the number
         // comparable with `poc/swift/RESULTS.md` §1, taken the same way. A latency measured in a
         // frontmost app and one measured in a background app are not the same measurement.
-        if !scripted { NSApp.activate(ignoringOtherApps: true) }
+        if !options.scripted { NSApp.activate(ignoringOtherApps: true) }
 
         if options.shot {
             Task { @MainActor in
@@ -156,15 +161,22 @@ final class AppHost: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
 
-    /// Nobody is typing into this run. Both scripted modes stay out of the front so they can be
-    /// run beside whatever a person is actually doing.
-    private var scripted: Bool { options.measure || options.shot }
+    /// The last thing this process does, and the only place §6's other event can be emitted.
+    ///
+    /// A window is what knows a query went unanswered, and it knows it right up to here: quit
+    /// with something in the box and nothing opened, and the log gets one `Search`. Without it
+    /// this app records only the searches that worked (`chat-search-pdw`).
+    func applicationWillTerminate(_ note: Notification) {
+        model.recordAbandonment()
+    }
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(options.measure || options.shot ? .accessory : .regular)
+app.setActivationPolicy(options.scripted ? .accessory : .regular)
 let host = AppHost(
-    model: SearchModel(client: CsClient(binary: binary, db: options.db, config: options.config),
+    model: SearchModel(
+        client: CsClient(
+            binary: binary, db: options.db, config: options.config, driven: options.scripted),
         limit: options.limit),
     options: options)
 app.delegate = host

@@ -173,6 +173,28 @@ enum Command {
         #[arg(long = "in")]
         kind: Option<String>,
     },
+    /// Record that a search ended in nothing being opened.
+    ///
+    /// The other half of `cs pick`, for a client whose search runs in another process. A
+    /// `Search` with no `Pick` after it is the abandonment signal — the ranking showed nothing
+    /// worth opening — and it is the only thing this log ever learns that is not a success
+    /// (docs/TUI-DESIGN.md §6). A typeahead client cannot get one out of `cs search`, which
+    /// logs on the non-`--prefix` path only.
+    Abandon {
+        /// The search that was given up on. Same syntax as `cs search`.
+        // `allow_hyphen_values` for the reason `cs pick --query` needs it: `-agent:codex` is
+        // one of the DSL's two negation spellings, and a query this cannot carry is a query
+        // whose abandonment is silently never recorded.
+        #[arg(allow_hyphen_values = true)]
+        query: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        source: Option<String>,
+        /// How deep the list that was given up on went.
+        #[arg(long, default_value = "200")]
+        limit: i64,
+    },
     /// What you have searched for, and what answered it.
     ///
     /// Needs rather than keystrokes: a query typed one character at a time is one row, and a
@@ -315,6 +337,9 @@ fn main() -> Result<()> {
         Command::Facets { query: q, db, json } => facets(&config_path, db, &q, json),
         Command::Pick { conv_id, query: q, db, source, limit, quiet, kind } => {
             commands::pick(&config_path, db, &conv_id, &q, source.as_deref(), limit, quiet, kind.as_deref())
+        }
+        Command::Abandon { query: q, db, source, limit } => {
+            commands::abandon(&config_path, db, &q, source.as_deref(), limit)
         }
         Command::Needs { limit, json, log, driven, why } => {
             commands::needs(&config_path, log, limit, json, driven.as_deref(), why.as_deref())

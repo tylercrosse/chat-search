@@ -59,9 +59,10 @@ pub use model::{model_name, Conversation, Kind, Message, Role, Titles};
 pub use query::{Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection, Window};
 pub use schema::IMPORTER_VERSION;
 pub use search::{
-    explain, match_density, snippet_marked, Explain, Field, Hit, SearchOptions, Sitting, DECAY,
+    explain, match_density, snippet_marked, Explain, Field, Hit, SearchOptions, DECAY,
     REPEAT_WEIGHT,
 };
+pub use sittings::Sitting;
 pub use time::{
     day_start_in, local_day_start, local_ymd, now_ms, shift_days_in, shift_months_in, ymd_in,
 };

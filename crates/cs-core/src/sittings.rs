@@ -45,6 +45,10 @@
 //! as a one-member row. A `LEFT JOIN` that finds nothing is exactly "this conversation stands
 //! for itself", the two tables stay near 1,000 rows instead of the whole corpus, and nothing
 //! downstream has to tell a real fold from a trivial one.
+//!
+//! The search layer joins; a reader cannot, because it is handed one id and has to arrive at a
+//! set. [`resolve`] is that direction, and [`Sitting`] is what any answer standing for several
+//! conversations says about itself.
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -265,12 +269,71 @@ fn build(conn: &Connection, gap_ms: i64) -> rusqlite::Result<()> {
 ///
 /// One query per folded row rather than one for the page: only a handful of rows on a page
 /// are sittings at all, and the index on `sitting_id` makes each of them a point lookup.
+///
+/// Takes the id that *opened* a sitting. A reader holding some other member's id wants
+/// [`resolve`], which is the same question asked from where a client actually stands.
 pub fn members(conn: &Connection, sitting_id: &str) -> rusqlite::Result<Vec<String>> {
     conn.prepare_cached(
         "SELECT conv_id FROM conv_sitting WHERE sitting_id = ?1 ORDER BY msg_offset, conv_id",
     )?
     .query_map(params![sitting_id], |r| r.get(0))?
     .collect()
+}
+
+/// Every conversation an id has to be read with, earliest first — itself alone when it is in
+/// no sitting.
+///
+/// Never empty, and never a rewrite: the answer for an ordinary conversation is that one id,
+/// so a caller writes one loop rather than branching on whether the fold applies. An id that
+/// is in the index nowhere comes back as itself, which leaves "no such conversation" to the
+/// caller that was going to have to say it anyway.
+///
+/// **Any member resolves to the whole sitting, not just the opener.** `Sitting::members` is on
+/// the wire, so a client copying an id out of it has no reason to prefer the first — and the
+/// hop through `sitting_id` is what stops the eleventh record opening as two messages while
+/// the first opens as twenty-two (chat-search-o1i.8).
+///
+/// Assumes [`ensure`] has run, like every other reader of these tables.
+pub fn resolve(conn: &Connection, conv_id: &str) -> rusqlite::Result<Vec<String>> {
+    let opener: Option<String> = conn
+        .prepare_cached("SELECT sitting_id FROM conv_sitting WHERE conv_id = ?1")?
+        .query_row(params![conv_id], |r| r.get(0))
+        .optional()?;
+    match opener {
+        Some(opener) => members(conn, &opener),
+        None => Ok(vec![conv_id.to_string()]),
+    }
+}
+
+/// Several conversations that one chat was shredded into, named by whatever answer stands for
+/// them.
+///
+/// Carried by `cs search`'s row, `cs show`'s transcript and `cs explain`'s verdict alike,
+/// because all three now answer for the same unit and a reader has to be able to tell that the
+/// unit was reconstructed. The fold is a heuristic over timestamps (see [`GAP_MS`]) and the
+/// records really were separate HTTP requests, so a client that draws a sitting silently as one
+/// conversation is asserting something Google never recorded.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Sitting {
+    /// Every conversation folded into this answer, earliest first. The first opened it, and
+    /// each is a real permanent id — nothing here is coined, which is what lets the fold be a
+    /// heuristic without touching ADR 16.
+    pub members: Vec<String>,
+    /// The silence that delimited it. Carried so an answer can say what produced the fold
+    /// rather than implying the export drew the boundary.
+    pub gap_ms: i64,
+}
+
+impl Sitting {
+    /// The sitting an id belongs to, or `None` when the conversation stands for itself.
+    ///
+    /// Built from [`resolve`] rather than beside it, so "is this a fold at all" is the one
+    /// question `> 1` answers and three surfaces cannot come to three different views of a
+    /// one-record sitting.
+    pub fn of(conn: &Connection, conv_id: &str) -> rusqlite::Result<Option<Sitting>> {
+        let members = resolve(conn, conv_id)?;
+        Ok((members.len() > 1).then_some(Sitting { members, gap_ms: GAP_MS }))
+    }
 }
 
 /// `('google-takeout', 'gemini-apps'), ('google-takeout', 'ai-mode')`.
@@ -359,6 +422,46 @@ mod tests {
         // `a` is alone, so it is absent rather than a sitting of one.
         assert_eq!(members(&conn, "a").unwrap(), Vec::<String>::new());
         assert_eq!(members(&conn, "b").unwrap(), ["b", "c"]);
+    }
+
+    #[test]
+    fn any_member_resolves_to_the_whole_sitting_rather_than_to_its_opener() {
+        // The bug in chat-search-o1i.8, at the level it was actually wrong: `members` answers
+        // for an opener, and a reader handed the *third* record of a sitting has no way to get
+        // back to the other two. `Sitting::members` is on the wire, so this is an id a client
+        // has been given and told is real.
+        let conn = corpus(&[
+            ("a", "gemini-apps", 0),
+            ("b", "gemini-apps", MINUTE),
+            ("c", "gemini-apps", 2 * MINUTE),
+        ]);
+        ensure(&conn).unwrap();
+        for id in ["a", "b", "c"] {
+            assert_eq!(resolve(&conn, id).unwrap(), ["a", "b", "c"], "resolving {id}");
+        }
+    }
+
+    #[test]
+    fn a_conversation_in_no_sitting_resolves_to_itself_alone() {
+        // Which is what lets every caller write one loop. An id nothing knows about comes back
+        // the same way rather than empty: "no such conversation" is the caller's sentence, and
+        // an empty vec here would make it the fold's.
+        let conn = corpus(&[("solo", "gemini-apps", 0)]);
+        ensure(&conn).unwrap();
+        assert_eq!(resolve(&conn, "solo").unwrap(), ["solo"]);
+        assert_eq!(resolve(&conn, "chatgpt-export:nothing").unwrap(), ["chatgpt-export:nothing"]);
+        assert!(Sitting::of(&conn, "solo").unwrap().is_none(), "one record is not a fold");
+    }
+
+    #[test]
+    fn a_sitting_names_its_records_and_the_silence_that_delimited_them() {
+        let conn = corpus(&[("a", "gemini-apps", 0), ("b", "gemini-apps", MINUTE)]);
+        ensure(&conn).unwrap();
+        let sitting = Sitting::of(&conn, "b").unwrap().expect("b is folded with a");
+        assert_eq!(sitting.members, ["a", "b"]);
+        // Reported rather than assumed: the boundary is this project's heuristic, not
+        // something Google recorded, and a client cannot say so without the number.
+        assert_eq!(sitting.gap_ms, GAP_MS);
     }
 
     #[test]

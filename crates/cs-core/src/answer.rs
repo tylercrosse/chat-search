@@ -266,7 +266,7 @@ pub struct Group {
     /// when it is one conversation — which is the whole corpus bar the Google Takeout records.
     /// A reconstruction over timestamps rather than something an export recorded, reported so a
     /// client can say so (`chat-search-o1i.5`).
-    pub sitting: Option<crate::search::Sitting>,
+    pub sitting: Option<crate::sittings::Sitting>,
     /// The best matching messages, best first, capped by [`SearchOptions::nested`]. Empty when
     /// nothing was asked for and on the recent route, where nothing matched.
     ///

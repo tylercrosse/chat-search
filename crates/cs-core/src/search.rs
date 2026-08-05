@@ -1,6 +1,7 @@
 use crate::highlight;
 use crate::model::Kind;
 use crate::query::{Facet, Query};
+use crate::sittings::Sitting;
 use rusqlite::{params, params_from_iter, types::Value, Connection};
 use serde::Serialize;
 
@@ -845,27 +846,6 @@ mod tests {
 
 // ---------------------------------------------------------------- grouping
 
-/// The conversations one row stands for, when it stands for more than itself.
-///
-/// Google Takeout exports an activity log with no conversation key in it, so a twenty-turn
-/// Gemini chat is twenty conversations in the index and would be twenty rows in a result set.
-/// [`crate::sittings`] reads the gaps between them and puts them back together at read time;
-/// this is that fold, reported rather than assumed, so a client can say *this row is several
-/// records we believe were one sitting* instead of quietly presenting a reconstruction as a
-/// thing the export recorded.
-///
-/// `None` for every row that is one conversation, which is the whole corpus bar the Gemini
-/// Apps and AI Mode records.
-#[derive(Debug, Clone, Serialize)]
-pub struct Sitting {
-    /// Every conversation folded into this row, earliest first. The first is
-    /// [`Group::conv_id`], and each is a real permanent id that `cs show` opens.
-    pub members: Vec<String>,
-    /// The silence that delimited it. Carried so the row can say what produced the fold
-    /// rather than implying the export drew the boundary — see [`crate::sittings::GAP_MS`].
-    pub gap_ms: i64,
-}
-
 /// A conversation and its best matching messages, as the ranking builds it.
 ///
 /// Crate-private: what a client reads is [`crate::answer::Group`], which this is one `From`
@@ -1087,10 +1067,7 @@ pub(crate) fn recent(
 /// which rows those are until it has the answer.
 fn fill_sittings(conn: &Connection, groups: &mut [Group]) -> rusqlite::Result<()> {
     for group in groups {
-        let members = crate::sittings::members(conn, &group.conv_id)?;
-        if !members.is_empty() {
-            group.sitting = Some(Sitting { members, gap_ms: crate::sittings::GAP_MS });
-        }
+        group.sitting = Sitting::of(conn, &group.conv_id)?;
     }
     Ok(())
 }

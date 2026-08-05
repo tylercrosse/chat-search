@@ -188,7 +188,7 @@ fn activity_record(logical_path: &str, record: &Value) -> Option<Conversation> {
         // No model is recorded anywhere in the export — not per record, not per file. Left
         // absent rather than filled with "gemini", which would assert a precision the data
         // does not have.
-        model: None,
+        declared_model: None,
         surface,
         forked_from_native_id: None,
         head_native_id: None,
@@ -386,7 +386,7 @@ fn workspace(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         },
         cwd: None,
         git_branch: None,
-        model: None,
+        declared_model: None,
         surface: Some("gemini-workspace".to_string()),
         forked_from_native_id: None,
         head_native_id: None,
@@ -495,7 +495,7 @@ fn notebook_lm(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         },
         cwd: None,
         git_branch: None,
-        model: None,
+        declared_model: None,
         surface: Some("notebooklm".to_string()),
         forked_from_native_id: None,
         head_native_id: None,
@@ -557,6 +557,8 @@ fn message(
         role,
         kind: Kind::Prose,
         ts,
+        // Same silence as the conversation level: the export never names a model.
+        model: None,
         text,
     }
 }

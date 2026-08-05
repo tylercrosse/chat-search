@@ -16,7 +16,7 @@
 //! a `messages` array, so there is no need to teach this module the archive's directory
 //! layout, and a file that moves still parses the same way.
 
-use cs_core::model::{Conversation, Kind, Message, Role, Titles};
+use cs_core::model::{model_name, Conversation, Kind, Message, Role, Titles};
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -36,7 +36,6 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
 
     let mut messages: Vec<Message> = Vec::new();
     let mut first_user: Option<String> = None;
-    let mut model: Option<String> = None;
     let mut prev_native_id: Option<String> = None;
     let mut used_ids: HashSet<String> = HashSet::new();
     let mut seq: i64 = 0;
@@ -62,11 +61,14 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
             _ => Role::System,
         };
 
-        // The model can change mid-conversation, so the last one wins and the conversation is
-        // labelled with what it ended on — the same rule codex.rs applies to `turn_context`.
-        if let Some(m) = text_field(record, "model").filter(|m| !m.is_empty()) {
-            model = Some(m);
-        }
+        // The record states which model answered, so it is carried on the message rather
+        // than collapsed here; the single conversation label is the indexer's (ADR 23). Only
+        // a `gemini` record names one, so a user turn is null either way.
+        let model = text_field(record, "model")
+            .as_deref()
+            .and_then(model_name)
+            .filter(|_| role == Role::Assistant)
+            .map(str::to_string);
 
         if role == Role::User && first_user.is_none() {
             first_user = Some(clamp_title(text));
@@ -88,6 +90,7 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
             // they are what the sibling `checkpoints/` files hold.
             kind: Kind::Prose,
             ts: text_field(record, "timestamp").as_deref().and_then(epoch_millis),
+            model,
             text: text.to_string(),
         });
         seq += 1;
@@ -107,7 +110,8 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         // nothing here a reader could act on. A hash in this field would look like a path.
         cwd: None,
         git_branch: None,
-        model,
+        // Nothing outside a `gemini` record names a model, so there is no fallback to give.
+        declared_model: None,
         surface: None,
         forked_from_native_id: None,
         // Deliberately absent rather than a `gemini --resume`-shaped guess: an invented

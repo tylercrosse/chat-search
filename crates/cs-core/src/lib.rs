@@ -50,7 +50,7 @@ pub use index::{
     built_by, ensure_current, open, record_importer_version, reset, write_conversations,
     write_conversations_with, IndexOptions, IndexStats, TOOL_TEXT_MAX,
 };
-pub use model::{Conversation, Kind, Message, Role, Titles};
+pub use model::{model_name, Conversation, Kind, Message, Role, Titles};
 pub use query::{Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection, Window};
 pub use schema::IMPORTER_VERSION;
 pub use search::{

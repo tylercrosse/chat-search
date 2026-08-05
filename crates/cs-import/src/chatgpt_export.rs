@@ -79,7 +79,7 @@
 //! points are out of order), so `seq` follows the export's own `children` order rather than
 //! time.
 
-use cs_core::model::{Conversation, Kind, Message, Role, Titles};
+use cs_core::model::{model_name, Conversation, Kind, Message, Role, Titles};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -133,7 +133,6 @@ fn import_conversation(raw: &Value) -> Option<Conversation> {
     let mapping = raw.get("mapping")?.as_object()?;
 
     let mut messages: Vec<Message> = Vec::new();
-    let mut model: Option<String> = None;
     // Nearest *emitted* message at or above each node. Skipped nodes (the structural root,
     // hidden scaffolding, empty text) are transparent: a child re-parents onto its nearest
     // surviving ancestor, so the parent chain stays walkable and `on_head_path` in the
@@ -163,11 +162,16 @@ fn import_conversation(raw: &Value) -> Option<Conversation> {
                     let text = message_text(msg);
                     let text = text.trim();
                     if !text.is_empty() {
-                        if model.is_none() {
-                            model =
-                                non_empty_str(msg.get("metadata").and_then(|m| m.get("model_slug")))
-                                    .map(String::from);
-                        }
+                        // What answered this node, kept on it. The mapping is walked in id
+                        // order rather than in time order, so collapsing here would not even
+                        // have produced "the first model" — it would have produced whichever
+                        // one sorted first (ADR 23).
+                        let model = non_empty_str(
+                            msg.get("metadata").and_then(|m| m.get("model_slug")),
+                        )
+                        .and_then(model_name)
+                        .filter(|_| role == Role::Assistant)
+                        .map(String::from);
                         messages.push(Message {
                             native_id: id.to_string(),
                             parent_native_id: inherited.map(String::from),
@@ -179,6 +183,7 @@ fn import_conversation(raw: &Value) -> Option<Conversation> {
                             role,
                             kind,
                             ts: epoch_millis(msg),
+                            model,
                             text: text.to_string(),
                         });
                         own = Some(id);
@@ -221,7 +226,13 @@ fn import_conversation(raw: &Value) -> Option<Conversation> {
         titles,
         cwd: None,
         git_branch: None,
-        model: non_empty_str(raw.get("default_model_slug")).map(String::from).or(model),
+        // Demoted to a fallback, and it had no business outranking the messages: it is the
+        // *picker*, not the pick. 154 conversations carry a `default_model_slug` that no
+        // message ever names, 134 of them the literal `auto` — which `model_name` now
+        // rejects outright, taking those 134 mislabelled conversations to 5 (ADR 23).
+        declared_model: non_empty_str(raw.get("default_model_slug"))
+            .and_then(model_name)
+            .map(String::from),
         surface: None,
         forked_from_native_id: None,
         head_native_id,

@@ -9,7 +9,7 @@
 //! so the DAG this produces is a chain: each message's parent is the previous message *in
 //! the same file*.
 
-use cs_core::model::{Conversation, Kind, Message, Role, Titles};
+use cs_core::model::{model_name, Conversation, Kind, Message, Role, Titles};
 use serde_json::Value;
 
 const SOURCE: &str = "codex";
@@ -24,7 +24,9 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
     let thread_key = thread_key(logical_path);
 
     let mut meta: Option<Meta> = None;
-    let mut model: Option<String> = None;
+    // Whatever the most recent `turn_context` named — the model in force from here on, not
+    // the conversation's label.
+    let mut current_model: Option<String> = None;
     let mut messages: Vec<Message> = Vec::new();
     let mut first_user: Option<String> = None;
     let mut prev_native_id: Option<String> = None;
@@ -54,11 +56,13 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
             continue;
         }
         // `session_meta.model_provider` is the vendor ("openai"), not the model. The model
-        // name lives on turn_context and can change mid-conversation; the last one wins, so
-        // the conversation is labelled with what it ended on.
+        // name lives on `turn_context`, which is emitted at the head of each turn and names
+        // what will run for it — so it is not collapsed here but carried forward onto the
+        // assistant messages of the turns that follow, until the next one says otherwise.
+        // 33 of 684 rollouts here change it mid-file (ADR 23).
         if record_type == "turn_context" {
             if let Some(m) = text_field(payload, "model") {
-                model = Some(m);
+                current_model = model_name(&m).map(str::to_string).or(current_model);
             }
             continue;
         }
@@ -130,6 +134,9 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
             role,
             kind,
             ts: text_field(&record, "timestamp").as_deref().and_then(epoch_millis),
+            // A tool result is the sandbox reporting back and a user turn is typed, so
+            // neither was produced by the model that `turn_context` named.
+            model: current_model.clone().filter(|_| role == Role::Assistant),
             text: text.to_string(),
         });
         seq += 1;
@@ -151,7 +158,9 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         titles: Titles { custom: None, generated: None, first_user },
         cwd: meta.cwd,
         git_branch: meta.git_branch,
-        model,
+        // A rollout whose `turn_context` records all precede its first assistant message
+        // would otherwise lose the name entirely, so the last one stands as the fallback.
+        declared_model: current_model,
         surface: meta.surface,
         forked_from_native_id: meta.forked_from,
         // Codex only ever appends, so the last main-thread message is the head.

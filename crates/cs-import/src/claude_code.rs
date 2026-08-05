@@ -14,7 +14,7 @@
 //! 3. **Titles are a fold** — `custom-title` (a rename, re-emitted on every save, so last
 //!    wins) > `ai-title` > first user message (ADR 8).
 
-use cs_core::{Conversation, Kind, Message, Role, Titles};
+use cs_core::{model_name, Conversation, Kind, Message, Role, Titles};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -36,10 +36,13 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
     // of sessions, so "the" cwd is a choice, and the first one is the one the conversation
     // started in. Merging across the several files of a conversation is the indexer's job
     // (COALESCE, ADR 7), not ours.
+    //
+    // `model` is deliberately not in this list. It changes mid-session too — 23 of 428
+    // sessions here — but unlike `cwd` the source states it per message, so it is carried
+    // per message and the single label is resolved once by the indexer (ADR 23).
     let mut session_id: Option<String> = None;
     let mut cwd: Option<String> = None;
     let mut git_branch: Option<String> = None;
-    let mut model: Option<String> = None;
     let mut surface: Option<String> = None;
 
     let mut custom_title: Option<String> = None;
@@ -127,12 +130,16 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
                 break 'event;
             };
 
-            if model.is_none() && event_type == "assistant" {
-                // `<synthetic>` marks a locally-generated assistant turn (an API error
-                // notice), not a model that ever ran. Recording it would mislabel the
-                // conversation.
-                model = text(message, "model").filter(|m| m.as_str() != "<synthetic>");
-            }
+            // What produced *this* event, not the conversation. `<synthetic>` is rejected by
+            // `model_name`, which is where every source's placeholders now live.
+            let event_model = if event_type == "assistant" {
+                text(message, "model")
+                    .as_deref()
+                    .and_then(model_name)
+                    .map(str::to_string)
+            } else {
+                None
+            };
 
             let ts = event.get("timestamp").and_then(Value::as_str).and_then(epoch_millis);
             let is_sidechain = event.get("isSidechain").and_then(Value::as_bool) == Some(true);
@@ -217,6 +224,9 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
                     role,
                     kind,
                     ts,
+                    // Only what the model authored. A `tool_result` block rides on a `user`
+                    // event and is authored by neither side, so it stays null.
+                    model: event_model.clone().filter(|_| role == Role::Assistant),
                     text: text_body,
                 });
                 seq += 1;
@@ -246,7 +256,9 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         },
         cwd,
         git_branch,
-        model,
+        // Claude Code never names a model anywhere but on an assistant turn, so there is
+        // nothing to fall back to and nothing is lost by saying so.
+        declared_model: None,
         surface,
         // Claude Code has no fork mechanism, and no head marker: the transcript is
         // append-only, so the last message of each thread is its leaf (ADR 4).

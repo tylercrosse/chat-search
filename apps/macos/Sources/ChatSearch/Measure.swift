@@ -86,11 +86,28 @@ enum Measure {
             try? await Task.sleep(for: .milliseconds(600))
 
             let f = frames.toFrame
-            print("  \"\(phrase)\" — \(model.conversations.count) rows on screen")
+            // The index's own state, printed because a run against a rebuilding index and a run
+            // against a ready one are different measurements — and because it is the shortest
+            // proof that the successful envelope's `index_state` arrives here at all.
+            print("  \"\(phrase)\" — \(model.conversations.count) rows on screen, "
+                + "index \(describe(model.health))")
             print("    keystroke→frame  \(line(f))")
             print("    main-thread lag  \(line(frames.lag))")
             print("      \(f.count) of \(phrase.count) keystrokes rendered, "
                 + "\(frames.missed) of \(frames.lag.count) vsyncs missed")
+        }
+    }
+
+    private static func describe(_ h: IndexHealth) -> String {
+        switch h {
+        case .ready: "ready"
+        case .rebuilding: "rebuilding — complete, one build behind"
+        case .unrecognised(let s): "\"\(s)\", unknown to this build"
+        case .noIndex: "missing"
+        case .building: "being built"
+        case .stale: "unreadable"
+        case .noBinary: "cs not found"
+        case .failed(let d): "failed — \(d)"
         }
     }
 

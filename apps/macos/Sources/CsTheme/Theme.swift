@@ -38,11 +38,11 @@ public struct Theme: Sendable {
     public let type: TypeScale
     public let geometry: Geometry
 
-    /// Each colour token as one dynamic `Color` that picks its own side of the pair.
+    /// Each colour token as one dynamic colour that picks its own side of the pair.
     ///
     /// Resolved once at construction rather than per access: `NSColor(name:dynamicProvider:)`
     /// allocates, and a row redrawing at 60 Hz asks for a dozen tokens.
-    private let resolved: [ColorToken: Color]
+    private let resolved: [ColorToken: NSColor]
 
     public init(name: String, dark: Palette, light: Palette, type: TypeScale, geometry: Geometry) {
         self.name = name
@@ -61,7 +61,11 @@ public struct Theme: Sendable {
     /// This is what keeps `colorScheme` out of every view: a dynamic `NSColor` carries both
     /// authored values and lets AppKit choose, so a view asks for `.ink` and never asks which
     /// theme it is in.
-    public func color(_ token: ColorToken) -> Color { resolved[token]! }
+    public func color(_ token: ColorToken) -> Color { Color(nsColor: resolved[token]!) }
+
+    /// The same token for the AppKit surfaces SwiftUI does not own — the window's own ground,
+    /// which shows through for a frame during a live resize.
+    public func nsColor(_ token: ColorToken) -> NSColor { resolved[token]! }
 
     /// One of the five sizes in the scale, in points.
     public func size(_ token: SizeToken) -> CGFloat { type.size(token) }
@@ -81,13 +85,12 @@ public struct Theme: Sendable {
     /// `bestMatch(from:)` rather than reading `NSApp.effectiveAppearance`: the provider is called
     /// with the appearance in force where the colour is being drawn, which is the only reading
     /// that stays right inside a view that has overridden it.
-    public static func dynamic(light: RGB, dark: RGB) -> Color {
+    public static func dynamic(light: RGB, dark: RGB) -> NSColor {
         let lightColor = light.nsColor
         let darkColor = dark.nsColor
-        return Color(
-            nsColor: NSColor(name: nil) { appearance in
-                appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? darkColor : lightColor
-            })
+        return NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? darkColor : lightColor
+        }
     }
 }
 

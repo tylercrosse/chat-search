@@ -90,6 +90,9 @@ final class AppHost: NSObject, NSApplicationDelegate {
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         window.title = "chat-search"
+        // The one colour SwiftUI does not own. It shows through for a frame during a live resize,
+        // and the system default is a grey nobody in this app chose.
+        window.backgroundColor = Theme.shipped.nsColor(.bg)
         window.center()
         let hosting = NSHostingView(rootView: SearchView(model: model))
         window.contentView = hosting

@@ -218,6 +218,15 @@ enum Measure {
         print("    after a drag to 75%  \(where_(reader))")
         if let frames { print("    main-thread lag  \(line(frames.lag)), "
             + "\(frames.missed) of \(frames.lag.count) vsyncs missed") }
+        // The keyboard's half, which has no pointer to drive it. It shares everything below the
+        // gesture with the drag, so what this checks is narrow and is the only check there is:
+        // that a step resolves at all, and that it resolves to the next message the transcript has
+        // a row for rather than to the next message in the conversation — 952 of which have none.
+        for _ in 0..<3 {
+            reader.step(by: 1)
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        print("    after three steps down  \(where_(reader))")
         print("    \(footprintMB()) MB in this process, with the conversation open and scrolled")
         let scrubbed = path.replacingOccurrences(of: ".png", with: "-scrubbed.png")
         print("    \(scrubbed) \(capture(window, to: scrubbed))")
@@ -230,8 +239,14 @@ enum Measure {
         guard let first = positions.first, let last = positions.last else {
             return "no rows have reported themselves on screen"
         }
+        // The request is printed beside the result because they are different facts: `List` keeps a
+        // row prepared past the edge of the viewport, so a step of one message can move the
+        // transcript without moving the top of the box at all.
+        let requested: String? = reader.scrollRequest?.id
+        let asked = requested.flatMap { reader.minimap.position(of: $0) }
         return "messages \(first)–\(last) of \(reader.minimap.blocks.count) on screen "
             + "(\(positions.count) rows), box at \(Int((reader.scrollFraction * 100).rounded()))%"
+            + (asked.map { ", last asked for \($0)" } ?? "")
     }
 
     /// The drawer's scroll view: the rightmost one in the window.

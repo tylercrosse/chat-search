@@ -228,20 +228,135 @@ Three departures from `poc/ui`'s drawer:
 Not built, and each for a reason rather than for time: **outline mode**, which needs the same
 collapsed forms (`chat-search-me9.20`), and the mockup's **fidelity chips, segment summaries and
 work summary**, which need facts — segments, topics, touched files — that nothing on the wire
-carries.
+carries. The **minimap** was in that list until `chat-search-me9.8.18`; it is below.
+
+### The minimap
+
+Beside the transcript, the whole conversation as a column. Every message on the head path is a
+band: its height is `log10` of the message's length normalised over the conversation, its colour is
+the same band the spine beside the text uses, and its width is the role — 18pt for a user turn
+against 28pt for everything else. `poc/ui/app.js` is the reference and three of its rules are the
+reason it works at all.
+
+**Height is length, not one row per message.** A 2,431-message agent session has to fit a drawer,
+and equal-height bands make a transcript of mostly short tool calls look like one of mostly prose.
+
+**Dim rather than drop.** The 952 successful tool results the reader folds away are on the map at
+0.22, because a map that omitted what the fold is hiding would be a map of the current view, and
+there is already one of those — it is the screen. Off-path messages get 0.3 for the same reason,
+and never appear today: `cs show` returns the head path only.
+
+**A match is a tick over the band, not a recolour of it**, so a hit on a tool call still reads as a
+tool call.
+
+Two departures, both forced by density rather than chosen. **Paint order puts user turns and
+failures last**: at 2,431 messages in a 500pt column the bands overlap, so in transcript order every
+pixel goes to tool traffic — 2,043 of those messages — and the 43 user turns vanish under it. The
+width encoding is what makes it safe, since an 18pt turn painted over a 28pt band leaves the band
+showing beside it. And **a tick is half width when its match cannot claim to have ranked**, because
+at 2.5pt there is no room for the second colour the transcript spends on that distinction, and
+drawing an unranked hit exactly like a ranked one would state in the map what the text refuses to
+say.
+
+#### The container question, and what route 1 cost
+
+`List` gives back neither of the two numbers the prototype reads off the DOM — `scrollTop` and
+`scrollHeight` — and `ScrollViewReader` only goes the other way, and only to an id. That is the
+whole problem, and `chat-search-me9.8.18` costed three answers to it. What ships is the reversible
+one: **keep `List`, drive by id**. The rows report themselves through `onAppear`/`onDisappear`, and
+a drag resolves to a message rather than to an offset.
+
+So the reader did not leave `List` and `chat-search-me9.22`'s container numbers still stand. What
+needed measuring was what the *relationship* costs, which is a number about this app and not about
+containers. Taken against a build of this app with no minimap in it, alternating runs so that the
+comparison is not a reading of what else the laptop was doing — 2026-08-05, live index, the corpus's
+longest conversation at 2,431 messages on the head path, window 1100×760, driven half a document in
+60 steps, which is 319pt every 8 ms and far past what a hand can produce:
+
+| | main-thread lag p50 | p95 | max | vsyncs missed |
+| --- | ---: | ---: | ---: | --- |
+| with the minimap | 0.5–0.6 ms | 19.6–24.4 | 285–633 | 4–6 of ~69 |
+| without it | 0.6–0.7 ms | 20.6–30.1 | 102–297 | 4–6 of ~68 |
+
+p50, p95 and the missed-vsync count cannot be told apart. The maximum is worse with the map in
+three of the four pairs and the same statistic swings 3× between runs of the *same* build, so this
+machine at this load cannot separate it from its own noise — which is why the range is printed
+rather than an average that would look settled. Footprint is the same story: 115–135 MB with the
+map against 106–118 MB without, measured at the same point with `phys_footprint`, ranges that
+overlap.
+
+Two costs are not noise and are worth saying plainly:
+
+- **The box is a report, not a measurement.** It is drawn from which rows `List` currently has,
+  and `NSTableView` prepares rows beyond the visible rectangle, so it says where you are and not
+  what you can see. `--shot` shows the size of that: after a drag to 75% the map asks for message
+  1812 and three keyboard steps later for 1818, and the box does not move for any of it, because
+  all six are inside the prepared rows. The transcript moved each time. A conversation with one
+  expanded block taller than the drawer is where "which messages exist" and "where am I" stop
+  agreeing altogether.
+- **A drag lands on a message boundary**, because `ScrollViewReader` scrolls to an id. On this
+  conversation that is a fifth of a point of slop; on a short one with tall blocks it is the block.
+
+Both are what route 2 — `ScrollView` + `LazyVStack` with `GeometryReader`, or macOS 15's
+`onScrollGeometryChange` — would buy, at 65.6 MB against `List`'s 5.2 MB over the corpus and a
+deployment floor `Package.swift` currently puts at macOS 14. Neither has bitten yet.
+
+One optimisation was measured and *removed*. `onAppear` fires from inside `NSTableView`'s own row
+preparation, so the rows first buffered into an unobserved set and published once per turn of the
+run loop, which is the standard defence against re-entering an AppKit update. Against writing
+straight through it measured p95 16.8–18.4 ms versus 17.3–29.2 and produced the same two reentrancy
+warnings per run — the same two a build with no minimap produces. SwiftUI already defers a dirty
+view's body to the next frame, so it was a hand-rolled copy of the framework, and the simpler
+version is what is here.
+
+That superset is also why a keyboard step is anchored on the message the map last asked for rather
+than on the top of the box: a step that did not move the box would otherwise resolve to the same
+message again, and the arrows would be stuck one message below where they started.
+
+The bands are a view of their own so that a scroll does not redraw them, and that one *is* worth
+keeping: `--shot` reports **2 canvas renders** over a fling that moves the viewport box sixty times.
+It prints the count for the reason `--verify-theme` exists — the day an innocent capture puts
+`reader` back inside that view, the number reads in the hundreds instead of the claim quietly
+becoming false.
+
+#### What the minimap cannot draw
+
+The same table the row keeps for the ribbon, and for the same reason: absent rather than invented.
+
+| mark | why not |
+| --- | --- |
+| a pause | `poc/ui`'s `mm-notch`. A gap inside a conversation is not on the wire; `Sitting.gapMs` measures the silence *between* the records folded into a sitting. Thresholding timestamps here would be the local-date bug's shape — one rule, three clients, disagreeing at the edges. `chat-search-me9.39` |
+| a compaction boundary | `poc/ui`'s `mm-cut`, and the one `poc/ui/NOTES.md` argues hardest: "a compaction says the earlier half stopped being verbatim, so the agent past it knows different things … at seq 924 of 1,323 you would never find it by scrolling". claude-code transcripts carry it explicitly — `isCompactSummary`, `compact_boundary` — so it is an importer and contract question rather than an inference. Same bead |
+
+The map also costs the transcript 50pt of its width, which is 422pt of extra document on that
+conversation. `poc/ui` pays the same — `.pv` is `grid-template-columns: 1fr 50px` — and the drawer's
+reading measure is the number `poc/ui/NOTES.md` says was arrived at rather than inherited, so it is
+a real trade and not a free column.
 
 ### Seeing it
 
 ```bash
 swift run -c release chat-search --shot --query "borrow checker" --out /tmp/reader.png
+swift run -c release chat-search --shot --query "the" --longest --limit 400 --out /tmp/long.png
 ```
 
 The third non-affordance flag, and the same argument as the other two: `--measure` answers with a
 number and `--verify-theme` with an exit code, but whether a 923-message conversation comes out as
 a readable column has no number in it. `cacheDisplay(in:to:)` renders the view hierarchy into a
 bitmap with no window server and no screen-recording grant, so it runs from a script and on a
-machine nobody is sitting at. It writes two frames — the second after typing on with the
+machine nobody is sitting at.
+
+It writes four frames. The first is the drawer as it opens; the last is after typing on with the
 conversation still open, which is the state a list-driven selection closes without being asked to.
+The two in between are the minimap's, because that one is a *relationship* rather than a drawing
+and a relationship has a before and an after: the drawer's own scroll view is driven half a
+document, then the map is dragged to 75%, and each frame is printed with where the transcript
+ended up and where the box went. On the corpus's longest conversation that is messages 0–8 at rest,
+300–330 after the fling and 1810–1818 after the drag, run to run.
+
+**`--longest` opens the biggest conversation the query returned rather than the best one.** The
+map's hard case is length, no query puts the corpus's 2,431-message conversation first, and a
+verification affordance that cannot reach the thing being verified is not one.
 
 The decoding half is checked where the rest of the contract is:
 

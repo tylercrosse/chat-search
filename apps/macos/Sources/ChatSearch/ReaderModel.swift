@@ -136,9 +136,19 @@ final class ReaderModel {
 
     /// One drawn message up or down — the minimap's adjustable action, and the only way to move
     /// it without a pointer.
+    ///
+    /// Stepped from the message this last asked for, as long as that message is still on screen,
+    /// and from the top of the box otherwise. Anchoring on the box alone looks right and is not:
+    /// `onScreen` is a superset of what is visible, so a step of one message frequently does not
+    /// move its top edge, and the next step would then resolve to the same message again and the
+    /// keyboard would be stuck one message below where it started.
     func step(by delta: Int) {
-        guard let id = minimap.drawnId(steppingFrom: minimap.firstOnScreen(of: onScreen), by: delta)
-        else { return }
+        // Annotated, because `scrollRequest?.id.flatMap` reads as `String`'s and walks the id one
+        // character at a time.
+        let requested: String? = scrollRequest?.id
+        let anchor = requested.flatMap { onScreen.contains($0) ? $0 : nil }
+            ?? minimap.firstOnScreen(of: onScreen)
+        guard let id = minimap.drawnId(steppingFrom: anchor, by: delta) else { return }
         request(id)
     }
 

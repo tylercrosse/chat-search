@@ -103,8 +103,8 @@ struct MinimapLayout: Sendable {
     func drawnId(steppingFrom id: String?, by delta: Int) -> String? {
         guard !drawnPositions.isEmpty else { return nil }
         let from = id.flatMap { positionOfId[$0] } ?? drawnPositions[0]
-        let rank = drawnPositions.firstIndex(where: { $0 >= from }) ?? drawnPositions.count - 1
-        let moved = Swift.min(Swift.max(rank + delta, 0), drawnPositions.count - 1)
+        let moved = Swift.min(
+            Swift.max(rank(atOrAfter: from) + delta, 0), drawnPositions.count - 1)
         return blocks[drawnPositions[moved]].id
     }
 
@@ -133,20 +133,33 @@ struct MinimapLayout: Sendable {
     /// successful tool result — 952 of the 2,431 messages in the longest conversation — has to
     /// resolve to something the transcript has a row for.
     private func nearestDrawn(to position: Int) -> Int {
-        let after = drawnPositions.firstIndex(where: { $0 >= position }) ?? drawnPositions.count
+        let after = rank(atOrAfter: position)
         if after == 0 { return drawnPositions[0] }
         if after == drawnPositions.count { return drawnPositions[drawnPositions.count - 1] }
         let below = drawnPositions[after - 1]
         let above = drawnPositions[after]
         return position - below <= above - position ? below : above
     }
+
+    /// How many drawn messages come before this position. Binary search for the same reason
+    /// `search` is one: this is on the path of every frame of a drag, and `firstIndex(where:)`
+    /// over 1,479 drawn messages is not.
+    private func rank(atOrAfter position: Int) -> Int {
+        var low = 0
+        var high = drawnPositions.count
+        while low < high {
+            let middle = (low + high) / 2
+            if drawnPositions[middle] < position { low = middle + 1 } else { high = middle }
+        }
+        return low
+    }
 }
 
 /// The conversation as a column beside the transcript, and the scrubber for it.
 ///
 /// `poc/ui/DESIGN-BRIEF.md` puts it in the right drawer and `styles.css` gives it the width:
-/// `.pv { grid-template-columns: 1fr 50px }`. What it draws is the mockup's `.mm` — bands by
-/// band, ticks for matches, a box for where you are — and what it does *not* draw is named in
+/// `.pv { grid-template-columns: 1fr 50px }`. What it draws is the mockup's `.mm` — a band per
+/// message, a tick per match, a box for where you are — and what it does *not* draw is named in
 /// `apps/macos/README.md`, because two of the prototype's marks are not on this wire.
 struct Minimap: View {
     /// The mockup's 50px column. A literal for the reason the seam states: the width of a strip

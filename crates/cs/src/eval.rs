@@ -148,7 +148,7 @@ fn pool_variants() -> Vec<Variant> {
 }
 
 fn run_query(
-    conn: &rusqlite::Connection,
+    index: &cs_core::Reader,
     text: &str,
     limit: i64,
     repeat_weight: f64,
@@ -161,17 +161,20 @@ fn run_query(
         nested: 1,
         ..cs_core::SearchOptions::new(cs_core::now_ms())
     };
-    Ok(cs_core::search_grouped(conn, &cs_core::Query::exact(text), &q)?)
+    // Through the same door every other client uses, so a pool is built out of what a search
+    // would have returned. The envelope around the rows is discarded here: a tuning run is
+    // about the ranking, and the total it selects is not what is being measured.
+    Ok(cs_core::answer(index, &cs_core::Query::exact(text), &q)?.results)
 }
 
 /// Every conversation any variant surfaced in its top `depth`, deduplicated by id.
 ///
 /// Whole `Group`s rather than ids, because the sheet wants what a real result row shows —
 /// title, source, local date, turn count and the snippet the query actually matched.
-fn pool(conn: &rusqlite::Connection, text: &str, depth: usize) -> Result<Vec<cs_core::Group>> {
+fn pool(index: &cs_core::Reader, text: &str, depth: usize) -> Result<Vec<cs_core::Group>> {
     let mut out: Vec<cs_core::Group> = Vec::new();
     for v in pool_variants() {
-        for g in run_query(conn, text, depth as i64, v.repeat_weight, v.decay)? {
+        for g in run_query(index, text, depth as i64, v.repeat_weight, v.decay)? {
             if !out.iter().any(|o| o.conv_id == g.conv_id) {
                 out.push(g);
             }
@@ -247,7 +250,7 @@ fn render_sheet(eq: &EvalQuery, groups: &[cs_core::Group], have: &HashMap<String
         // The snippet the ranking actually matched on, not the conversation's opening line.
         // Judging "is this relevant to my query" against text picked without reference to the
         // query was the interactive loop's worst habit.
-        if let Some(h) = g.hits.first() {
+        if let Some(h) = g.matches.first() {
             s.push_str(&format!("   {}\n", trunc(&h.snippet, 150)));
         }
         s.push('\n');
@@ -315,7 +318,7 @@ pub fn sheet(
     force: bool,
 ) -> Result<()> {
     let set = EvalSet::load(set_path)?;
-    let conn = open_index(config_path, db_path)?;
+    let index = open_index(config_path, db_path)?;
     let jpath = judgments_path(set_path);
     let (judged, skipped) = load_judgements(&jpath)?;
     if skipped > 0 {
@@ -355,7 +358,7 @@ pub fn sheet(
             }
         }
 
-        let mut groups = pool(&conn, &eq.q, depth)?;
+        let mut groups = pool(&index, &eq.q, depth)?;
         // Newest first, ties by id so the file is byte-stable across re-emits.
         groups.sort_by(|a, b| b.ended_at.cmp(&a.ended_at).then_with(|| a.conv_id.cmp(&b.conv_id)));
         std::fs::write(&path, render_sheet(eq, &groups, have))
@@ -380,7 +383,7 @@ pub fn collect(
     allow_unknown: bool,
 ) -> Result<()> {
     let set = EvalSet::load(set_path)?;
-    let conn = open_index(config_path, db_path)?;
+    let index = open_index(config_path, db_path)?;
     let jpath = judgments_path(set_path);
     let (judged, _) = load_judgements(&jpath)?;
     let dir = sheets_dir(set_path);
@@ -409,7 +412,7 @@ pub fn collect(
             }
             // Ids are written into the sheet by `cs eval sheet`, so one the index does not
             // know is almost always a hand-edit that mangled it rather than a real drift.
-            if !conversation_exists(&conn, &r.conv_id)? {
+            if !conversation_exists(&index.conn, &r.conv_id)? {
                 unknown.push(format!("{}: {}", eq.id, r.conv_id));
             }
             pending.push(Judgement {
@@ -471,7 +474,7 @@ pub fn run(
     json: bool,
 ) -> Result<()> {
     let set = EvalSet::load(set_path)?;
-    let conn = open_index(config_path, db_path)?;
+    let index = open_index(config_path, db_path)?;
     let jpath = judgments_path(set_path);
     let (judged, skipped) = load_judgements(&jpath)?;
 
@@ -486,11 +489,11 @@ pub fn run(
     for eq in &set.query {
         let grades = judged.get(&eq.id).unwrap_or(&empty);
         for conv_id in grades.keys() {
-            if !conversation_exists(&conn, conv_id)? {
+            if !conversation_exists(&index.conn, conv_id)? {
                 dangling.push(format!("{}:{}", eq.id, conv_id));
             }
         }
-        let returned: Vec<String> = run_query(&conn, &eq.q, depth as i64, repeat_weight, decay)?
+        let returned: Vec<String> = run_query(&index, &eq.q, depth as i64, repeat_weight, decay)?
             .into_iter()
             .map(|g| g.conv_id)
             .collect();
@@ -584,10 +587,10 @@ fn trunc(s: &str, n: usize) -> String {
     format!("{}…", chars[..n.saturating_sub(1)].iter().collect::<String>())
 }
 
-fn open_index(config_path: &Path, db_path: Option<PathBuf>) -> Result<rusqlite::Connection> {
+fn open_index(config_path: &Path, db_path: Option<PathBuf>) -> Result<cs_core::Reader> {
     let cfg = cs_archive::Config::load(config_path)?;
     let path = db_path.unwrap_or_else(|| cfg.default_db());
-    Ok(cs_core::open_for_read(&path)?.conn)
+    Ok(cs_core::open_for_read(&path)?)
 }
 
 #[cfg(test)]
@@ -724,7 +727,7 @@ mod tests {
             native_id: "c1".into(),
             destinations: Vec::new(),
             deleted_upstream: false,
-            hits: Vec::new(),
+            matches: Vec::new(),
         }
     }
 

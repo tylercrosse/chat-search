@@ -279,7 +279,8 @@ fn log_search(
 /// The result list is recomputed here rather than passed in, because the caller is a shell
 /// script holding a chosen line and not much else. It costs a few milliseconds and it keeps
 /// the recorded rank honest about what this ranking would return, which is what a later
-/// tuning run needs to compare against.
+/// tuning run needs to compare against. It asks through `answer` like every other client, so
+/// the ranking a pick is placed in is the one a search would have shown it in.
 pub fn pick(
     config_path: &Path,
     db_path: Option<PathBuf>,
@@ -304,8 +305,11 @@ pub fn pick(
         (Vec::new(), 0)
     } else {
         let q = cs_core::SearchOptions { limit, ..cs_core::SearchOptions::new(cs_core::now_ms()) };
-        let groups = cs_core::search_grouped(&conn, &parsed, &q)?;
-        let ids: Vec<String> = groups.iter().map(|g| g.conv_id.clone()).collect();
+        let ids: Vec<String> = cs_core::answer(&index, &parsed, &q)?
+            .results
+            .into_iter()
+            .map(|g| g.conv_id)
+            .collect();
         let n = ids.len();
         (ids, n)
     };

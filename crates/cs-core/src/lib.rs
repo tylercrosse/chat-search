@@ -31,11 +31,10 @@ pub mod schema;
 pub mod search;
 pub mod time;
 
-// `answer::Group` is deliberately not re-exported yet: `search::Group` still holds that name at
-// the root, and will until the clients stop reading the ranked row directly
-// (chat-search-me9.36.2, chat-search-me9.36.3). Until then the wire type is `cs_core::answer::Group`,
-// and the two are one `From` apart rather than two names for one shape.
-pub use answer::{answer, Answer, FlatAnswer, Match, Reason, Refusal};
+// `Group` at the root is the answer's, now that no client reads the ranked row directly. The two
+// are one `From` apart, and the name belongs to the one clients decode: `search::Group` is the
+// ranking's own row, on its way to becoming this one.
+pub use answer::{answer, Answer, FlatAnswer, Group, Match, Reason, Refusal};
 pub use blocks::{Block, Density, Fold, MarkKind, Transcript, WireBlock};
 pub use build::{open_for_read, IndexBuild, IndexState, Reader, Unreadable};
 pub use destination::{destinations, Destination};
@@ -49,8 +48,7 @@ pub use query::{Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection
 pub use schema::IMPORTER_VERSION;
 pub use search::{
     count_matching, explain, match_density, recent, search, search_grouped, search_grouped_counted,
-    snippet_marked, Counted, Explain, Field, Group, Hit, SearchOptions, Total, DECAY,
-    REPEAT_WEIGHT,
+    snippet_marked, Counted, Explain, Field, Hit, SearchOptions, Total, DECAY, REPEAT_WEIGHT,
 };
 pub use time::{
     day_start_in, local_day_start, local_ymd, now_ms, shift_days_in, shift_months_in, ymd_in,

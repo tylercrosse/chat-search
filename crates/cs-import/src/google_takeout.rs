@@ -22,25 +22,19 @@
 //! exports are unpacked — so it is hand-added to `config.toml` rather than auto-detected by
 //! `candidate_sources`, which could only ever guess at a path.
 //!
-//! ```toml
-//! [[sources]]
-//! id = "google-takeout"
-//! path = "~/dev/sandbox/chat-history/data"   # the directory exports unpack *into*
-//! layout = "mirror"
-//! include = [
-//!   "**/My Activity/*/MyActivity.json",
-//!   "**/Conversation History/conversation_*.txt",
-//!   "**/Chat History/*.html",
-//! ]
-//! ```
+//! The block to paste lives in `cs_archive::unreachable::SERVER_SIDE`, and `cs init` and
+//! `cs archive` print it (chat-search-a7k.22). It used to live here, where nothing could print
+//! it — which is how a source that reaches the index by no other route stayed a footnote in an
+//! importer nobody reads before configuring one. This module keeps the reasoning; the register
+//! keeps the values, because two copies of a glob is one glob that quietly stops matching.
 //!
 //! Two things about those globs are deliberate. They lead with `**/` rather than naming the
 //! export directory, because Takeout unpacks to a bare `Takeout/` every time and the only way
 //! to keep two exports apart is to rename them — so the pattern cannot assume what they are
 //! called, and `Takeout*` would silently miss a directory renamed to lowercase. And they name
 //! conversation files rather than sweeping the tree, because 311 MB of the 330 MB reference
-//! export is NotebookLM source PDFs and `.wav` audio overviews. The globs above capture
-//! 9.5 MB of the 330 and leave the rest on disk.
+//! export is NotebookLM source PDFs and `.wav` audio overviews. They capture 9.5 MB of the 330
+//! and leave the rest on disk.
 //!
 //! # Why one source id and not four
 //!

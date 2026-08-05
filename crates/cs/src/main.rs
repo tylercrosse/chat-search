@@ -523,6 +523,17 @@ fn archive(
             .context("recording the export-staleness nag")?
     };
 
+    // Read off the config alone, because there is nothing else to read: these surfaces write no
+    // local file, so the scan above could not have found them and neither could `cs init`
+    // (chat-search-a7k.22). Same dry-run split as the two reports above it.
+    let unreachable = cs_archive::unreachable::pending(&cfg.sources);
+    let show_unreachable = if dry_run {
+        !unreachable.is_empty()
+    } else {
+        cs_archive::unreachable::claim(&machine_dir, &unreachable, cs_archive::manifest::now_ms())
+            .context("recording the unreachable-surfaces report")?
+    };
+
     if json {
         println!("{:#}", serde_json::json!({
             "dry_run": dry_run, "archive": machine_dir, "sources": reports,
@@ -532,6 +543,7 @@ fn archive(
             "unconfigured": drift.unconfigured,
             "missing": drift.missing,
             "stale": stale,
+            "unreachable": unreachable,
             "cloned": tot_cloned, "copied": tot_copied,
             "bytes": tot.apparent,
             "apparent_bytes": tot.apparent,
@@ -588,6 +600,13 @@ fn archive(
                 println!();
             }
             print_stale(&stale);
+            printed = true;
+        }
+        if show_unreachable {
+            if printed {
+                println!();
+            }
+            print_unreachable(&unreachable, config_path);
         }
     }
     Ok(())
@@ -641,6 +660,65 @@ fn print_drift(drift: &cs_archive::Drift, config_path: &Path) {
     }
     if !drift.missing.is_empty() {
         println!("\n  Configured but gone: uninstalled, moved, or an unmounted volume. What is already\n  archived is safe, but nothing new is arriving, and this run recorded every file under\n  it as vanished.");
+    }
+}
+
+/// Surfaces whose conversations never touch this disk (chat-search-a7k.22).
+///
+/// Exempt from quiet mode with the other two standing reports, and on a stronger argument than
+/// either of them. Drift and staleness describe something that changed, so a swallowed line is
+/// re-earned by the next change; this one describes a gap that has been there since `cs init`
+/// and that nothing on the machine will ever raise again. Suppressing it would not delay the
+/// news, it would end it.
+///
+/// Shared with `cs init`, which is the other moment a person is looking — and the moment the
+/// config that omits them is being written. One renderer, so the two cannot come to differ
+/// about what the remedy is.
+fn print_unreachable(pending: &[&cs_archive::Surface], config_path: &Path) {
+    for s in pending {
+        println!("  unreachable   {:<14} {} — {}", s.id, s.name, s.fetch);
+    }
+    // The share is restated on every printing for the reason the staleness remedy is: the lines
+    // above are a fact about plumbing, and this is the only thing that says why it is worth
+    // acting on. It is stated about the whole category rather than about whichever surfaces are
+    // still pending, because the measured one is usually the first to be configured — and the
+    // stakes of the two left do not shrink when it is.
+    println!(
+        "\n  These keep every conversation on a vendor's machine and write nothing here, so no\n  \
+         detection can find them and no improvement to detection ever will (ADR 21) — the\n  \
+         config is the only place they can be named. Not a rounding error either: the one\n  \
+         of them ever measured is the ChatGPT export, at {}\n  \
+         on the machine this was built for — and the others contributed nothing to that\n  \
+         count, so it is a floor and not a share. Once one is configured, the `stale` line\n  \
+         is what says it has stopped arriving.",
+        cs_archive::unreachable::measured_share(),
+    );
+
+    let toml = cs_archive::unreachable::adoption_toml(pending);
+    if !toml.is_empty() {
+        // `path` is the one field this cannot fill in: an export has no canonical home, which
+        // is the whole reason detection fails on these. Left unedited it points at a directory
+        // that does not exist, and the next run says so as `missing` — a half-finished paste
+        // reports itself rather than passing for configured.
+        println!("\n  Fetch one and unpack it anywhere. Point `path` at whichever directory you unpack\n  exports into — one serves all of them, and until it exists `cs archive` reports it\n  as `missing`. The id is permanent once bytes are captured (ADR 16). Append to\n  {}:\n", config_path.display());
+        for line in toml.lines() {
+            // The blank line between blocks stays blank; indenting it would leave trailing
+            // whitespace that a paste carries into the config.
+            println!("{}", if line.is_empty() { String::new() } else { format!("      {line}") });
+        }
+    }
+
+    let unknown: Vec<&str> =
+        pending.iter().filter(|s| s.include.is_empty()).map(|s| s.id).collect();
+    if !unknown.is_empty() {
+        // Named rather than quietly omitted. An id in the list above with no block beside it
+        // reads as an oversight, and the reason it is not one is worth the two lines: a guessed
+        // glob captures part of an export and says nothing about the rest, which is the failure
+        // that looks most like success.
+        println!(
+            "\n  No block for {}: no export of that shape has landed here yet, and a guessed\n  include glob captures part of one and stays silent about the rest.",
+            unknown.join(", ")
+        );
     }
 }
 
@@ -735,6 +813,16 @@ fn init(config_path: &PathBuf, machine_alias: Option<String>, force: bool) -> Re
     println!("sources      {}", cfg.sources.len());
     for s in &cfg.sources {
         println!("  {:<12} {:?}  {}", s.id, s.layout, s.path.display());
+    }
+
+    // The list above is everything detection can offer, and on a fresh machine it is a minority
+    // of the corpus (chat-search-a7k.22). Said here as well as in `cs archive` because this is
+    // the moment the incomplete config is written, and a person who walks away from a finished
+    // `cs init` believing it found everything has no reason to look again.
+    let unreachable = cs_archive::unreachable::pending(&cfg.sources);
+    if !unreachable.is_empty() {
+        println!();
+        print_unreachable(&unreachable, config_path);
     }
     Ok(())
 }

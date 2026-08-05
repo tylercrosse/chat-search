@@ -1,7 +1,8 @@
 # chat-search for macOS
 
-The Swift surface. A search field, a facet rail, a result list, a reader beside it, and a way back
-into the conversation — `chat-search-me9.8.2` onward is what makes it worth using.
+The Swift surface. A search field, a grouping control, a facet rail, a result list, a reader beside
+it, and a way back into the conversation — `chat-search-me9.8.2` onward is what makes it worth
+using. Two views, because three of the prototype's four were the same list cut differently.
 
 ```bash
 cargo build --release                       # the app finds ./target/release/cs by itself
@@ -18,11 +19,14 @@ Flags, all of which exist so this can be exercised without touching real data:
 swift run -c release chat-search --db /tmp/scratch.db --config /tmp/scratch-config.toml
 swift run -c release chat-search --bin /path/to/cs --limit 30
 swift run -c release chat-search --size 720x480
+swift run -c release chat-search --group project
 ```
 
-`--size` opens the window at a stated size. It is a verification affordance rather than a
-preference — the row has to hold at several widths and a window that always opens at one makes
-checking that a drag nobody repeats.
+`--size` opens the window at a stated size and `--group` opens the list already cut along an axis.
+Both are verification affordances rather than preferences — the row has to hold at several widths,
+and a grouped list rebuilds sections where an ungrouped one rebuilds rows, so `--measure` needs a
+way into that mode. A window that always opens at one size, or always ungrouped, makes checking
+either of those a manual drag nobody repeats.
 
 ## What it is made of
 
@@ -240,8 +244,12 @@ The third non-affordance flag, and the same argument as the other two: `--measur
 number and `--verify-theme` with an exit code, but whether a 923-message conversation comes out as
 a readable column has no number in it. `cacheDisplay(in:to:)` renders the view hierarchy into a
 bitmap with no window server and no screen-recording grant, so it runs from a script and on a
-machine nobody is sitting at. It writes two frames — the second after typing on with the
-conversation still open, which is the state a list-driven selection closes without being asked to.
+machine nobody is sitting at. It writes six frames: the reader; the same window after typing on
+with the conversation still open, which is the state a list-driven selection closes without being
+asked to; one per grouping axis, with the group and residue counts printed beside them; and
+Library. The grouped frames are what caught a group head clipping its count to `3` where it meant
+`39`, and a residue head eliding to `n…y` where it meant `no working directory` — a wrong number
+and a label saying nothing, neither of which an assertion would have failed on.
 
 The decoding half is checked where the rest of the contract is:
 
@@ -313,6 +321,108 @@ could show:
 Not here, and not this bead's: selection and hover, which are what a row is for once there is a
 reader pane to select into (`chat-search-me9.8.3`); and `deleted_upstream`, which is on the wire and
 has nowhere to be said yet.
+
+## Grouping: one list, cut
+
+Grouping is a **dimension on the list**, not a place to go. `chat-search-4ar.10` found that Search,
+Projects and Sittings drew the same rows, from the same filters, into the same drawer — two of the
+three were `GROUP BY` wearing the costume of a destination, and nothing was in one and not the
+others. So the axis is a control that leads the query it modifies, reading in the order it applies:
+group by project, *then* narrow with the query. The rows, the row component, the selection and the
+reader are identical in every arrangement, and one `List` holds all of them, because the container
+question was answered once (`chat-search-me9.22`) and sections do not un-answer it.
+
+| axis | key | coverage, from `poc/ui/NOTES.md` §1 |
+| --- | --- | --- |
+| `none` | — | the ranking, ungrouped |
+| `project` | `cwd`, verbatim | 34% of conversations and **92% of all messages** |
+| `run` | `ended_at`, clustered at 12h | 100% — the only signal that covers the whole corpus |
+| `source` | `source` | archetype is ~87% predicted by it |
+| `topic` | — | drawn, and not offered |
+
+**The residue group is the point of this bead.** `cwd` is 100% on codex and claude-code and 0% on
+chatgpt and gemini-cli, so a project grouping that quietly kept only the rows it could place drops
+two thirds of the corpus and looks complete doing it. Every axis that can fail to place a row has a
+residue group with a name that says what is missing — `no working directory`, `no last message` —
+counted in the open and last in the list. `source` has none, because a conversation always names
+the source it came from; that is an absence rather than an omission. The prototype makes exactly
+this mistake on `project` and gets it right on `topic`, and this is its own rule applied across.
+
+**Nothing is re-ranked.** `project` and `source` gather in the order each key first appears, so the
+group holding the top row leads and the rows inside keep the order they arrived in: the same
+answer, regathered. `run` is the one axis that re-orders, because a cluster in time cannot be found
+in rank order, and an axis whose labels are dates says that on its face. The residue is last
+wherever there is one — it makes no rank claim, and two thirds of a list at the top would bury the
+axis you asked for.
+
+**12h is measured, not picked.** The 3-day rule left chat-search, meety-local and dev/career each
+as one undivided run; 12h gives 1–15 and tracks the day count exactly (chat-search 6 of 6,
+personal-site 4 of 4, ga 7 of 7). It is applied to `ended_at` as a *duration between instants*,
+which has no timezone in it. The local day is a different question and is not answered here:
+`ended_date` arrives rendered by the core, and `Display.day` only reformats it — `Aug 5`,
+`Oct 25 ’25` — so the rule the local-date bug produced stays in its one place.
+
+The group head is `poc/ui`'s `.pj-head` minus two cells. **No twisty**, because these do not fold
+(below). **No source badges**: the prototype puts a strip of tiny source icons on every header, and
+with no asset catalog and no SF Symbol for a vendor the honest version here would be colour alone,
+which `poc/ui/NOTES.md` §7 rules out — the source is in every row underneath anyway. What is left
+is the name, a `cross-tool` tag where a run used more than one, the count, the day span and a
+12-bar sparkline of when. The reader pane leaves that column ~400pt at the window's floor, so the
+cells give way in a stated order: the count never loses a digit, the name elides in the middle
+where a path survives it, and **the day span leaves whole rather than eliding**, because `Oct 8 ’2…`
+is a worse cell than an empty one.
+
+**Counts are over the rows in hand.** The prototype prints corpus-true counts on a project row
+(`114 · 30 here`) because it groups an export of the whole index; nothing on this wire carries the
+size of a `cwd` or a run, so the key line above the list states the set — `12 groups · 58 rows in
+hand` — rather than a header implying a number the client does not have. The residue count sits
+beside it in `--hit`, with the sentence that explains it on hover.
+
+Four things this does not do:
+
+- **The sections do not fold.** The prototype folds every axis and opens nothing, which is right at
+  corpus scale — thirteen headers carrying count, span and sparkline are a project index, and one
+  open group buries the other twelve. This groups the `--limit` window of a ranked answer, so a
+  fold would hide the answer behind its own headers; and the prototype's own note says the fold
+  left it leaning on a keyboard affordance it never wired. Both land together or neither does:
+  `chat-search-me9.8.15`.
+- **A group head does not offer to narrow to itself.** The prototype's does, by writing `dir:` into
+  its query state. Here the text a click produces is `cs facets`'s to compose — a client
+  assembling tokens itself is the second, partial parser docs/TUI-DESIGN.md §5 costs out — and
+  `dir:` has no rail yet. `chat-search-1ld`.
+- **`project` is the `cwd` column, not a project.** So the worktrees of one repo are separate
+  groups (chat-search was 11 directories) and each of Codex's per-conversation scratch directories
+  is a group of one. `chat-search-6eb.26` measured what deriving a project costs — basenames
+  collide, and the nearest `.git` ancestor reads the live filesystem and so breaks ADR 1 — and
+  closed saying it has to be captured at import time or not at all.
+- **`topic` is drawn dashed and cannot be clicked.** A seeded taxonomy is a `poc/ui/export.py`
+  derivation over the corpus and not an index fact, so nothing on this wire carries one. Hiding the
+  chip would say this corpus has four axes; drawing it live would need a grammar that does not
+  exist. `chat-search-me9.18`, and `chat-search-6eb.18` for the discovery half.
+
+## Library: the half that is not derived
+
+Everything in Search is a projection of the archive and survives `rm index.db && cs index`. Nothing
+in Library would: a collection, a pin, a project merge, a dismissal are all things a person said,
+and ADR 3 puts those in `library.db` rather than in the index for exactly that reason. That is why
+Collections kept failing to find a tab in the prototype — it was the only authored thing on screen,
+competing with derived views for space — and it is why the tab that grouping freed goes here.
+
+It is empty, and it says so four times over, because there is nowhere to author into: `library.db`
+is `chat-search-6eb.14` and is not built. This is the third bead to press on it, after `6eb.15`'s
+title override and `6eb.25`'s generated summaries.
+
+| shelf | what it will hold | waiting on |
+| --- | --- | --- |
+| Collections | `matches(query) + pinned − excluded`, so it goes on answering after a reindex | `chat-search-6eb.14` |
+| Proposed | seeded topics offered as collections, accept or dismiss | topics are not on the wire — `chat-search-me9.18` |
+| Project merges | `/dev/career` (89) + `/dev/projects/career` (65) = 154, suggested and never applied | a corpus-true directory list — `chat-search-1ld` |
+| Pinned | the conversation a rule would not have found | `chat-search-6eb.14` |
+
+Library hides the search field, the group control and the facet rail rather than drawing them
+inert, which is the defect Sittings had: a view that facets do not narrow should not draw the
+facets. The footer says what the view under it is made of, and here that is the one sentence that
+separates the two — `authored, not derived — survives a reindex`.
 
 ## The four index states
 
@@ -409,6 +519,23 @@ still the small term. Filed as `chat-search-tpf`.
 Fewer keystrokes render than §1's 42 of 47, for the same reason: a query that takes longer is a
 query more likely to be killed by the next character. The list skips those states, which is a
 debounce arrived at by killing work rather than by not starting it.
+
+**Grouping rebuilds sections rather than rows, and it is not paid in frames.** Two runs back to
+back against the same index in the same minute, at load 5.6 and 5.3 — one ungrouped, one `--group
+project`, the axis that also has to gather a residue:
+
+| phrase | p50 ungrouped | p50 by project |
+| --- | ---: | ---: |
+| `borrow checker` | 140.1 | 154.2 |
+| `ratatui preview` | 83.9 | 97.7 |
+| `sqlite fts5` | 109.9 | 70.0 |
+| `launchd` | 101.8 | 66.6 |
+
+Two go up and two go down, which is the same reading the rail got: at this load the difference is
+inside the machine's own noise, and both runs are slower than the table above because the load is
+higher. What is not noise is that main-thread lag stayed at p50 0.6 ms with 0–2 missed vsyncs in
+both — so whatever regathering 60 rows and rebuilding a dozen sections costs on every keystroke, it
+is not dropped frames.
 
 ## Known
 

@@ -676,7 +676,7 @@ mod tests {
                 titles: Default::default(),
                 cwd: None,
                 git_branch: None,
-                model: None,
+                declared_model: None,
                 surface: None,
                 forked_from_native_id: None,
                 head_native_id: None,
@@ -690,6 +690,7 @@ mod tests {
                     role: crate::model::Role::User,
                     kind: crate::model::Kind::Prose,
                     ts: Some(1_700_000_000_000),
+                    model: None,
                     text: (*text).into(),
                 }],
             })

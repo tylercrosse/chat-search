@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS conversation(
   title_origin        TEXT,          -- custom | generated | first_user
   cwd                 TEXT,
   git_branch          TEXT,
+  -- The model of the last message that named one, resolved in the rollup at the bottom of
+  -- `index::write_conversations_with` — never collapsed by an importer. See `message.model`.
   model               TEXT,
   surface             TEXT,          -- derived, never part of an id (ADR 16)
   started_at          INTEGER,
@@ -44,6 +46,10 @@ CREATE TABLE IF NOT EXISTS message(
   ts           INTEGER,
   on_head_path INTEGER NOT NULL DEFAULT 1,  -- reachable from head_id by parent walk
   is_error     INTEGER NOT NULL DEFAULT 0,  -- a tool_result reporting a failure
+  -- The model that produced this message, as declared; NULL on user turns and tool results.
+  -- 166 of 3,097 conversations name more than one, so this is where that fact lives; the
+  -- `conversation.model` label is a summary of this column (chat-search-n58.25, ADR 23).
+  model        TEXT,
   text         TEXT NOT NULL
 );
 
@@ -90,4 +96,4 @@ CREATE TABLE IF NOT EXISTS build_info(
 
 /// Bumped when importer output changes in a way that requires a rebuild. Recorded in
 /// `build_info` so a stale index is detectable rather than silently wrong.
-pub const IMPORTER_VERSION: u32 = 4;
+pub const IMPORTER_VERSION: u32 = 5;

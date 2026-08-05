@@ -79,6 +79,26 @@ impl Kind {
     }
 }
 
+/// Whether a string a source offers as a model name is one, returning it trimmed if so.
+///
+/// Every source writes *something* in the model slot when no model ran, and the placeholders
+/// are not shared vocabulary, so this is the one list of them. Measured over the reference
+/// archive: `<synthetic>` appears 58 times and only in claude-code, marking a locally
+/// generated assistant turn (an API error notice) rather than a model that ever answered;
+/// `auto` appears 134 times and only as ChatGPT's conversation-level `default_model_slug`,
+/// where it names the router setting that picks a model rather than the model picked.
+///
+/// Recording either mislabels the conversation, and `auto` did: before chat-search-n58.25,
+/// 134 ChatGPT conversations were labelled with it. Rejecting one and not the other is how
+/// the two importers came to disagree, which is why the test for this lives beside the rule
+/// rather than in whichever importer last remembered.
+pub fn model_name(candidate: &str) -> Option<&str> {
+    match candidate.trim() {
+        "" | "<synthetic>" | "auto" => None,
+        name => Some(name),
+    }
+}
+
 /// Title candidates, kept separate so the fold happens in one place rather than each
 /// importer inventing its own precedence (ADR 8).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -139,6 +159,19 @@ pub struct Message {
     /// them non-zero). Sources with no signal leave it false rather than guessing — sniffing
     /// for the word "error" would hide working results and surface broken ones.
     pub is_error: bool,
+    /// The model that produced this message, named exactly as the source names it.
+    ///
+    /// `None` on every message no model produced — user turns, tool results — and on sources
+    /// that never say. It is *declared*, never inferred: a user turn is not backfilled with
+    /// whatever model was running at the time, because that is a reading of the transcript
+    /// rather than something the transcript states.
+    ///
+    /// Per-message because that is the shape of the source data, and because the shape
+    /// matters: 166 of the 3,097 conversations in the reference archive that carry a model at
+    /// all name more than one, including opus → haiku part-way through an agentic session
+    /// (chat-search-n58.25). A single column on `conversation` cannot express that, and the
+    /// question "did the model change here" had no answer the index could give.
+    pub model: Option<String>,
     pub text: String,
 }
 
@@ -149,7 +182,14 @@ pub struct Conversation {
     pub titles: Titles,
     pub cwd: Option<String>,
     pub git_branch: Option<String>,
-    pub model: Option<String>,
+    /// The model the *conversation* declares about itself, as opposed to the ones its
+    /// messages declare — ChatGPT's `default_model_slug`, Claude Desktop's state file.
+    ///
+    /// This is a fallback, not the answer. The label a reader sees is resolved once, in the
+    /// indexer's rollup, from the last message that named a model; this is consulted only
+    /// when no message named one. Importers must not collapse the per-message models into
+    /// it — doing so privately, in opposite directions, is the bug chat-search-n58.25 fixed.
+    pub declared_model: Option<String>,
     /// Fine-grained origin — `codex_vscode`, `claude-vscode`. Derived, never part of an id.
     pub surface: Option<String>,
     /// Cross-conversation lineage: this conversation was forked from another (ADR 4).
@@ -204,6 +244,24 @@ mod tests {
         assert_eq!(Titles::default().resolve(), None);
     }
 
+    #[test]
+    fn a_placeholder_in_the_model_slot_is_not_a_model() {
+        assert_eq!(model_name("claude-opus-5"), Some("claude-opus-5"));
+        assert_eq!(model_name("  gpt-5.4  "), Some("gpt-5.4"));
+
+        // The two the reference archive actually holds, one per vendor. Neither importer
+        // family knew about the other's before chat-search-n58.25.
+        assert_eq!(model_name("<synthetic>"), None);
+        assert_eq!(model_name("auto"), None);
+        assert_eq!(model_name(""), None);
+        assert_eq!(model_name("   "), None);
+
+        // Near-misses that *are* models: `auto` is rejected as a whole word, not as a
+        // substring, and ChatGPT ships both of these.
+        assert_eq!(model_name("gpt-5-auto-thinking"), Some("gpt-5-auto-thinking"));
+        assert_eq!(model_name("codex-auto-review"), Some("codex-auto-review"));
+    }
+
     fn msg(native: &str, seq: i64, sidechain: bool) -> Message {
         Message {
             native_id: native.into(),
@@ -215,6 +273,7 @@ mod tests {
             role: Role::User,
             kind: Kind::Prose,
             ts: Some(seq),
+            model: None,
             text: "x".into(),
         }
     }
@@ -227,7 +286,7 @@ mod tests {
             titles: Titles::default(),
             cwd: None,
             git_branch: None,
-            model: None,
+            declared_model: None,
             surface: None,
             forked_from_native_id: None,
             head_native_id: None,

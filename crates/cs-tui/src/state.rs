@@ -552,7 +552,7 @@ mod tests {
                 },
                 cwd: Some("/tmp/p".into()),
                 git_branch: None,
-                model: None,
+                declared_model: None,
                 surface: None,
                 forked_from_native_id: None,
                 head_native_id: None,
@@ -566,6 +566,7 @@ mod tests {
                     role: Role::User,
                     kind: Kind::Prose,
                     ts: Some(i as i64 * 1000),
+                    model: None,
                     text: (*text).into(),
                 }],
             })

@@ -149,7 +149,27 @@ where
            user_turns   = (SELECT COUNT(*) FROM message m WHERE m.conv_id = conversation.id AND m.kind='prose' AND m.role='user'),
            thread_count = (SELECT COUNT(DISTINCT m.thread_key) FROM message m WHERE m.conv_id = conversation.id),
            started_at   = (SELECT MIN(m.ts) FROM message m WHERE m.conv_id = conversation.id),
-           ended_at     = (SELECT MAX(m.ts) FROM message m WHERE m.conv_id = conversation.id)",
+           ended_at     = (SELECT MAX(m.ts) FROM message m WHERE m.conv_id = conversation.id),
+           -- The one model-collapse rule, and the reason it is here rather than in each
+           -- importer: a conversation is labelled with what it *ended on*, so the label
+           -- predicts what resuming it would run. Five importers each collapsed this
+           -- privately and two of them chose the opposite end (chat-search-n58.25, ADR 23).
+           --
+           -- Ordering by ts and not by insertion is what makes it true across the several
+           -- files one conversation can be assembled from (ADR 7) — 6 claude-code sessions
+           -- have files that disagree, and file order is uuid order, not time order. It also
+           -- fixes ChatGPT, whose mapping is walked in id order rather than chronologically.
+           -- NULL ts sorts last under DESC, so a message with no clock only decides a
+           -- conversation in which nothing else declared a model.
+           --
+           -- COALESCE keeps `Conversation::declared_model` as the fallback for the
+           -- conversations whose messages never name one: ChatGPT's `default_model_slug`
+           -- and the Claude Desktop state file, which has no messages at all.
+           model        = COALESCE(
+                            (SELECT m.model FROM message m
+                              WHERE m.conv_id = conversation.id AND m.model IS NOT NULL
+                              ORDER BY m.ts DESC, m.seq DESC LIMIT 1),
+                            conversation.model)",
     )?;
     record_importer_version(&tx)?;
     tx.commit()?;
@@ -213,7 +233,7 @@ fn write_one(
             title_origin(c),
             c.cwd,
             c.git_branch,
-            c.model,
+            c.declared_model,
             c.surface,
             c.forked_from_native_id.as_ref().map(|f| format!("{}:{}", c.source, f)),
             head_id,
@@ -223,8 +243,8 @@ fn write_one(
     let mut ins_msg = tx.prepare_cached(
         "INSERT OR IGNORE INTO message
            (id, conv_id, parent_id, thread_key, is_sidechain, seq, role, kind, ts,
-            on_head_path, is_error, text)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            on_head_path, is_error, model, text)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
     )?;
     let mut ins_prose = tx.prepare_cached("INSERT INTO fts_prose(rowid, text) VALUES (?1,?2)")?;
     let mut ins_tools = tx.prepare_cached("INSERT INTO fts_tools(rowid, text) VALUES (?1,?2)")?;
@@ -249,6 +269,7 @@ fn write_one(
             m.ts,
             on_path.contains(m.native_id.as_str()) as i64,
             m.is_error as i64,
+            m.model,
             stored_text,
         ])?;
         if changed == 0 {
@@ -354,7 +375,7 @@ mod tests {
             titles: Titles { first_user: Some("hello".into()), ..Default::default() },
             cwd: None,
             git_branch: None,
-            model: None,
+            declared_model: None,
             surface: None,
             forked_from_native_id: None,
             head_native_id: None,
@@ -373,6 +394,7 @@ mod tests {
             role: Role::User,
             kind: Kind::Prose,
             ts: Some(1_700_000_000_000 + seq),
+            model: None,
             text: text.into(),
         }
     }

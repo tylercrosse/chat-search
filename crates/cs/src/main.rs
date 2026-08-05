@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 mod eval;
 mod commands;
+mod inventory;
 mod tui;
 
 #[derive(Parser)]
@@ -836,16 +837,24 @@ fn status(config_path: &PathBuf, json: bool) -> Result<()> {
     let db = cfg.default_db();
     let index_state = cs_core::IndexState::of(&db);
 
+    // One detection for the whole command: `watched` needs the presence of each directory and
+    // the table below needs the paths, and re-stat'ing every candidate for the second answer
+    // would be two derivations of one fact.
+    let drift = cs_archive::drift::detect(&cfg.sources);
+    let watched = inventory::watched(&cfg, &drift);
+    let inventoried = source_coverage(&db, &watched);
+
     if json {
-        let sources: Vec<_> = cfg
-            .sources
+        let sources: Vec<_> = inventoried
             .iter()
             .map(|s| {
+                let known = inventory::source_by_id(&cfg, &drift, &s.id);
                 serde_json::json!({
                     "id": s.id,
-                    "path": s.path,
-                    "layout": format!("{:?}", s.layout).to_lowercase(),
-                    "exists": s.path.is_dir(),
+                    "coverage": s.coverage.as_str(),
+                    "conversations": s.conversations,
+                    "path": known.map(|k| &k.path),
+                    "layout": known.map(|k| format!("{:?}", k.layout).to_lowercase()),
                 })
             })
             .collect();
@@ -866,11 +875,47 @@ fn status(config_path: &PathBuf, json: bool) -> Result<()> {
         println!("machine      {} ({})", m.alias, m.id);
         println!("machine dir  {}", m.dir(&cfg.archive_root).display());
         println!("index        {} ({})", db.display(), index_state.as_str());
+        // Every source the machine knows about, not just the configured ones: a location
+        // detected here and claimed by nothing is exactly what `cs status` should be able to
+        // show, and a configured source reading 0 is the broken-importer signal.
         println!("sources");
-        for s in &cfg.sources {
-            let mark = if s.path.is_dir() { "ok     " } else { "MISSING" };
-            println!("  {mark} {:<12} {:?}  {}", s.id, s.layout, s.path.display());
+        for s in &inventoried {
+            let known = inventory::source_by_id(&cfg, &drift, &s.id);
+            println!(
+                "  {:<12} {:<14} {:>7}  {:<7} {}",
+                s.coverage.as_str(),
+                s.id,
+                s.conversations,
+                known.map_or_else(|| "-".to_string(), |k| format!("{:?}", k.layout)),
+                known.map_or_else(String::new, |k| k.path.display().to_string()),
+            );
         }
     }
     Ok(())
+}
+
+/// The inventory, with the index counts folded in if the index can be read.
+///
+/// A `cs status` that failed because there is no index yet would be useless on the run where
+/// it is needed most, so an unreadable index costs the counts and nothing else. Two of the
+/// four reasons — nothing there, and a build in progress — are already named by `index.state`
+/// beside this, so a zero under either is unambiguous. The other two are not, and say so on
+/// stderr rather than letting a real corpus report itself as empty.
+fn source_coverage(db: &Path, watched: &[cs_core::Watched]) -> Vec<cs_core::SourceCoverage> {
+    match cs_core::open_for_read(db) {
+        Ok(reader) => match cs_core::inventory::of(&reader.conn, watched) {
+            Ok(inventory) => return inventory,
+            Err(e) => eprintln!("counting conversations: {e} — the counts below read 0"),
+        },
+        Err(e) => {
+            let named = matches!(
+                e,
+                cs_core::Unreadable::NoIndex { .. } | cs_core::Unreadable::Building { .. }
+            );
+            if !named {
+                eprintln!("{e} — the counts below read 0");
+            }
+        }
+    }
+    cs_core::inventory::join(watched, &[])
 }

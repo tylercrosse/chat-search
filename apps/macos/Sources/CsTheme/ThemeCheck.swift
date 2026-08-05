@@ -49,7 +49,7 @@ public enum ThemeCheck {
     /// The four kinds against the ribbon track. An even ~1.8x per step is the widest even spacing
     /// four levels fit into the range, and evenness is the finding — hue is the channel that
     /// degrades fastest at the ~2px the bands are drawn at, so kind has to ride on luminance.
-    /// See `poc/ui/NOTES.md` §3.
+    /// See `poc/ui/NOTES.md` §2, under Row — §3 is where that file lists what it got wrong.
     static let ramp: [(ColorToken, Double)] = [
         (.kTool, 2.20), (.kReason, 4.00), (.kUser, 7.20), (.kAgent, 13.00),
     ]

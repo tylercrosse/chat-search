@@ -149,7 +149,11 @@ enum Command {
     Pick {
         conv_id: String,
         /// The search that produced the result list this was chosen from.
-        #[arg(long, default_value = "")]
+        // `allow_hyphen_values` for the reason `cs search` needs it: `-agent:codex` is one of
+        // the DSL's two negation spellings, and without this clap reads it as a bundle of short
+        // flags and refuses. A client recording a pick has no say in what the user typed, so a
+        // query this cannot carry is a query whose pick is silently never recorded.
+        #[arg(long, default_value = "", allow_hyphen_values = true)]
         query: String,
         #[arg(long)]
         db: Option<PathBuf>,

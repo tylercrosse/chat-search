@@ -527,6 +527,8 @@ mod tests {
             seq,
             role,
             kind,
+            // chat-search-n58.25: declared per message, never inferred. A fixture states none.
+            model: None,
             ts: Some(TS + seq),
             text: text.into(),
         }
@@ -539,7 +541,7 @@ mod tests {
             titles: Titles { custom: title.map(String::from), ..Default::default() },
             cwd: Some("/Users/x/dev/chat-search".into()),
             git_branch: None,
-            model: None,
+            declared_model: None,
             surface: None,
             forked_from_native_id: None,
             head_native_id: None,

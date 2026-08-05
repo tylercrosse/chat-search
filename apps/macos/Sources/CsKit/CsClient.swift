@@ -1,68 +1,77 @@
 import Foundation
 
 /// One round trip through the seam ADR 14 chose: argv in, JSON on stdout, exit code as part of
-/// the interface. Every field is measured because the whole point of the spike is where the
-/// milliseconds go, not that there are some.
-struct Timing: Sendable {
+/// the interface. Every field is measured because the question the spike asked — where do the
+/// milliseconds go — is one the app has to keep being able to answer after it moves.
+public struct Timing: Sendable {
     /// `Process.run()` returning — the fork/exec itself, before `cs` has done anything.
-    var launch: Double
+    public var launch: Double
     /// Launch to last byte of stdout with the child reaped. Contains `serverMs`.
-    var process: Double
+    public var process: Double
     /// `JSONDecoder` over the body. The cost a client pays for the seam being text.
-    var decode: Double
+    public var decode: Double
     /// What `cs` says it spent inside SQLite. The floor an in-process client would reach.
-    var serverMs: Double
+    public var serverMs: Double
     /// Bytes of JSON on stdout.
-    var bytes: Int
+    public var bytes: Int
 
-    var total: Double { process + decode }
+    public var total: Double { process + decode }
     /// Everything that is not the query: spawn, index open, serialise, pipe, parse. What a
     /// daemon (`--stdio`) or a C ABI would be buying.
-    var overhead: Double { total - serverMs }
+    public var overhead: Double { total - serverMs }
 }
 
 /// Generic over the envelope, because `--flat` answers a different question and has a different
 /// shape — but the same round trip and the same clock around it.
-struct QueryResult<Response: Envelope>: Sendable {
-    var response: Response
-    var timing: Timing
+public struct QueryResult<Response: Envelope>: Sendable {
+    public var response: Response
+    public var timing: Timing
 }
 
-enum CsError: Error {
+public enum CsError: Error {
     case unhealthy(IndexHealth)
     case undecodable(String, Data)
 }
 
-/// Where `cs` is and which index it should read. Both overridable so the spike can be pointed at
-/// a scratch index — the rebuild experiment in RESULTS.md §4 deletes and rebuilds one underneath
-/// a running client, which is not something to do to the real one.
-struct CsClient: Sendable {
-    var binary: URL
-    var db: URL?
-    var config: URL?
+/// Where `cs` is and which index it should read. Both overridable so a client can be pointed at
+/// a scratch index — the rebuild experiment in `poc/swift/RESULTS.md` §4 deletes and rebuilds one
+/// underneath a running client, which is not something to do to the real one.
+public struct CsClient: Sendable {
+    public var binary: URL
+    public var db: URL?
+    public var config: URL?
 
-    /// Resolution order: `CS_BIN`, then the release binary built beside this package, then PATH.
-    /// The middle one is what makes `swift run` work straight out of a fresh checkout.
-    static func locate(binary override: String? = nil) -> URL? {
+    public init(binary: URL, db: URL? = nil, config: URL? = nil) {
+        self.binary = binary
+        self.db = db
+        self.config = config
+    }
+
+    /// Resolution order: `CS_BIN`, then the release binary in the checkout this was built from,
+    /// then PATH. The middle one is what makes a fresh checkout work with no configuration.
+    public static func locate(binary override: String? = nil) -> URL? {
         if let override { return URL(fileURLWithPath: override) }
         if let env = ProcessInfo.processInfo.environment["CS_BIN"], !env.isEmpty {
             return URL(fileURLWithPath: env)
         }
         let fm = FileManager.default
-        // …/poc/swift/Sources/cs-spike/CsClient.swift → repo root
-        let repo = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        let built = repo.appendingPathComponent("target/release/cs")
-        if fm.isExecutableFile(atPath: built.path) { return built }
-        for dir in (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":") {
-            let candidate = URL(fileURLWithPath: String(dir)).appendingPathComponent("cs")
+        // …/apps/macos/Sources/CsKit/CsClient.swift → the repo root that built `cs`. Walked
+        // rather than counted: this file has already moved once, out of `poc/swift`, and the
+        // component count happened to survive — which is not a thing to rely on a second time.
+        var dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        while dir.path != "/" {
+            let built = dir.appendingPathComponent("target/release/cs")
+            if fm.isExecutableFile(atPath: built.path) { return built }
+            dir = dir.deletingLastPathComponent()
+        }
+        for entry in (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":") {
+            let candidate = URL(fileURLWithPath: String(entry)).appendingPathComponent("cs")
             if fm.isExecutableFile(atPath: candidate.path) { return candidate }
         }
         return nil
     }
 
-    func arguments(query: String, limit: Int, prefix: Bool, flat: Bool) -> [String] {
+    public func arguments(query: String, limit: Int, prefix: Bool, flat: Bool) -> [String] {
         var args = ["search", query, "--json", "--limit", String(limit)]
         // `--prefix` is the typeahead affordance: the last word is treated as incomplete, so
         // "borrow che" still matches. Without it every keystroke inside a word returns nothing
@@ -78,7 +87,7 @@ struct CsClient: Sendable {
     /// than waiting for it. Without this, typing eight characters leaves eight `cs` processes
     /// competing for the same 324 MB index and the last one — the only one whose answer is
     /// wanted — finishes last.
-    func search(_ query: String, limit: Int = 60, prefix: Bool = true) async throws
+    public func search(_ query: String, limit: Int = 60, prefix: Bool = true) async throws
         -> QueryResult<SearchResponse>
     {
         try await invoke(arguments(query: query, limit: limit, prefix: prefix, flat: false))
@@ -86,7 +95,7 @@ struct CsClient: Sendable {
 
     /// Matching messages, ungrouped. A separate call and not a flag on the one above, because it
     /// comes back as a different envelope — see `FlatResponse`.
-    func searchFlat(_ query: String, limit: Int = 60, prefix: Bool = true) async throws
+    public func searchFlat(_ query: String, limit: Int = 60, prefix: Bool = true) async throws
         -> QueryResult<FlatResponse>
     {
         try await invoke(arguments(query: query, limit: limit, prefix: prefix, flat: true))
@@ -121,12 +130,12 @@ struct CsClient: Sendable {
                 serverMs: response.ms, bytes: run.stdout.count))
     }
 
-    struct Run: Sendable {
-        var stdout: Data
-        var stderr: Data
-        var exit: Int32
-        var launch: Double
-        var process: Double
+    public struct Run: Sendable {
+        public var stdout: Data
+        public var stderr: Data
+        public var exit: Int32
+        public var launch: Double
+        public var process: Double
     }
 
     /// Nothing here blocks a thread, and that is the whole design.
@@ -136,7 +145,7 @@ struct CsClient: Sendable {
     /// is not overcommit, so its width is the core count: eight here. Three keystrokes in flight
     /// exhaust it, the fourth waits for a thread rather than for `cs`, and the measured keystroke
     /// latency stops being a measurement of the transport at all. It read as ~80 ms of transport
-    /// cost that did not exist. See RESULTS.md §2.
+    /// cost that did not exist. See `poc/swift/RESULTS.md` §2.
     ///
     /// So: readability handlers for both pipes, a termination handler for the exit status, and
     /// the continuation resumes when all three have reported. Foundation runs those on its own
@@ -259,7 +268,7 @@ private final class SpawnState: @unchecked Sendable {
 }
 
 extension Duration {
-    var ms: Double {
+    public var ms: Double {
         let (s, attos) = components
         return Double(s) * 1000 + Double(attos) / 1e15
     }

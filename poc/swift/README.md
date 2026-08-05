@@ -14,9 +14,24 @@ cargo build --release            # cs-spike finds ../../target/release/cs by its
 cd poc/swift && swift run -c release cs-spike
 ```
 
-Requires the Command Line Tools SDK and nothing else: no Xcode project, no bundle, no
-dependencies. Sits beside `poc/rust` and `poc/ts` for the same reason they do — an instrument for
-answering a question, not part of the product. `poc/` is outside the cargo workspace.
+Requires the Command Line Tools SDK and nothing else: no Xcode project, no bundle. Sits beside
+`poc/rust` and `poc/ts` for the same reason they do — an instrument for answering a question, not
+part of the product. `poc/` is outside the cargo workspace.
+
+## The one dependency, and which way it points
+
+The decoder and the transport are no longer here. They are `CsKit`, a library product of
+[`apps/macos`](../../apps/macos/README.md), and this package consumes it (`chat-search-me9.8.1`).
+
+That direction is the point. The decoder is written once — every field added to the contract
+after the first non-Rust reader ships would otherwise land twice — and the app cannot depend on
+an instrument, so the instrument depends on the product. What it buys is that the contract check
+below tests the decoder the app is actually built on, rather than a copy of it that has since
+drifted, which is the same class of failure the check exists to catch.
+
+What is still the spike's own: the benches, the metrics, and `SearchView.swift` — a view with a
+three-way container picker and a five-field footer in it, which is scaffolding for questions
+rather than a surface, and is deliberately not what the app renders.
 
 ## The contract check
 

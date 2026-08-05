@@ -15,9 +15,18 @@ rest of the row is. Where a conclusion depends on a p95, that is said out loud.
 
 **What has since changed, and what has not.** Nothing below is restated — these are measurements
 of a particular binary on a particular day and rewriting them would destroy the only thing they
-are good for. But three of the findings have been acted on since, and reading them as current
-would be reading them wrong (`chat-search-me9.8.7`, 2026-08-05):
+are good for. But four of the findings have been acted on since, and reading them as current
+would be reading them wrong (`chat-search-me9.8.7` and `chat-search-me9.8.1`, 2026-08-05):
 
+- **§1's headline is superseded, on two counts.** It is a number about this spike, whose window
+  carries a container picker and a bench footer the app does not; and it was taken against a
+  3,059-conversation index and a `cs` a day older. Re-measured on the promoted target the same
+  way, keystroke→frame p50 is **62–115 ms** rather than 29–70, and the spike run back to back
+  against the same index gives the same figures — so the shell is not the difference. The query
+  is: sqlite p50 at `--limit 60 --prefix` went 21.6 → 44.8 ms over the same window
+  (`chat-search-tpf`). The current numbers, and the method, are in
+  [`apps/macos/README.md`](../../apps/macos/README.md). What has not moved is main-thread lag:
+  p50 0.6 ms with 0–1 missed vsyncs, then and now.
 - **§4 is retired.** `chat-search-me9.28` made a rebuild assemble a sibling index and swap it in
   whole, so no query is ever answered out of a half-built one, and the refusal is now JSON on
   stdout carrying a `code` — `no_index`, `building`, `index_stale` — instead of one English

@@ -70,7 +70,9 @@ pub fn index(
     }
 
     // Before the summary, and inside the timing: what the numbers below describe is the index
-    // a client can now query, not a file that was written and might yet fail to arrive.
+    // a client can now query, not a file that was written and might yet fail to arrive. The
+    // swap reads the new index back before returning, so the summary is downstream of a
+    // committed importer version rather than of nothing having gone wrong (chat-search-6eb.35).
     build.commit().context("swapping the new index into place")?;
     let ms = started.elapsed().as_millis() as u64;
     if json {

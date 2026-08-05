@@ -30,6 +30,10 @@ struct Options {
     var shot = false
     var shotQuery = "borrow checker"
     var shotPath = "/tmp/chat-search.png"
+    /// The window's opening size. A verification affordance in the same family as the three
+    /// above: the row's column plan has to hold at several widths (`chat-search-me9.8.2`), and a
+    /// window that always opens at one size makes checking that a manual drag nobody repeats.
+    var size = CGSize(width: 900, height: 620)
 }
 
 func parse(_ argv: [String]) -> Options {
@@ -48,6 +52,7 @@ func parse(_ argv: [String]) -> Options {
         case "--limit": if let v = next(), let n = Int(v) { o.limit = n }
         case "--interval": if let v = next(), let n = Int(v) { o.interval = .milliseconds(n) }
         case "--measure": o.measure = true
+        case "--size": if let v = next(), let size = parseSize(v) { o.size = size }
         case "--verify-theme": o.verifyTheme = true
         case "--shot": o.shot = true
         case "--query": if let v = next() { o.shotQuery = v }
@@ -62,6 +67,7 @@ func parse(_ argv: [String]) -> Options {
                   --shot               search, open the first result, write the window to --out
                   --query TEXT         what --shot searches for (default "borrow checker")
                   --out PATH           where --shot writes its PNG (default /tmp/chat-search.png)
+                  --size WxH           open the window at this size (default 900x620)
                 """)
             exit(0)
         default: break
@@ -69,6 +75,16 @@ func parse(_ argv: [String]) -> Options {
         i += 1
     }
     return o
+}
+
+/// `WxH`, or nil for anything else. A malformed value leaves the default standing rather than
+/// opening a window somebody has to go and find: this is an instrument, and an instrument that
+/// silently changes the thing being measured is worse than one that ignores you.
+func parseSize(_ text: String) -> CGSize? {
+    let parts = text.lowercased().split(separator: "x")
+    guard parts.count == 2, let w = Double(parts[0]), let h = Double(parts[1]), w > 0, h > 0
+    else { return nil }
+    return CGSize(width: w, height: h)
 }
 
 let options = parse(Array(CommandLine.arguments.dropFirst()))
@@ -98,7 +114,7 @@ final class AppHost: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 900, height: 620),
+            contentRect: NSRect(origin: .zero, size: options.size),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         window.title = "chat-search"

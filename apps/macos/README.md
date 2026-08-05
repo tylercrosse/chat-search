@@ -1,7 +1,7 @@
 # chat-search for macOS
 
-The Swift surface. A search field, a result list, a reader beside it, and a line saying what the
-index is doing — that is all of it, and `chat-search-me9.8.2` onward is what makes it worth using.
+The Swift surface. A search field, a facet rail, a result list, a reader beside it, and a way back
+into the conversation — `chat-search-me9.8.2` onward is what makes it worth using.
 
 ```bash
 cargo build --release                       # the app finds ./target/release/cs by itself
@@ -17,15 +17,20 @@ Flags, all of which exist so this can be exercised without touching real data:
 ```bash
 swift run -c release chat-search --db /tmp/scratch.db --config /tmp/scratch-config.toml
 swift run -c release chat-search --bin /path/to/cs --limit 30
+swift run -c release chat-search --size 720x480
 ```
+
+`--size` opens the window at a stated size. It is a verification affordance rather than a
+preference — the row has to hold at several widths and a window that always opens at one makes
+checking that a drag nobody repeats.
 
 ## What it is made of
 
 **`Sources/CsKit`** — the decoder and the transport, and a library product rather than something
-private to the app. It is the repo's only non-Rust reader of [`docs/JSON-CONTRACT.md`], it is
-written once, and `poc/swift` consumes it so that `cs-spike contract` checks the same decoder
-this app is built on. The dependency points instrument at product; nothing here points back
-into `poc/`.
+private to the app. It is the repo's only non-Rust reader of [`docs/JSON-CONTRACT.md`] — both
+replies, `cs search --json` and `cs facets --json` — it is written once, and `poc/swift` consumes
+it so that `cs-spike contract` checks the same decoder this app is built on. The dependency points
+instrument at product; nothing here points back into `poc/`.
 
 **`Sources/CsTheme`** — the token layer, and a target of its own so that "a view may read a token
 and may not author one" is a thing the compiler enforces rather than a thing a review notices.
@@ -43,6 +48,79 @@ against `LazyVStack`'s 65.6 MB and `VStack`'s 566 MB. That question is answered,
 not offer the other two.
 
 [`docs/JSON-CONTRACT.md`]: ../../docs/JSON-CONTRACT.md
+
+## Facets: the query text is the filter
+
+Clicking a source in the rail does exactly one thing — it puts a string in the search box. There
+is no filter state anywhere in this app, so there is nothing that can fall out of step with what
+is typed, and a filter arrived at by clicking is one you can then edit, copy out, or paste into
+`cs explain`. That is docs/TUI-DESIGN.md §5, where the tool this was lifted from kept a selection
+beside its query and paid six reconciliation methods for it.
+
+Which means the app needs the answer to "what does clicking this produce", and it may not work it
+out. The rules — widen an existing `agent:`, drop a standing exclusion, put a new token in front
+of the free text — live in `cs_core::query` with the grammar, and a client assembling `agent:`
+tokens itself would be the second, partial parser §5 costs out. So it asks:
+
+```bash
+cs facets "borrow checker agent:codex" --json
+```
+
+Every chip comes back carrying **the whole query text clicking it produces**, plus what the query
+currently says about it. [`docs/JSON-CONTRACT.md`] has the shape and why it is a command of its
+own rather than a key on the search envelope.
+
+**The rail is a census, not a list of what matched.** A source with no rows still gets a row, and
+a configured source at zero gets a `!`: that is a broken importer or an archive run that never
+happened, and a bar built from the index alone cannot draw it at all — you search, get nothing,
+and conclude you used a different tool (`chat-search-a7k.29`). A source that is on this machine
+and configured by nothing is drawn dim and does not offer to be clicked, because its conversations
+are not being captured and filtering to it would return an empty list.
+
+Three things this does not do:
+
+- **Only `agent:` has a rail.** `date:` and `dir:` already filter — they are in the grammar, they
+  are applied, and you can type them — but `date:` needs a toggling rule of its own, since its
+  tokens intersect rather than union, and `dir:` needs a corpus-true project list. `chat-search-1ld`.
+- **No source colour.** The five `--src-*` hues are in the token layer and the rule that maps eight
+  source ids onto five of them is not written yet; it belongs with the row's agent badge
+  (`chat-search-me9.8.2`), and writing a second copy here is what the epic's sequencing exists to
+  prevent. `chat-search-g6u`.
+- **A filter you can see is not a filter you can read.** The TUI highlights the query as you type
+  and strikes through a value that selects nothing. Here that value is reported after the fact,
+  in the banner below the box.
+
+### `unapplied_filters`, which is why the banner is not an error
+
+`agent:notathing` parses as a filter and then selects nothing, so the search comes back **wider
+than the query asked for, with exit status 0**. A client that ignores that field shows unfiltered
+results for a filtered query, and it looks like it worked (`chat-search-6eb.11`). So it gets a
+line under the search box, in the same quiet register as the rebuilding banner — nothing failed.
+
+## Opening a conversation
+
+Enter on the search field, double-click a row, or the row's context menu. All three take
+`Group.destinations`, which arrives as *data* — `terminal(argv:)` or `web(url:)`, best first —
+so nothing here greps a string for `https://`.
+
+| destination | what happens |
+| --- | --- |
+| `web` | `NSWorkspace` opens the URL, which is what "hand it to the platform opener" means |
+| `terminal` | `cs pick --in terminal` returns the shell line; it is written to a `.command` file and opened |
+| empty list | a sentence saying this source has no way back in, which is a fact and not a failure |
+
+**The line is never composed here.** Quoting a directory and a session id into one shell line is a
+rule with exactly one home — `cs pick`, `cs tui` and the fzf script before them each grew a
+version of it — so the app asks for it. A `.command` file rather than `osascript … tell app
+"Terminal"`: that names one emulator, wants an automation grant, and its AppleScript escaping
+would be a *second* quoting rule this app owned. The file carries no shebang on purpose, so the
+line resolves against the `PATH` the user has rather than the one a GUI process inherits.
+
+**Every path records the pick**, including the two that open nothing. A conversation that was
+wanted and could not be reached is as much of a relevance judgement as one that was, and picks are
+the only judgements the query log has (docs/TUI-DESIGN.md §6). What it does *not* yet record is
+the other half — quitting with a query and no pick, the abandonment signal — which is
+`chat-search-pdw`.
 
 ## The theme seam
 
@@ -177,6 +255,65 @@ the 563 drawn messages in a real agent session are collapsed, so a one-line form
 single byte would highlight the wrong word in most of what a reader sees — silently, because a
 mark in the wrong place still looks like a mark.
 
+## The row
+
+`poc/ui/index.html` is the structure: line 1 metadata, line 2 the title full width, line 3 the best
+match — and line 3 only when there is one, which the contract decides rather than the view, since
+`matches` is empty for an empty query. Line 1 is two clusters split by a gutter, `source` and size
+on the left, directory and age on the right, because `cwd` answers *which of my worlds was this*
+rather than *what is it*.
+
+What it draws is what the wire carries: source, size, directory, age, the title, and the best match
+with its highlight runs. Four of the mockup's cells are not on the wire at all and one is held back
+on purpose. All five are absent rather than blank — a cell with nothing behind it is not a column to
+reserve space for:
+
+| cell | why not |
+| --- | --- |
+| model | in the index, not in the contract. `chat-search-me9.8.14` |
+| forks | `thread_count`, same |
+| total edit lines | nowhere. `export.py` sums them by parsing `Edit`/`Write` tool arguments |
+| topics | a `poc/ui` clustering over the corpus, not an index fact |
+| the ribbon | deliberate: it needs `kind_runs` and `match_seqs` in one coordinate space, which `chat-search-me9.25` says they are not, and nothing stands in its place |
+
+**The agent badge is the word, not an icon, and that is a re-measure rather than a disagreement.**
+The mockup dropped the word because its list column was a fixed 706px and the word cost the 66px
+`cwd` needed to stop collapsing. This row does not spend that: with no model cell and no ribbon it
+costs about 200pt less, so at the window's 720pt floor `cwd` still gets ~470pt against the mockup's
+17-character budget. It is also the only channel there is — no asset catalog means no per-source
+icon, and SF Symbols has no glyph for a vendor — so the row carries colour and text where the
+mockup carried shape and colour. Text is the channel that survives greyscale.
+
+**The column plan is in characters of the meta face, not in points.** `source` 14, size 9, the
+gutter 4 and `age` 4, with the directory taking what is left up to 44. One character is measured
+off the theme's own size and design, so a direction that moves `--fs-meta` moves the columns with
+it instead of leaving the text to outgrow its cell. The terminal states its own plan in character
+cells for a different reason — it has nothing else — and the two are the same idea.
+
+The directory's ceiling is the corpus's: 88% of directories are 35 characters or fewer, 91% are 44
+or fewer, and the tail is worktree paths, which middle-elide to their leaf. Elision is middle and
+never tail, because tail-elision discards the leaf, which is the discriminating token
+(`docs/TUI-DESIGN.md` §2). Titles elide the other way for the mirror-image reason.
+
+Source labels, `$HOME` collapsing and the age buckets are second implementations of
+`cs-tui/src/text.rs` and `cs-tui/src/theme.rs`, named after their originals. The seam is JSON over
+argv, so a Swift process cannot share that code — but what the terminal calls a source and what the
+window calls it have to be the same word.
+
+Rendered against the live index at 720, 900 and 1400pt. Two things only real data at a real width
+could show:
+
+- The message count was locale-formatted. `Text("\(count) msgs")` is a `LocalizedStringKey`, an
+  `Int` interpolated into one gets thousands separators, and the corpus's largest conversation
+  rendered `2,553 ms…`.
+- `styles.css` makes `cwd` the flexible track while its own comment says the gutter is. At 1400pt
+  an unbounded `cwd` strands the directory mid-row with the age against the far edge and the two
+  clusters stop being clusters, so the ceiling above is what the comment was describing.
+
+Not here, and not this bead's: selection and hover, which are what a row is for once there is a
+reader pane to select into (`chat-search-me9.8.3`); and `deleted_upstream`, which is on the wire and
+has nowhere to be said yet.
+
 ## The four index states
 
 They arrive on two paths and the app puts them back together in one `IndexHealth`, because a
@@ -242,6 +379,25 @@ debounce, one `cs search --json` per keystroke, 8-core M3 at load 4.6:
 
 Main-thread lag was p50 0.6 ms in every run with 0–1 missed vsyncs out of ~100, which is what §1
 found and is the part that has not moved: whatever this costs, it is not paid in dropped frames.
+
+**The facet rail added a second process per keystroke, and the table above was taken before it.**
+`cs facets` is ~9 ms on this index and runs beside the search rather than in front of it — same
+cancellation, so typing does not queue eight of them either — but it is another `cs` competing for
+a core. Two runs on the same day with the rail in, at load 4.6–5.2 rather than the 4.6 above:
+
+| phrase | keystroke→frame p50, run 1 | run 2 |
+| --- | ---: | ---: |
+| `borrow checker` | 116.5 | 120.0 |
+| `ratatui preview` | 86.5 | 80.0 |
+| `sqlite fts5` | 69.7 | 110.1 |
+| `launchd` | 88.4 | 50.3 |
+
+The spread between the two runs is as large as the difference from the table above, so this
+machine at this load cannot separate the rail's cost from its own noise — which is the honest
+statement, and it is why the number is recorded twice rather than averaged into one that would
+look settled. Main-thread lag did not move: p50 0.6 ms, 0–1 missed vsyncs, in both runs. That is
+the part worth holding, because it says the second process is paid in wall clock and not in
+dropped frames.
 
 **That is slower than §1, and the promotion is not why.** The spike was run back to back with the
 app against the same index in the same minute and came back at 97.7 / 73.2 / 76.6 / 104.3 ms

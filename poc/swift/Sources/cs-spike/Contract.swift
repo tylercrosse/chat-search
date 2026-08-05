@@ -1,7 +1,7 @@
 import CsKit
 import Foundation
 
-/// Decodes both envelopes out of a real index and says what it found.
+/// Decodes both search envelopes and the facet rail out of a real index, and says what it found.
 ///
 /// Not a measurement — a check, and until now the only kind of check this contract had from
 /// outside Rust. `poc/` sits outside the cargo workspace on purpose, so `cargo test --workspace`
@@ -26,6 +26,7 @@ enum Contract {
         }
         await browse(client, into: &report)
         await transcripts(client, into: &report)
+        await rail(client, into: &report)
 
         print("")
         for failure in report.failures { print("  FAIL  \(failure)") }
@@ -274,6 +275,68 @@ enum Contract {
         case .tool: "tool"
         case .unrecognised(let raw): "\"\(raw)\" (unknown to this reader)"
         }
+    }
+
+    // MARK: - The facet rail
+
+    /// The second client contract: `cs facets --json`, decoded, and its round trip closed.
+    ///
+    /// The rail is the one reply a client cannot sanity-check by eye, because what it carries is
+    /// not data about the corpus but *query text a click will paste into the box*. So the check
+    /// is the round trip: take the query a chip claims to produce, ask for the rail again, and
+    /// see the chip in the state it promised. A rewriting rule that regressed on the Rust side
+    /// would still serialize perfectly and would fail here.
+    ///
+    /// Free to run, like `browse`: the empty query is skipped by the query log, so nothing here
+    /// appends to the archive's authored `queries.jsonl`.
+    private static func rail(_ client: CsClient, into report: inout Report) async {
+        let start: FacetRail
+        do {
+            start = try await client.facets("")
+        } catch {
+            report.failures.append("facets: \(describe(error))")
+            return
+        }
+
+        let census = start.sources.values
+        print("\n  facets: v\(start.v) · \(census.count) sources · \(start.indexState)")
+        print("    " + census.map { "\($0.value) \($0.conversations)" }.joined(separator: " · "))
+
+        check(start.sources.all.selected, "facets: the empty query does not read as All",
+            into: &report)
+        check(!census.isEmpty, "facets: no source at all, so the rail cannot be drawn",
+            into: &report)
+        check(census.allSatisfy { $0.state == .off },
+            "facets: the empty query lit a chip", into: &report)
+        for chip in census where chip.coverage == .unrecognised(chip.value) {
+            print("    note: coverage state for \(chip.value) postdates this client")
+        }
+
+        // The round trip, on the chip with the most behind it — the one a reader is most likely
+        // to click, and the one whose count makes a broken filter visible in the same run.
+        guard let busiest = census.max(by: { $0.conversations < $1.conversations }) else { return }
+        let filtered: FacetRail
+        do {
+            filtered = try await client.facets(busiest.query)
+        } catch {
+            report.failures.append("facets \"\(busiest.query)\": \(describe(error))")
+            return
+        }
+        print("    round trip: \"\(busiest.query)\" → "
+            + "\(filtered.sources.values.filter { $0.state == .include }.map(\.value).joined(separator: ", "))")
+
+        let lit = filtered.sources.values.first { $0.value == busiest.value }
+        check(lit?.state == .include,
+            "facets: clicking \(busiest.value) produced a query that does not select it",
+            into: &report)
+        check(!filtered.sources.all.selected,
+            "facets: a query naming a source still reads as All", into: &report)
+        // And the chip that is on is the chip that turns it off, which is the whole affordance:
+        // a rail with no way back to All through the chip you pressed is a filter you can enter
+        // and not leave.
+        check(lit?.query == start.query,
+            "facets: \(busiest.value) does not toggle back off — its click gives "
+                + "\"\(lit?.query ?? "")\"", into: &report)
     }
 
     // MARK: -

@@ -2,11 +2,10 @@ import CsKit
 import CsTheme
 import SwiftUI
 
-/// A search field, a list, a drawer, and a line saying what the index is doing.
+/// A search field, a facet rail, a result list, a reader, and a way back into a conversation.
 ///
-/// The drawer is `ReaderView` and everything about it lives there; what is here is the seam it
-/// hangs on — a selection, and where it sits beside the results. The row's anatomy, grouping and
-/// facets are `chat-search-me9.8.2` onward, and taking any of them here is what re-blocks them.
+/// The row's anatomy is `ResultRow` and the drawer is `ReaderView`; what lives here is the seam
+/// between them — selection, opening, and where the reader sits beside the results.
 ///
 /// Nothing below names a colour, a size or a face. Every one is a token off `\.theme`
 /// (`chat-search-me9.8.8`), which is what makes a change of direction a change to one generated
@@ -23,13 +22,24 @@ struct SearchView: View {
             field
             rule
             indexBanner
-            content
+            unappliedBanner
+            openBanner
+            HStack(spacing: 0) {
+                SourceRail(model: model)
+                Rectangle().fill(theme.color(.rule)).frame(width: 1)
+                content
+            }
             rule
             footer
         }
         .frame(minWidth: 720, minHeight: 480)
         .background(theme.color(.bg))
         .onAppear { focused = true }
+        // The fallback half of the arrangement below: this fires only when the focused view did
+        // not handle Return, which is exactly the case where a click has moved focus into the
+        // list. When the field has it — the ordinary state — `onSubmit` gets there first and
+        // consumes it, so the two are mutually exclusive rather than both firing.
+        .onKeyPress(.return) { model.openSelected(); return .handled }
     }
 
     /// `Divider()` draws a system separator, which is a colour this app did not choose. One point
@@ -48,6 +58,7 @@ struct SearchView: View {
         Binding(
             get: { model.reader.conv?.id },
             set: { id in
+                model.selected = id
                 model.reader.open(
                     model.conversations.first { $0.id == id }, query: model.query)
             })
@@ -65,6 +76,18 @@ struct SearchView: View {
                 .foregroundStyle(theme.color(.ink))
                 .focused($focused)
                 .onChange(of: model.query) { model.queryChanged() }
+                // The TUI's arrangement: one input box that never gives up focus, arrows moving
+                // the cursor in the list beside it, and Enter opening what the cursor is on. The
+                // bindings are on the field rather than on the list for that reason — the field
+                // is the focused view, and a key reaches it first.
+                //
+                // Return goes through `onSubmit` and not `onKeyPress`, because a text field
+                // consumes Return itself and `onSubmit` is the seam it consumes it into. The
+                // arrows have no such seam and no default this app wants, so they are read
+                // directly.
+                .onSubmit { model.openSelected() }
+                .onKeyPress(.upArrow) { model.moveSelection(by: -1); return .handled }
+                .onKeyPress(.downArrow) { model.moveSelection(by: 1); return .handled }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
@@ -96,7 +119,41 @@ struct SearchView: View {
         }
     }
 
-    private func banner(icon: String, text: String, askAgain: Bool) -> some View {
+    /// A filter token whose value selects nothing.
+    ///
+    /// **Exit status 0 and not an error**, which is exactly why it needs drawing: the results
+    /// below are wider than the query asked for, and a client that ignores this shows unfiltered
+    /// results for a filtered query and it looks like it worked (`chat-search-6eb.11`). The
+    /// tokens are quoted as typed, because `agent:` and `date:nope` fail for different reasons
+    /// and the one that says which is the text.
+    @ViewBuilder
+    private var unappliedBanner: some View {
+        if !model.unappliedFilters.isEmpty {
+            banner(
+                icon: "line.3.horizontal.decrease.circle",
+                text: "\(model.unappliedFilters.joined(separator: ", ")) — not a value this can "
+                    + "select on, so it is not filtering",
+                askAgain: false)
+        }
+    }
+
+    /// What the last attempt to open a conversation said. Only ever non-empty after an Enter, and
+    /// cleared by the next keystroke: a sentence about a row is stale the moment the list is not
+    /// that list.
+    ///
+    /// Drawn in the error tone, unlike the two above, because every message that reaches here is
+    /// something that did not happen — including "this source has no way to reopen", which is a
+    /// fact about the source rather than a fault but is still an Enter that opened nothing.
+    @ViewBuilder
+    private var openBanner: some View {
+        if let failure = model.openFailure {
+            banner(icon: "exclamationmark.triangle", text: failure, askAgain: false, tone: .err)
+        }
+    }
+
+    private func banner(
+        icon: String, text: String, askAgain: Bool, tone: ColorToken = .ink2
+    ) -> some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: icon)
@@ -123,7 +180,7 @@ struct SearchView: View {
                 }
             }
             .font(theme.font(.sub))
-            .foregroundStyle(theme.color(.ink2))
+            .foregroundStyle(theme.color(tone))
             .padding(.horizontal, 12)
             .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -187,7 +244,9 @@ struct SearchView: View {
     /// answered, so the app does not offer the others.
     private var results: some View {
         List(model.conversations, selection: opened) { conv in
-            ResultRow(conv: conv)
+            // `marks` travels with the rows it describes: the offsets in a snippet are only
+            // readable in the units the envelope that carried them named.
+            ResultRow(conv: conv, marks: model.marks)
                 .listRowInsets(
                     EdgeInsets(
                         top: theme.metric(.rowPaddingTop),
@@ -195,9 +254,13 @@ struct SearchView: View {
                         bottom: theme.metric(.rowPaddingBottom),
                         trailing: theme.metric(.rowPaddingX))
                 )
-                // The open row is `--sel-bg` and not the system's selection colour, which is
-                // chosen somewhere this app cannot see.
-                .listRowBackground(theme.color(conv.id == model.reader.conv?.id ? .selBg : .bg))
+                // The keyboard cursor is `--sel-bg` and not the system's selection colour,
+                // which is chosen somewhere this app cannot see. A click synchronises this id
+                // through `opened` before opening the reader.
+                .listRowBackground(theme.color(model.selected == conv.id ? .selBg : .bg))
+                // Double-click and Enter reopen externally; a single click opens the reader.
+                .onTapGesture(count: 2) { model.open(conv) }
+                .contextMenu { openMenu(conv) }
         }
         .listStyle(.plain)
         // The list is the page, so it takes the page's ground rather than the system's list
@@ -206,6 +269,33 @@ struct SearchView: View {
         .scrollContentBackground(.hidden)
         .background(theme.color(.bg))
         .frame(minWidth: 280)
+    }
+
+    /// Where this conversation can be reopened, best first — and, when that list is empty, the
+    /// sentence saying so rather than a menu with nothing in it.
+    ///
+    /// A menu and not a modal: `cs_core::destinations` returns at most one entry for every source
+    /// today, so a picker would be a dialog nobody is ever asked. docs/TUI-DESIGN.md §6's rule is
+    /// to skip the modal when there is one answer; this shows the answer, and has room for the
+    /// second the day a source offers one.
+    @ViewBuilder
+    private func openMenu(_ conv: Conversation) -> some View {
+        if conv.destinations.isEmpty {
+            Text("\(conv.source) conversations cannot be reopened from here")
+        } else {
+            ForEach(Array(conv.destinations.enumerated()), id: \.offset) { _, destination in
+                Button(label(for: destination)) { model.open(conv, at: destination) }
+            }
+        }
+    }
+
+    /// Named after what the reader would be taken to, not after the variant.
+    private func label(for destination: Destination) -> String {
+        switch destination {
+        case .terminal(let argv): "Resume in a terminal — \(argv.first ?? "")"
+        case .web: "Open in the browser"
+        case .unsupported(let kind): "\(kind): this build cannot open it"
+        }
     }
 
     /// The mockup's `.empty`: a dashed rule, the quiet tier, and no chrome. The icon was the
@@ -261,35 +351,5 @@ struct SearchView: View {
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.color(.panel))
-    }
-}
-
-/// One conversation, one line.
-///
-/// Deliberately plain. The row's anatomy — the agent badge, the kind ribbon, the marked snippet,
-/// the date column — is `chat-search-me9.8.2`, argued against `poc/ui` and against the corpus
-/// measurements in `poc/ui/NOTES.md`. A shell that guessed at it would have to be undone first.
-///
-/// What it does carry is the row's rhythm, which is a token and not a guess: the padding is set
-/// by `SearchView` from `--row-pt` / `--row-pb` / `--row-px` and the gutter here is `--row-gap`.
-/// Those are the tokens a direction is most likely to get wrong, since every one of them trades
-/// against rows-per-screen.
-struct ResultRow: View {
-    let conv: Conversation
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        HStack(spacing: theme.metric(.rowGap)) {
-            Text(conv.title.flatMap { $0.isEmpty ? nil : $0 } ?? "untitled")
-                .font(theme.font(.body, weight: .medium))
-                .foregroundStyle(theme.color(.ink))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 12)
-            Text(conv.source)
-            if let date = conv.endedDate { Text(date) }
-        }
-        .font(theme.font(.meta, .mono))
-        .foregroundStyle(theme.color(.ink3))
     }
 }

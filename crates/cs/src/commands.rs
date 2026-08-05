@@ -335,14 +335,20 @@ pub fn pick(
     // way past. This is the shape chat-search-me9.3 argued for — the point that knows which
     // conversation was chosen is already the point being asked how to open it.
     if !quiet {
-        let ids: Option<(String, String)> = conn
+        // `cwd` comes back with the pair because the line is not complete without it. An agent
+        // session is resumed *in the directory it ran in* — `claude --resume <id>` looks the
+        // session up under the project keyed on that path — so a line that dropped it named the
+        // right conversation and reopened nothing. `cs tui` composed the same line with the
+        // directory in it, which is the disagreement between two renderers of one rule that
+        // `Destination::shell_line` exists to prevent.
+        let ids: Option<(String, String, Option<String>)> = conn
             .query_row(
-                "SELECT source, native_id FROM conversation WHERE id = ?1",
+                "SELECT source, native_id, cwd FROM conversation WHERE id = ?1",
                 rusqlite::params![conv_id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .ok();
-        let Some((source, native_id)) = ids else {
+        let Some((source, native_id, cwd)) = ids else {
             anyhow::bail!("no conversation {conv_id} in the index");
         };
         let all = cs_core::destinations(&source, &native_id);
@@ -363,7 +369,7 @@ pub fn pick(
             None => all.first(),
         };
         match chosen {
-            Some(d) => println!("{}", d.shell_line(None)),
+            Some(d) => println!("{}", d.shell_line(cwd.as_deref())),
             // Distinct from an error: the pick was still recorded, there is simply no way back
             // in for this source. Silence on stdout keeps `eval "$(cs pick …)"` a no-op.
             None => eprintln!("{source} conversations cannot be reopened from here"),

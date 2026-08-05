@@ -279,6 +279,76 @@ and cannot be drawn on one strip without the reconciliation `chat-search-me9.25`
 
 ---
 
+## The facet rail — `cs facets --json`
+
+A second reply, from a second command, and the one place this file describes something other
+than a search. `cs facets [QUERY] --json`:
+
+```json
+{
+  "v": 1,
+  "query": "borrow checker agent:codex",
+  "index_state": "ready",
+  "sources": {
+    "keyword": "agent:",
+    "all": { "selected": false, "query": "borrow checker" },
+    "values": [
+      { "value": "codex", "state": "include", "coverage": "live", "conversations": 665,
+        "query": "borrow checker" },
+      { "value": "claude-code", "state": "off", "coverage": "live", "conversations": 458,
+        "query": "borrow checker agent:codex,claude-code" }
+    ]
+  }
+}
+```
+
+**Why it is a command and not a key on the envelope.** The rail's census has to stat the source
+directories, which is a cost the per-keystroke search path should not carry, so it would have to
+be a key that is sometimes present — and a sometimes-absent key is a second type to a decoder,
+which is the thing [the envelope pin](#how-this-stays-true) exists to keep out. Two replies with
+one shape each beat one reply with two.
+
+**Why it exists at all.** docs/TUI-DESIGN.md §5: a facet bar is a *projection of the query text*,
+never a selection kept beside it, and the rules that rewrite that text — widen an existing
+`agent:`, drop a standing exclusion, put a new token in front of the free text — live in
+`cs_core::query` with the grammar. A client in another process cannot call them, and one that
+assembled `agent:` tokens itself would be the second, partial parser §5 costs out. So each chip
+arrives carrying **the whole query text clicking it produces**. Put that string in the input box;
+do not splice a token.
+
+| key | type | null? | |
+| --- | --- | --- | --- |
+| `v` | integer | never | `1`. Moves under the same rule as the search envelope's. |
+| `query` | string | never | The query this is a projection of, as parsed. |
+| `index_state` | string | never | What is at the index path — the same four names `cs status` reports, `no_index` and `building` included. **This command never refuses**, unlike a search: on a first run the true rail is every configured source at zero, which is the state a client most needs to draw and the one an error would hide. This key is what says the counts are provisional. |
+| `sources` | object | never | The `agent:` rail. Additional facets arrive as sibling keys. |
+
+`sources`:
+
+| key | type | null? | |
+| --- | --- | --- | --- |
+| `keyword` | string | never | `agent:` — the token these chips write, so a client can label the section without hard-coding the grammar. |
+| `all` | object | never | `selected` is true exactly when the query names no source, which is the only state in which every source is in the answer. `query` is the text with every `agent:` token gone, exclusions included. |
+| `values` | array | never; may be empty | One chip per source the machine knows about, ordered by id so the rail does not reshuffle between runs. |
+
+One chip:
+
+| key | type | null? | |
+| --- | --- | --- | --- |
+| `value` | string | never | The source id, which is what `agent:` selects on and is permanent (ADR 16). |
+| `state` | string | never | `include` · `exclude` · `off`. Three states because the query has three things to say about a source: an excluded one drawn like an untouched one is filtering the reader cannot see. Clicking an excluded chip includes it — the rewrite strips the value from every token first, negated ones included. |
+| `coverage` | string | never | `live` · `missing` · `unconfigured` · `retired`, as `cs status` reports them. Read beside `conversations`: a configured source at zero is a broken importer, and a source nobody configured is a tool nobody uses. Drawn from the index alone the two are one absence, which is the failure `chat-search-a7k.29` exists to prevent. |
+| `conversations` | integer | never | What the index holds for it. Zero is an answer, not an absence. |
+| `query` | string | never | The whole query text after clicking this chip. |
+
+Only `agent:` has a rail. `dir:` wants a corpus-true project list (`chat-search-6eb.26`) and
+`date:` wants a toggling rule of its own — its tokens intersect rather than union, so the
+`agent:` verb is the wrong one for it. Both **already filter**: they are in the grammar, they
+are applied, and a client with an input box can type them. What they lack is a rail, and each
+arrives as a sibling key of `sources` when it gets one.
+
+---
+
 ## The nullable fields
 
 Six of them across the three row shapes, and in every case null is a fact about the conversation
@@ -369,7 +439,9 @@ see [`Sitting`](#sitting) for what that means for an id copied from one to the o
 
 `cs status`, `cs scan`, `cs index`, `cs archive`, `cs needs` and `cs explain` also take
 `--json`; those are operator output rather than a client seam, and nothing has been promised
-about them.
+about them. `cs facets --json` is a client seam and **is** promised — it has
+[a section above](#the-facet-rail--cs-facets---json) — because a GUI's facet bar is not
+optional chrome and the rules behind it are the query grammar's.
 
 ## Extending this contract
 

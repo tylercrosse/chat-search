@@ -363,6 +363,12 @@ flag. The cost is six reconciliation methods (`active_agent_filter`, `active_age
 `clear_explicit_filter_if_query_has_agent`). **Desugar CLI flags into the query string at
 startup and keep exactly one state.**
 
+**A second client, 2026-08-05 (`me9.8.5`).** The macOS app has the same bar and the same one
+state, and reaches it the only way a process outside this workspace can: `cs facets --json`
+projects the rail here and hands each chip the query text clicking it produces. Nothing on the
+Swift side assembles an `agent:` token, which is what keeps this section's rule true across the
+language boundary rather than only inside it. The shape is in docs/JSON-CONTRACT.md.
+
 **Done, 2026-08-01 (`me9.16`).** `App` has no source field: a chip click calls
 `Query::toggling`, which returns the query *text* with the `agent:` token added or taken back
 out, and the bar draws itself from `Query::selection`. So a source chosen from the bar is

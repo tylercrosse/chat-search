@@ -31,6 +31,10 @@ public struct QueryResult<Response: Envelope>: Sendable {
 public enum CsError: Error {
     case unhealthy(IndexHealth)
     case undecodable(String, Data)
+    /// `cs pick` refused: no such conversation, or a source that cannot open in the kind it was
+    /// asked for. Separate from `unhealthy` because neither is a statement about the index, and
+    /// classifying it as one would put "no index yet" on screen for a mistyped id.
+    case pickFailed(String)
 }
 
 /// Where `cs` is and which index it should read. Both overridable so a client can be pointed at
@@ -108,7 +112,7 @@ public struct CsClient: Sendable {
     /// same terms. An empty one marks nothing, which is the honest state for a conversation
     /// opened without a search behind it.
     public func show(_ convId: String, query: String = "") async throws -> Transcript {
-        try await read(arguments(show: convId, query: query)).body
+        try await decoded(arguments(show: convId, query: query)).value
     }
 
     public func arguments(show convId: String, query: String) -> [String] {
@@ -120,8 +124,58 @@ public struct CsClient: Sendable {
         return args
     }
 
+    /// The facet rail for a query — every source, what the query says about it, and the query
+    /// text clicking it produces (docs/JSON-CONTRACT.md).
+    ///
+    /// A second process beside the search rather than a field on its reply, for the reason that
+    /// contract gives: the census stats the source directories, so it would have to be a key
+    /// that is sometimes present, and a sometimes-absent key is a second type to a decoder.
+    /// Measured at ~9 ms, which a client can afford once per keystroke.
+    ///
+    /// It has no refusal path. `cs facets` answers with every configured source at zero rather
+    /// than failing when there is no index, because that is exactly the first-run state a rail
+    /// should be able to draw.
+    public func facets(_ query: String) async throws -> FacetRail {
+        var args = ["facets", query, "--json"]
+        if let db { args += ["--db", db.path] }
+        if let config { args += ["--config", config.path] }
+        return try await decoded(args).value
+    }
+
+    /// Record that a search ended in opening `convID`, and get back the line that reopens it.
+    ///
+    /// One call, because the open and the log event are one moment (docs/TUI-DESIGN.md §6). The
+    /// rank is recomputed on the far side against the *finished* query rather than taken from
+    /// the row's position in a typeahead list, which is what `chat-search-6eb.21` reads.
+    ///
+    /// `kind` names the destination already chosen from `Group.destinations`, so a source that
+    /// cannot offer it fails loudly instead of silently reopening somewhere else. `nil` records
+    /// the pick and prints nothing, which is the path for a destination this process opens
+    /// itself and for a conversation that has none.
+    public func pick(_ convID: String, query: String, limit: Int, kind: String?) async throws
+        -> String
+    {
+        var args = ["pick", convID, "--query", query, "--limit", String(limit)]
+        switch kind {
+        case let kind?: args += ["--in", kind]
+        case nil: args.append("--quiet")
+        }
+        if let db { args += ["--db", db.path] }
+        if let config { args += ["--config", config.path] }
+
+        let run = try await spawn(args)
+        guard run.exit == 0 else {
+            // Not an index-health question: `cs pick` fails when the id is not in the index or
+            // when the source cannot open in the kind that was asked for, and both are worth
+            // showing verbatim rather than classified.
+            let why = String(decoding: run.stderr, as: UTF8.self).trimmed
+            throw CsError.pickFailed(why.isEmpty ? "cs pick exited \(run.exit)" : why)
+        }
+        return String(decoding: run.stdout, as: UTF8.self).trimmed
+    }
+
     private func invoke<Response: Envelope>(_ args: [String]) async throws -> QueryResult<Response> {
-        let (response, run, decode): (Response, Run, Double) = try await read(args)
+        let (response, run, decode): (Response, Run, Double) = try await decoded(args)
         return QueryResult(
             response: response,
             timing: Timing(
@@ -129,14 +183,14 @@ public struct CsClient: Sendable {
                 serverMs: response.ms, bytes: run.stdout.count))
     }
 
-    /// Spawn, read the exit status as part of the interface, decode.
+    /// One round trip whose stdout is JSON: spawn, classify a refusal, decode, time the decode.
     ///
-    /// Generic over the body rather than over `Envelope`, because `cs show` answers with a
-    /// transcript — no `ms`, no `index_state` — and yet refuses with exactly the same shape as a
-    /// search does. That half of the contract is the half worth writing once: the classifier
-    /// below is what this client had instead of substring-matching another program's prose.
-    private func read<Body: Decodable & Sendable>(_ args: [String]) async throws
-        -> (body: Body, run: Run, decode: Double)
+    /// Shared by the two replies this app reads, because the refusal contract and the snake-case
+    /// key strategy are the seam's rules and not one command's — a second copy is a second place
+    /// for a client to start guessing at index health from prose, which is the defect
+    /// `IndexHealth.classify` exists to have removed.
+    private func decoded<Body: Decodable & Sendable>(_ args: [String]) async throws
+        -> (value: Body, run: Run, decodeMs: Double)
     {
         let run = try await spawn(args)
 

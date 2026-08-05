@@ -186,7 +186,11 @@ pub struct DirCoverage {
 }
 
 /// The directories a rail can offer, and the shape of what it leaves out.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// The default is what an index nobody can read holds: nothing, and nothing left out. Unlike a
+/// source census there is no config half to fall back on, so this is the whole of the honest
+/// answer in that case.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DirCensus {
     /// The busiest directories, most conversations first and ties broken by path so that the
     /// rail does not reshuffle between two runs over one index.

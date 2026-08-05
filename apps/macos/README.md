@@ -27,6 +27,10 @@ written once, and `poc/swift` consumes it so that `cs-spike contract` checks the
 this app is built on. The dependency points instrument at product; nothing here points back
 into `poc/`.
 
+**`Sources/CsTheme`** — the token layer, and a target of its own so that "a view may read a token
+and may not author one" is a thing the compiler enforces rather than a thing a review notices.
+See [the theme seam](#the-theme-seam) below.
+
 **`Sources/ChatSearch`** — the window, the model and the view. One `cs search --json` per
 keystroke with the previous one killed and no debounce, which is not an oversight:
 `chat-search-me9.22` measured fork/exec at 0.3 ms and the whole process boundary at 5–13 ms, so
@@ -36,6 +40,71 @@ scrolling the whole corpus against `LazyVStack`'s 65.6 MB and `VStack`'s 566 MB.
 is answered, so the app does not offer the other two.
 
 [`docs/JSON-CONTRACT.md`]: ../../docs/JSON-CONTRACT.md
+
+## The theme seam
+
+No view names a colour, a size or a face. Every one is a token read off the environment, and the
+values live in exactly one generated file:
+
+```bash
+python3 poc/ui/tokens.py terminal -o apps/macos/Sources/CsTheme/Tokens.swift
+cd apps/macos && swift run -c release chat-search --verify-theme
+```
+
+`Tokens.swift` is generated from `poc/ui/styles.css` and `poc/ui/directions.css` — the same files
+the prototype renders, read through the same cascade `palette.py --verify` reads them through —
+so there is one authored copy of this palette rather than two that agree until they don't. It is
+checked in because the app must build from a checkout with no Python in it, and it is provenance
+rather than a dependency: nothing in `apps/` reads `poc/` at build or at run time.
+
+**Changing the whole palette is one file and no views.** Not asserted — measured, by generating
+each of the other three directions over the shipped one:
+
+| direction | `git diff --shortstat` | builds | `--verify-theme` |
+| --- | --- | --- | --- |
+| `paper` | 1 file changed, 75 insertions(+), 75 deletions(−) | 0 warnings | holds |
+| `blueprint` | 1 file changed, 76 insertions(+), 76 deletions(−) | 0 warnings | holds |
+| `ink` | 1 file changed, 74 insertions(+), 74 deletions(−) | 0 warnings | holds |
+
+The generated file also declares which direction is `shipped`, which is why none of those touched
+a view: the name of the direction in force appears in that file and nowhere else.
+
+### Why `--verify-theme` and not a test
+
+There are no tests to put it in. This package builds against the Command Line Tools SDK, where
+neither `Testing` nor `XCTest` exists, so `swift test` cannot run at all — the same reason
+`cs-spike contract` is a subcommand. It re-measures what shipped, in both themes: the kind ramp
+at 2.2 / 4.0 / 7.2 / 13.0 against `--map-bg` with even ~1.8× steps, the three act shades ordered
+inside the tool band, and every text tier against the 4.5:1 AA floor on **both** grounds it lands
+on. That last one is not pedantry: `--ink-3` was fixed once against `--bg` and was still at
+4.23:1 on `--panel`, which is where most of that text actually is.
+
+It exists for the reason `palette.py --verify` exists. Solving a colour and writing it down are
+two events, and generating adds a third — so what ships is now two steps from what was solved,
+and neither step is checked by anything that reads Swift.
+
+### Adding a theme — Solarized, Gruvbox, one of your own
+
+Not yet possible without editing this app, and here is the honest shape of it.
+
+A theme is not a list of hexes here. Half of one is *solved*: the four message kinds have to sit
+on an even luminance ramp against the ribbon track, because hue is the channel that degrades
+fastest at the ~2px those bands are drawn at, and the quiet tier has to clear 4.5:1 at 9–11px.
+So the path for Solarized is to add its hues to `DIRECTIONS` in `poc/ui/palette.py`, let that
+solve the eight fenced tokens, write the rest into `directions.css`, and run `tokens.py`. A theme
+that skips the solve will fail `--verify-theme`, which is the check doing its job rather than
+being in the way.
+
+Three things this seam does **not** do yet, each filed:
+
+- **One theme per binary.** `Tokens.swift` holds the direction in force; picking between several
+  at runtime needs them to coexist, plus a flag and a preference. `chat-search-me9.8.9`.
+- **Nothing loads at runtime.** Dialling in type and spacing is edit, regenerate, rebuild, relaunch.
+  Reading a token set from a file would make it edit and relaunch. `chat-search-me9.8.10`.
+- **Padding is mostly still literal.** The row's rhythm is tokenised because a direction moves it
+  and it trades against rows-per-screen. The search bar's, the banner's and the footer's are not —
+  they are literal in `styles.css` too — so dialling those is still a view edit.
+  `chat-search-me9.8.11`.
 
 ## The four index states
 

@@ -1,5 +1,6 @@
 import AppKit
 import CsKit
+import CsTheme
 import Foundation
 import SwiftUI
 
@@ -20,6 +21,9 @@ struct Options {
     /// the instrument that first took it.
     var measure = false
     var interval = Duration.milliseconds(100)
+    /// Re-measure the shipped tokens and exit. Also not a user affordance: it is the gate, and it
+    /// is a flag rather than a test because the Command Line Tools SDK has no test framework in it.
+    var verifyTheme = false
 }
 
 func parse(_ argv: [String]) -> Options {
@@ -38,12 +42,14 @@ func parse(_ argv: [String]) -> Options {
         case "--limit": if let v = next(), let n = Int(v) { o.limit = n }
         case "--interval": if let v = next(), let n = Int(v) { o.interval = .milliseconds(n) }
         case "--measure": o.measure = true
+        case "--verify-theme": o.verifyTheme = true
         case "--help", "-h":
             print("""
                 chat-search [--db PATH] [--config PATH] [--bin PATH] [--limit N]
 
                   --measure            type the measurement phrases and print keystroke→frame
                   --interval MS        milliseconds between simulated keystrokes (default 100)
+                  --verify-theme       re-measure the shipped tokens and exit
                 """)
             exit(0)
         default: break
@@ -54,6 +60,10 @@ func parse(_ argv: [String]) -> Options {
 }
 
 let options = parse(Array(CommandLine.arguments.dropFirst()))
+
+// Before `cs` is looked for, and before there is a window: the tokens are checkable without an
+// index, and a gate that needed a built binary and a live archive would be a gate people skip.
+if options.verifyTheme { exit(ThemeCheck.run(.shipped)) }
 
 guard let binary = CsClient.locate(binary: options.binary) else {
     FileHandle.standardError.write(
@@ -80,6 +90,9 @@ final class AppHost: NSObject, NSApplicationDelegate {
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         window.title = "chat-search"
+        // The one colour SwiftUI does not own. It shows through for a frame during a live resize,
+        // and the system default is a grey nobody in this app chose.
+        window.backgroundColor = Theme.shipped.nsColor(.bg)
         window.center()
         let hosting = NSHostingView(rootView: SearchView(model: model))
         window.contentView = hosting

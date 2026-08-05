@@ -317,14 +317,29 @@ def resolve(direction, theme):
 
     Not a CSS engine — it only has to be right about single-class selectors carrying
     custom properties, which is all either file uses.
+
+    The tiers below are specificity, and they are tiers rather than document order
+    because the two disagree. `:root` appears twice in styles.css — once for the dark
+    colours at the top and once for the type scale and the geometry near the middle —
+    with `:root.light` sitting between them. Walking the file in order would let the
+    second `:root` overwrite the light theme, and would drop the type scale and the
+    geometry from the light theme entirely, since the light tier never included plain
+    `:root`. Nothing noticed while only colours were read back; `tokens.py` reads the
+    whole surface layer and would have emitted a light theme with no sizes in it.
     """
-    base_sel = ':root' if theme == 'dark' else ':root.light'
-    wanted = [base_sel, f'.theme-{theme}', f'.dir-{direction}',
-              f'.dir-{direction}.theme-{theme}']
-    tokens = {}
+    tiers = [
+        [':root'],
+        [':root.light', '.theme-light'] if theme == 'light' else ['.theme-dark'],
+        [f'.dir-{direction}'],
+        [f'.dir-{direction}.theme-{theme}'],
+    ]
+    blocks = []
     for path in ('styles.css', 'directions.css'):
-        for sel, decls in read_blocks(os.path.join(HERE, path)):
-            if sel in wanted:
+        blocks += read_blocks(os.path.join(HERE, path))
+    tokens = {}
+    for tier in tiers:
+        for sel, decls in blocks:
+            if sel in tier:
                 tokens.update(decls)
     return tokens
 

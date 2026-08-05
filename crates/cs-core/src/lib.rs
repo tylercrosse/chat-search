@@ -14,7 +14,9 @@
 //! answered once for the TUI, `cs show --json`, and everything downstream of that JSON.
 //! `inventory` is the third: which sources exist and how much of each one is indexed, joined
 //! here rather than in each client, from facts the caller supplies because this crate reads
-//! no config.
+//! no config. `facets` is what `inventory` and `query` make together — a facet rail already
+//! projected, so that a client in another process can draw one without owning a second copy
+//! of the grammar.
 //!
 //! `answer` is `blocks` for the other half of the interface: the reply to a search, owned here
 //! so that clients adapt to it rather than each assembling one (ADR 23). `search` ranks; the
@@ -31,6 +33,7 @@ pub mod blocks;
 pub mod build;
 pub mod destination;
 pub mod eval;
+pub mod facets;
 pub mod highlight;
 pub mod index;
 pub mod inventory;
@@ -50,6 +53,7 @@ pub use blocks::{Block, Density, Fold, MarkKind, Transcript, WireBlock};
 pub use build::{open_for_read, IndexBuild, IndexState, Reader, Unreadable};
 pub use destination::{destinations, Destination};
 pub use eval::{Grade, Judged, QueryScore, Report};
+pub use facets::{AllChip, ChipState, SourceChip, SourceFacet};
 pub use index::{
     built_by, ensure_current, open, record_importer_version, reset, write_conversations,
     write_conversations_with, IndexOptions, IndexStats, TOOL_TEXT_MAX,

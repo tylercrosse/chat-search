@@ -10,7 +10,6 @@ use std::collections::HashSet;
 
 use cs_core::querylog::{self, Event};
 use cs_core::{Answer, Group, Reader};
-use rusqlite::Connection;
 
 use crate::preview::Preview;
 use crate::rows::{self, Row};
@@ -727,7 +726,8 @@ mod tests {
             }],
             ..Default::default()
         };
-        let app = App::new(conn, &opts, Theme::plain()).unwrap();
+        let reader = Reader { conn, state: cs_core::IndexState::Ready };
+        let app = App::new(reader, &opts, Theme::plain()).unwrap();
         assert_eq!(app.facets.len(), 1, "an empty source is still a chip");
         assert_eq!(app.facets[0].id, "claude-code");
         assert_eq!(app.facets[0].conversations, 0);

@@ -91,7 +91,11 @@ let options = parse(Array(CommandLine.arguments.dropFirst()))
 
 // Before `cs` is looked for, and before there is a window: the tokens are checkable without an
 // index, and a gate that needed a built binary and a live archive would be a gate people skip.
-if options.verifyTheme { exit(ThemeCheck.run(.shipped)) }
+//
+// `as: .direction` is named rather than defaulted, here and everywhere else: what is compiled into
+// this binary is what the project ships, and shipping is what makes these measurements binding
+// (docs/DECISIONS.md ADR 25). A token set that arrived some other way is a different promise.
+if options.verifyTheme { exit(ThemeCheck.run(.shipped, as: .direction)) }
 
 guard let binary = CsClient.locate(binary: options.binary) else {
     FileHandle.standardError.write(

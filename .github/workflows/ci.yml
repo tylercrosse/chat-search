@@ -1,0 +1,92 @@
+name: CI
+
+# `pull_request` builds the *merge* commit, which is the check this repository was missing:
+# it compiles the branch against the target as it would land, not as it was written. Every
+# branch open on 2026-08-04 was green alone and four of the five defects existed only in the
+# combination (chat-search-u7c). `push` on main is the backstop for whatever reaches main
+# without a pull request.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A second push supersedes the run it interrupts. Letting both finish spends a runner to
+# report a stale answer for a branch that has already moved.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # cargo prefixes `warning` and `error` with ANSI colour, so a log grep anchored at `^`
+  # silently matches nothing. This is what makes the logs greppable by hand.
+  CARGO_TERM_COLOR: never
+  # AGENTS.md treats a warning as a failure; `-D` makes rustc agree rather than leaving it
+  # to whoever reads the log. Registry dependencies are unaffected — cargo builds those with
+  # `--cap-lints allow` — so this holds only this workspace's own code to it.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  gate:
+    name: gate (${{ matrix.os }})
+    # macOS is where this tool runs, where every branch is written, and the only platform
+    # with code of its own (`scutil` for the machine name, `open` for a destination), so a
+    # macOS-only break must not be able to land green. ubuntu is the cheaper, faster answer
+    # and keeps an accidental dependency on either platform visible instead of silent.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # rusqlite is `bundled`, so a cold cache compiles sqlite3.c from source every run.
+      # The key rotates on the lockfile; a compiler bump needs no key of its own, because
+      # cargo already fingerprints the rustc version and rebuilds what it invalidates.
+      - name: Cache cargo registry and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ matrix.os }}-cargo-
+
+      # `--locked` is a check in its own right: Cargo.lock is committed, so a branch that
+      # needs a different resolution has to say so in the diff rather than resolve one here.
+      - name: Build every target, warnings denied
+        run: cargo build --workspace --all-targets --locked
+
+      - name: Test
+        run: cargo test --workspace --locked
+
+  msrv:
+    name: msrv
+    # `rust-version` in Cargo.toml is a floor nothing enforces — declaring 1.89 and then
+    # building only on stable proves nothing about 1.89. Reading the number out of the
+    # manifest rather than repeating it here keeps the floor in exactly one place.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the toolchain Cargo.toml declares
+        run: |
+          msrv=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          if [ -z "$msrv" ]; then
+            echo "no rust-version in Cargo.toml; nothing to check against" >&2
+            exit 1
+          fi
+          echo "declared MSRV: $msrv"
+          rustup toolchain install "$msrv" --profile minimal --no-self-update
+          echo "MSRV=$msrv" >> "$GITHUB_ENV"
+
+      # `check`, not `build`: the floor question is whether the source compiles under that
+      # compiler, and `--all-targets` extends that to the tests without running them. The
+      # gate above is what proves they pass.
+      - name: Check against the floor
+        run: rustup run "$MSRV" cargo check --workspace --all-targets --locked

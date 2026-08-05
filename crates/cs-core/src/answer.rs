@@ -54,8 +54,14 @@ const V: u32 = 1;
 
 /// What `cs search --json` emits, and what every other client reads.
 ///
-/// The field order here is the order on the wire, envelope first and results last, so a human
-/// reading the raw JSON meets the summary before the payload.
+/// Declared envelope first and results last so the struct reads in the order the reply is
+/// understood. That is *not* the order a client sees: the CLI renders through
+/// `serde_json::to_value`, whose `Map` is a `BTreeMap` in this workspace, so keys arrive
+/// alphabetically — `count` first and `v` last, with `results` in the middle. Only a serializer
+/// that walks the struct directly would honour the declaration order, and neither surface does.
+///
+/// `docs/JSON-CONTRACT.md` is where that is stated for clients, along with the instruction that
+/// follows from it: decode by name, because the order is an artefact and not a promise.
 #[derive(Debug, Clone, Serialize)]
 pub struct Answer {
     pub v: u32,

@@ -46,6 +46,14 @@ pub struct Opts {
     pub source: Option<String>,
     /// Conversations per search. The header reports this against the corpus total.
     pub limit: i64,
+    /// Every source the machine is set up to capture, and every location detected here that
+    /// nothing claims — passed in for the same reason the index path and the log sink are.
+    /// This crate cannot see the config (§1), and the index alone cannot tell a source that
+    /// produced nothing from one nobody configured (`a7k.29`).
+    ///
+    /// Empty is a usable answer, not a broken one: the facet bar then lists exactly what the
+    /// index holds, which is what it did before any of this existed.
+    pub watched: Vec<cs_core::Watched>,
 }
 
 /// How the TUI came back. `cs` turns [`Exit::Open`] into the actual open action; the TUI

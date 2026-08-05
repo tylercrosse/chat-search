@@ -42,11 +42,15 @@ pub struct App {
     /// Written only by a search that succeeded, so a failed one leaves the previous answer
     /// beside the rows it describes rather than claiming the query matched nothing.
     pub answer: Answer,
-    /// Per-source counts for the facet bar, index-derived and sorted for a stable order.
+    /// Every source the machine knows about, for the facet bar, with the count the index
+    /// holds for each.
     ///
-    /// A configured source holding zero rows is absent here, which is exactly the gap
-    /// `me9.14` closes — it needs the config, which this crate deliberately cannot see (§1).
-    pub facets: Vec<(String, i64)>,
+    /// Not read from the index: a configured source holding zero rows is invisible there, and
+    /// that absence is the whole of `me9.14`'s bug. `cs_core::inventory` joins the index
+    /// against what `cs` knows of the config ([`crate::Opts::watched`]), so a source that
+    /// produced nothing still gets a chip and still carries why (`a7k.29`). Drawing the three
+    /// states differently is `me9.14`; this is the answer it draws from.
+    pub facets: Vec<cs_core::SourceCoverage>,
     /// Captured per search rather than per frame, so every age on screen is measured from the
     /// same instant and the column cannot renumber itself mid-scroll.
     pub now: i64,
@@ -88,7 +92,9 @@ impl App {
             .conn
             .query_row("SELECT COUNT(*) FROM conversation", [], |r| r.get(0))
             .unwrap_or(0);
-        let facets = read_facets(&reader.conn);
+        // A read failure yields no facets rather than failing startup: the bar is a census,
+        // and losing it costs orientation, not the ability to search.
+        let facets = cs_core::inventory::of(&reader.conn, &opts.watched).unwrap_or_default();
         // `--source` is desugared here, once, and never again: `with_source` rewrites the
         // query *text*, so what lands in the box is a query the user could have typed and the
         // flag has nowhere left to live. This is the whole of the flag's life in this crate.
@@ -487,21 +493,6 @@ fn byte_index(s: &str, char_idx: usize) -> usize {
     s.char_indices().nth(char_idx).map(|(i, _)| i).unwrap_or(s.len())
 }
 
-/// Per-source conversation counts, ordered by id so the facet bar never reshuffles between
-/// runs. A read failure yields no facets rather than failing startup: the bar is a census,
-/// and losing it costs orientation, not the ability to search.
-fn read_facets(conn: &Connection) -> Vec<(String, i64)> {
-    let Ok(mut stmt) =
-        conn.prepare("SELECT source, COUNT(*) FROM conversation GROUP BY source ORDER BY source")
-    else {
-        return Vec::new();
-    };
-    let Ok(rows) = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))) else {
-        return Vec::new();
-    };
-    rows.filter_map(Result::ok).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,8 +564,7 @@ mod tests {
             .collect();
         cs_core::write_conversations(&mut conn, &built).unwrap();
         let reader = Reader { conn, state: cs_core::IndexState::Ready };
-        App::new(reader, &crate::Opts { query: String::new(), source: None, limit: 50 }, Theme::plain())
-            .unwrap()
+        App::new(reader, &crate::Opts { limit: 50, ..Default::default() }, Theme::plain()).unwrap()
     }
 
     #[test]
@@ -722,6 +712,29 @@ mod tests {
     }
 
     #[test]
+    fn the_facet_bar_carries_a_configured_source_the_index_never_saw() {
+        // The bar was a census of the index, so a source whose importer threw produced no chip
+        // at all and searching for it looked like a tool you had never used. The states come
+        // from the caller because this crate cannot read a config (§1), and the count comes
+        // from the index — which is the join, not two facts kept side by side.
+        let conn = cs_core::open(":memory:").unwrap();
+        let opts = crate::Opts {
+            limit: 50,
+            watched: vec![cs_core::Watched {
+                id: "claude-code".into(),
+                configured: true,
+                present: true,
+            }],
+            ..Default::default()
+        };
+        let app = App::new(conn, &opts, Theme::plain()).unwrap();
+        assert_eq!(app.facets.len(), 1, "an empty source is still a chip");
+        assert_eq!(app.facets[0].id, "claude-code");
+        assert_eq!(app.facets[0].conversations, 0);
+        assert_eq!(app.facets[0].coverage, cs_core::Coverage::Live);
+    }
+
+    #[test]
     fn clicking_a_facet_mid_query_does_not_disturb_what_is_being_typed() {
         // The filter token goes in front of the free text, so the caret parked at the end of
         // the box is still at the end of the *word*, and the ranking of that word is unmoved.
@@ -743,7 +756,12 @@ mod tests {
         // that the TUI has no notion of a source flag at all — which is the whole point.
         let conn = cs_core::open(":memory:").unwrap();
         let reader = Reader { conn, state: cs_core::IndexState::Ready };
-        let opts = crate::Opts { query: "alpha".into(), source: Some("Codex".into()), limit: 50 };
+        let opts = crate::Opts {
+            query: "alpha".into(),
+            source: Some("Codex".into()),
+            limit: 50,
+            ..Default::default()
+        };
         let mut app = App::new(reader, &opts, Theme::plain()).unwrap();
         assert_eq!(app.query, "agent:codex alpha");
         assert_eq!(app.selected_sources().include, ["codex"]);

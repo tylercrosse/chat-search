@@ -32,12 +32,18 @@ pub fn run(
         }
     };
 
+    // The facet bar's other half. The TUI can count what the index holds; it cannot know that
+    // a source holding nothing is configured and broken rather than a tool nobody uses, and
+    // that is a question about the config, which stops here (§1).
+    let watched = crate::inventory::watched(&cfg, &cs_archive::drift::detect(&cfg.sources));
+
     // Unlike `cs pick`, the TUI does not recompute the result list to find the rank — it
     // built the list, so it knows where the selection sat and emits the event itself.
     let opts = cs_tui::Opts {
         query: String::new(),
         source: source.map(String::from),
         limit,
+        watched,
     };
 
     match cs_tui::run(db_path, &mut sink, opts)? {

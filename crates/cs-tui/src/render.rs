@@ -142,8 +142,10 @@ fn search(frame: &mut Frame, area: Rect, app: &App) {
 /// case-insensitive match, for exactly that reason — `filter_sql` compares `c.source` to the
 /// lowercased value, so a chip whose id the filter would miss must not claim to be on.
 ///
-/// Index-derived for now, so a configured source holding zero rows is still invisible here —
-/// that is `me9.14`, and it needs config the TUI deliberately does not have (§1).
+/// Every source the machine knows about since `a7k.29`, not only the ones that produced rows,
+/// so a configured source holding zero conversations has a chip reading `· 0` instead of no
+/// chip at all. Drawing the three coverage states differently — dim, marked, uncounted — is
+/// `me9.14`; what it needs is already in [`crate::state::App::facets`].
 fn filters(frame: &mut Frame, area: Rect, app: &App) {
     let selected = app.selected_sources();
     let mut spans = Vec::new();
@@ -164,7 +166,7 @@ fn filters(frame: &mut Frame, area: Rect, app: &App) {
                 } else {
                     theme::source_style(&s)
                 };
-                let count = app.facets.iter().find(|(f, _)| *f == s).map_or(0, |(_, c)| *c);
+                let count = app.facets.iter().find(|f| f.id == s).map_or(0, |f| f.conversations);
                 spans.push(Span::raw(" "));
                 spans.push(Span::styled(format!(" {} ", theme::source_badge(&s)), style));
                 spans.push(Span::styled(format!("· {count}"), app.theme.dim));
@@ -238,11 +240,11 @@ pub fn facet_boxes(app: &App) -> Vec<(Option<String>, u16, u16)> {
     let all = " All ";
     out.push((None, x, all.len() as u16));
     x += all.len() as u16;
-    for (source, count) in &app.facets {
-        let label = format!(" {} ", theme::source_badge(source));
-        let tail = format!("· {count}");
+    for f in &app.facets {
+        let label = format!(" {} ", theme::source_badge(&f.id));
+        let tail = format!("· {}", f.conversations);
         x += 1;
-        out.push((Some(source.clone()), x, (label.len() + tail.len()) as u16));
+        out.push((Some(f.id.clone()), x, (label.len() + tail.len()) as u16));
         x += (label.len() + tail.len()) as u16;
     }
     out

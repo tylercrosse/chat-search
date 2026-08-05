@@ -400,12 +400,19 @@ One directory:
 | `conversations` | integer | never | What the index holds for it. |
 | `query` | string | never | The whole query text after clicking. A second directory widens, as a second source does. |
 
-**A directory whose click cannot be written is not offered.** No `dir:` token can carry a path
-with a space or a comma — whitespace separates words and commas separate values, so
-`dir:~/Mobile Documents` comes back as a filter *and* a search term. Each click is reparsed
-before it is handed over and the directory is dropped if the round trip does not name it, which
-costs a chip and saves a chip that lies. `indexed` still counts it. `chat-search-me9.8.16` is the
-quoting that would make it reachable.
+**A directory whose click cannot be written is not offered.** Each click is reparsed before it is
+handed over and the directory is dropped if the round trip does not name it, which costs a chip
+and saves a chip that lies; `indexed` still counts it either way. A client needs to handle an
+empty `values` under a non-zero `indexed`, and needs nothing else: the check is the grammar's own
+reading rather than a list of characters, so what it drops changes as the grammar does.
+
+**A value that needs quoting arrives quoted** (`chat-search-me9.8.16`). Whitespace ends a word and
+a comma ends a value, so `dir:~/Mobile Documents` used to come back as a filter *and* a search
+term and such a directory had no chip at all. `query` now reads `dir:"~/Mobile Documents"`, and
+the quoting is inside the string a client pastes into its box — there is nothing to add, strip or
+escape on the way. A value that does not need quotes does not get them. This is not a `v` bump:
+`query` has always been an opaque string to paste whole, and a client that pastes it goes on
+working. What moved is that the rail now offers chips it used to withhold.
 
 **A value the query names and this reply has no chip for** — a directory outside the busiest,
 `date:yesterday`, a bound someone typed — lights nothing and turns that section's `all.selected`

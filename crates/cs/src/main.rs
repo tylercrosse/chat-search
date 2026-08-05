@@ -88,6 +88,10 @@ enum Command {
         /// What to search for, filters included: `agent:claude,codex`, `-agent:codex`,
         /// `dir:!web-app`, `date:<3h`, `date:today`.
         ///
+        /// A value holding a space or a comma goes in double quotes — `dir:"~/Mobile
+        /// Documents"` — since without them whitespace ends the word and a comma ends the
+        /// value. Quote the value, not the whole token, and mind your shell's quoting too.
+        ///
         /// A filter value that names nothing selectable is reported rather than applied, and
         /// a half-typed one is searched as text — never an error.
         // clap renders the doc comment above as `--help`, so the reason lives down here

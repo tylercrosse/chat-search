@@ -34,12 +34,10 @@ struct SearchView: View {
         .frame(minWidth: 720, minHeight: 480)
         .background(theme.color(.bg))
         .onAppear { focused = true }
-        // Bound here rather than on the list, because the field keeps focus for the whole
-        // session — one process per keystroke means there is never a moment to hand it away —
-        // and a key press reaches the focused view first. This is the TUI's arrangement, where
-        // there is one input box and Enter on it opens the cursor's row.
-        .onKeyPress(.upArrow) { model.moveSelection(by: -1); return .handled }
-        .onKeyPress(.downArrow) { model.moveSelection(by: 1); return .handled }
+        // The fallback half of the arrangement below: this fires only when the focused view did
+        // not handle Return, which is exactly the case where a click has moved focus into the
+        // list. When the field has it — the ordinary state — `onSubmit` gets there first and
+        // consumes it, so the two are mutually exclusive rather than both firing.
         .onKeyPress(.return) { model.openSelected(); return .handled }
     }
 
@@ -61,6 +59,18 @@ struct SearchView: View {
                 .foregroundStyle(theme.color(.ink))
                 .focused($focused)
                 .onChange(of: model.query) { model.queryChanged() }
+                // The TUI's arrangement: one input box that never gives up focus, arrows moving
+                // the cursor in the list beside it, and Enter opening what the cursor is on. The
+                // bindings are on the field rather than on the list for that reason — the field
+                // is the focused view, and a key reaches it first.
+                //
+                // Return goes through `onSubmit` and not `onKeyPress`, because a text field
+                // consumes Return itself and `onSubmit` is the seam it consumes it into. The
+                // arrows have no such seam and no default this app wants, so they are read
+                // directly.
+                .onSubmit { model.openSelected() }
+                .onKeyPress(.upArrow) { model.moveSelection(by: -1); return .handled }
+                .onKeyPress(.downArrow) { model.moveSelection(by: 1); return .handled }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 7)

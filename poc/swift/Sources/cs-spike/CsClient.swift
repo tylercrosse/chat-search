@@ -21,8 +21,10 @@ struct Timing: Sendable {
     var overhead: Double { total - serverMs }
 }
 
-struct QueryResult: Sendable {
-    var response: SearchResponse
+/// Generic over the envelope, because `--flat` answers a different question and has a different
+/// shape — but the same round trip and the same clock around it.
+struct QueryResult<Response: Envelope>: Sendable {
+    var response: Response
     var timing: Timing
 }
 
@@ -72,27 +74,41 @@ struct CsClient: Sendable {
         return args
     }
 
-    /// Cancellable: a superseded keystroke terminates its process rather than waiting for it.
-    /// Without this, typing eight characters leaves eight `cs` processes competing for the same
-    /// 324 MB index and the last one — the only one whose answer is wanted — finishes last.
-    func search(_ query: String, limit: Int = 60, prefix: Bool = true, flat: Bool = false)
-        async throws -> QueryResult
+    /// Matching conversations. Cancellable: a superseded keystroke terminates its process rather
+    /// than waiting for it. Without this, typing eight characters leaves eight `cs` processes
+    /// competing for the same 324 MB index and the last one — the only one whose answer is
+    /// wanted — finishes last.
+    func search(_ query: String, limit: Int = 60, prefix: Bool = true) async throws
+        -> QueryResult<SearchResponse>
     {
-        let args = arguments(query: query, limit: limit, prefix: prefix, flat: flat)
+        try await invoke(arguments(query: query, limit: limit, prefix: prefix, flat: false))
+    }
+
+    /// Matching messages, ungrouped. A separate call and not a flag on the one above, because it
+    /// comes back as a different envelope — see `FlatResponse`.
+    func searchFlat(_ query: String, limit: Int = 60, prefix: Bool = true) async throws
+        -> QueryResult<FlatResponse>
+    {
+        try await invoke(arguments(query: query, limit: limit, prefix: prefix, flat: true))
+    }
+
+    private func invoke<Response: Envelope>(_ args: [String]) async throws -> QueryResult<Response> {
         let run = try await spawn(args)
 
+        // The refusal is on stdout with the exit status, so both are needed to say what happened.
         guard run.exit == 0 else {
             throw CsError.unhealthy(
                 IndexHealth.classify(
-                    stderr: String(decoding: run.stderr, as: UTF8.self), exitCode: run.exit))
+                    stdout: run.stdout, stderr: String(decoding: run.stderr, as: UTF8.self),
+                    exitCode: run.exit))
         }
 
         let t = ContinuousClock.now
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
-        let response: SearchResponse
+        let response: Response
         do {
-            response = try decoder.decode(SearchResponse.self, from: run.stdout)
+            response = try decoder.decode(Response.self, from: run.stdout)
         } catch {
             throw CsError.undecodable(String(describing: error), run.stdout)
         }

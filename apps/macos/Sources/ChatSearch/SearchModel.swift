@@ -42,6 +42,10 @@ final class SearchModel {
     private(set) var openFailure: String?
 
     let client: CsClient
+    /// The drawer beside the list. Held here rather than in the view because the query and what
+    /// the transcript was marked against have to be one fact: a drawer marked against a query the
+    /// list has moved past would highlight words the rows no longer claim to have matched.
+    let reader: ReaderModel
     let limit: Int
     /// Set only by `--measure`. The honest end of a keystroke is a frame and only the display
     /// link knows when one happened, so the measurement needs a hook here — but a display link
@@ -55,6 +59,7 @@ final class SearchModel {
 
     init(client: CsClient, limit: Int = 60) {
         self.client = client
+        self.reader = ReaderModel(client: client)
         self.limit = limit
     }
 
@@ -62,6 +67,10 @@ final class SearchModel {
 
     func queryChanged() {
         let text = query
+        // The open conversation is re-marked against the same query, on the same keystroke. Two
+        // processes rather than one, both cancellable; a drawer that lagged the list would be
+        // showing highlights for a question nobody is asking any more.
+        reader.queryChanged(text)
         openFailure = nil
         // Killing the superseded process rather than waiting for it. Without this, typing eight
         // characters leaves eight `cs` processes competing for the same index and the last one —

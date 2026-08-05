@@ -24,6 +24,12 @@ struct Options {
     /// Re-measure the shipped tokens and exit. Also not a user affordance: it is the gate, and it
     /// is a flag rather than a test because the Command Line Tools SDK has no test framework in it.
     var verifyTheme = false
+    /// Search, open the first result and draw the window to a PNG, then quit. The third
+    /// non-affordance, and the only way to check the reader from a script: what it draws is a
+    /// picture, and no exit code describes one.
+    var shot = false
+    var shotQuery = "borrow checker"
+    var shotPath = "/tmp/chat-search.png"
     /// The window's opening size. A verification affordance in the same family as the three
     /// above: the row's column plan has to hold at several widths (`chat-search-me9.8.2`), and a
     /// window that always opens at one size makes checking that a manual drag nobody repeats.
@@ -48,6 +54,9 @@ func parse(_ argv: [String]) -> Options {
         case "--measure": o.measure = true
         case "--size": if let v = next(), let size = parseSize(v) { o.size = size }
         case "--verify-theme": o.verifyTheme = true
+        case "--shot": o.shot = true
+        case "--query": if let v = next() { o.shotQuery = v }
+        case "--out": if let v = next() { o.shotPath = v }
         case "--help", "-h":
             print("""
                 chat-search [--db PATH] [--config PATH] [--bin PATH] [--limit N]
@@ -55,6 +64,9 @@ func parse(_ argv: [String]) -> Options {
                   --measure            type the measurement phrases and print keystroke→frame
                   --interval MS        milliseconds between simulated keystrokes (default 100)
                   --verify-theme       re-measure the shipped tokens and exit
+                  --shot               search, open the first result, write the window to --out
+                  --query TEXT         what --shot searches for (default "borrow checker")
+                  --out PATH           where --shot writes its PNG (default /tmp/chat-search.png)
                   --size WxH           open the window at this size (default 900x620)
                 """)
             exit(0)
@@ -116,7 +128,16 @@ final class AppHost: NSObject, NSApplicationDelegate {
         // A scripted run does not steal focus — `.accessory` above — which also keeps the number
         // comparable with `poc/swift/RESULTS.md` §1, taken the same way. A latency measured in a
         // frontmost app and one measured in a background app are not the same measurement.
-        if !options.measure { NSApp.activate(ignoringOtherApps: true) }
+        if !scripted { NSApp.activate(ignoringOtherApps: true) }
+
+        if options.shot {
+            Task { @MainActor in
+                await Measure.shot(
+                    model: model, window: window, query: options.shotQuery, to: options.shotPath)
+                NSApp.terminate(nil)
+            }
+            return
+        }
 
         guard options.measure else { return }
         let frames = FrameClock()
@@ -130,10 +151,14 @@ final class AppHost: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
+
+    /// Nobody is typing into this run. Both scripted modes stay out of the front so they can be
+    /// run beside whatever a person is actually doing.
+    private var scripted: Bool { options.measure || options.shot }
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(options.measure ? .accessory : .regular)
+app.setActivationPolicy(options.measure || options.shot ? .accessory : .regular)
 let host = AppHost(
     model: SearchModel(client: CsClient(binary: binary, db: options.db, config: options.config),
         limit: options.limit),

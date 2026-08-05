@@ -284,6 +284,59 @@ extension String {
         else { return nil }
         return loC..<hiC
     }
+
+    /// The string cut into marked and unmarked stretches, in reading order.
+    ///
+    /// Every renderer that draws a highlight needs this and none of them should own it: the
+    /// conversion from the envelope's units happens once, in `range(of:in:)` above, and this only
+    /// walks the results. A span this client cannot honour is dropped rather than clamped, which
+    /// draws that stretch unmarked — the contract's own instruction, because no mark is a visible
+    /// loss and a mark in the wrong place is an invisible lie.
+    ///
+    /// Sorted and merged rather than trusted: core emits spans in order and without overlap
+    /// today, and a renderer that assumed both would garble the text on the day one arrived
+    /// otherwise, which is the failure mode nobody would think to look for.
+    public func runs(marking spans: [Span], in units: MarkOffsets) -> [TextRun] {
+        let ranges = spans
+            .compactMap { range(of: $0, in: units) }
+            .filter { !$0.isEmpty }
+            .sorted { $0.lowerBound < $1.lowerBound }
+
+        var out: [TextRun] = []
+        var cursor = startIndex
+        for range in ranges {
+            if range.upperBound <= cursor { continue }
+            let start = Swift.max(range.lowerBound, cursor)
+            if start > cursor { out.append(TextRun(text: String(self[cursor..<start]), marked: false)) }
+            out.append(TextRun(text: String(self[start..<range.upperBound]), marked: true))
+            cursor = range.upperBound
+        }
+        if cursor < endIndex { out.append(TextRun(text: String(self[cursor...]), marked: false)) }
+        return out
+    }
+
+    /// The same text with every line break spent as a space, for a one-line form of a message.
+    ///
+    /// Spelled in bytes rather than as a string replacement, and that is the whole point: one
+    /// byte in, one byte out, so every offset in `marks` still names the same characters
+    /// afterwards. `replacingOccurrences(of: "\n", with: " ")` would not — Swift reads `\r\n` as
+    /// a single `Character`, so it would leave that pair alone and move every offset after it.
+    public var lineBreaksAsSpaces: String {
+        String(decoding: utf8.map { $0 == 0x0a || $0 == 0x0d ? 0x20 : $0 }, as: UTF8.self)
+    }
+}
+
+/// One stretch of text and whether the query matched inside it — what `runs(marking:in:)` hands
+/// a renderer, so that turning a match into a colour, an underline or a terminal modifier is the
+/// only decision left to make.
+public struct TextRun: Sendable, Equatable {
+    public let text: String
+    public let marked: Bool
+
+    public init(text: String, marked: Bool) {
+        self.text = text
+        self.marked = marked
+    }
 }
 
 /// The body `cs` puts on stdout in place of an envelope when it refuses to search. The nonzero

@@ -105,6 +105,25 @@ public struct CsClient: Sendable {
         try await invoke(arguments(query: query, limit: limit, prefix: prefix, flat: true))
     }
 
+    /// `cs show <id> <query> --json`: one conversation, whole.
+    ///
+    /// The query is passed rather than dropped so that a highlight in the transcript means what
+    /// it means in the results list — core resolves it through the same grammar and marks the
+    /// same terms. An empty one marks nothing, which is the honest state for a conversation
+    /// opened without a search behind it.
+    public func show(_ convId: String, query: String = "") async throws -> Transcript {
+        try await decoded(arguments(show: convId, query: query)).value
+    }
+
+    public func arguments(show convId: String, query: String) -> [String] {
+        // The query is positional and defaulted, so it is passed even when empty rather than
+        // omitted: `cs show <id> --json` would parse `--json` into the query slot.
+        var args = ["show", convId, query, "--json"]
+        if let db { args += ["--db", db.path] }
+        if let config { args += ["--config", config.path] }
+        return args
+    }
+
     /// The facet rail for a query — every source, what the query says about it, and the query
     /// text clicking it produces (docs/JSON-CONTRACT.md).
     ///

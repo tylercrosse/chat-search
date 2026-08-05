@@ -386,7 +386,12 @@ pub struct Transcript {
     pub messages: Vec<WireBlock>,
 }
 
-/// One block on the wire: everything stored, plus the two answers core owes a client.
+/// One block on the wire: everything stored, plus the four answers core owes a client.
+///
+/// The four are this module's opening paragraph read out as fields — which messages are drawn,
+/// which band each sits in, which fold by default, and which matches may claim to be the reason
+/// a conversation ranked. Each is a rule a client would otherwise restate, and each restatement
+/// is a chance for two surfaces to draw different conversations out of the same bytes.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WireBlock {
     #[serde(flatten)]
@@ -397,6 +402,22 @@ pub struct WireBlock {
     pub drawn: bool,
     /// [`Block::mark_kind`], same reason.
     pub mark_kind: MarkKind,
+    /// [`Block::band`] — the same four names `cs search --json` already puts on a row's
+    /// `kind_runs`, said per message because a reader draws bands where a strip draws runs.
+    ///
+    /// A client cannot spell [`band`] for itself without also owning the decisions that make it
+    /// right: that `system` prose is the agent's side rather than a fifth stripe, and that a
+    /// call and its result are one stretch of traffic. Both were already re-derived once, in the
+    /// prototype's JavaScript.
+    pub band: Band,
+    /// How this block folds when the reader has not said otherwise —
+    /// [`Density::default_fold`] at [`Density::Full`], which is the density a reader opens at.
+    ///
+    /// A default and never a state: an explicit per-message fold beats it, and holding that
+    /// override is the client's job because it is session state rather than a property of the
+    /// conversation. [`Density::Outline`] is not answered here — an outline row needs the
+    /// collapsed *form* as well as the fold, and that is chat-search-me9.20.
+    pub fold: Fold,
 }
 
 impl Transcript {
@@ -440,6 +461,8 @@ impl Transcript {
                 .map(|block| WireBlock {
                     drawn: block.drawn(),
                     mark_kind: block.mark_kind(),
+                    band: block.band(),
+                    fold: Density::Full.default_fold(&block.kind),
                     block,
                 })
                 .collect(),
@@ -632,6 +655,38 @@ mod tests {
         // that exists only because Rust needed somewhere to put two computed fields.
         assert_eq!(msgs[0]["kind"], "prose");
         assert_eq!(msgs[0]["msg_id"], "a");
+    }
+
+    #[test]
+    fn the_wire_form_also_answers_band_and_fold_so_a_reader_derives_neither() {
+        // The other two rules a client would otherwise restate. `band` is what colours the
+        // gutter spine beside a message and `fold` is what makes a 900-message agent session
+        // legible; a client that worked either out for itself would be a second copy of §8,
+        // free to disagree with the TUI about what the same conversation looks like.
+        let mut failed = block("tool_result", "tool", "r", "error: no such file");
+        failed.is_error = true;
+        let t = Transcript::of(
+            "claude-code:abc",
+            &[],
+            vec![
+                block("prose", "user", "a", "why is this slow"),
+                block("prose", "assistant", "b", "let me look"),
+                block("tool_call", "assistant", "c", "Bash\n{\"command\":\"ls\"}"),
+                failed,
+                block("reasoning", "assistant", "e", "**Planning**"),
+            ],
+            None,
+        );
+        let v = serde_json::to_value(&t).expect("the transcript is plain data");
+        let msgs = v["messages"].as_array().expect("an array");
+        // The same four names `kind_runs` already uses, so a client colours a strip and a spine
+        // off one vocabulary rather than two that happen to agree today.
+        let bands: Vec<&str> = msgs.iter().map(|m| m["band"].as_str().unwrap()).collect();
+        assert_eq!(bands, ["user", "agent", "tool", "tool", "reasoning"]);
+        // Both sides of the prose expand: the fold is by kind, so neither role is demoted into a
+        // one-liner the other is spared.
+        let folds: Vec<&str> = msgs.iter().map(|m| m["fold"].as_str().unwrap()).collect();
+        assert_eq!(folds, ["expanded", "expanded", "collapsed", "collapsed", "collapsed"]);
     }
 
     #[test]

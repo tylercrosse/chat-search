@@ -237,9 +237,26 @@ timestamps, not a fact the export recorded, which is why it is reported here ins
 folded silently into the row. It has no id and never gets one: an id derived from a gap
 threshold would change the day the threshold did, and conversation ids are permanent (ADR 16).
 
-`cs show <conv_id>` opens the *opening record*, not the sitting — the row says 22 messages and
-the reader says 2. That disagreement is `chat-search-o1i.8`, and until it closes a client that
-draws a sitting should expect the two halves to differ.
+**Every member opens the whole sitting, and the two halves agree** (`chat-search-o1i.8`).
+`cs show` and `cs explain` resolve their argument the same way the ranker groups it, so
+`cs show <members[7]>` renders one continuous transcript of every record, in the sitting's
+order, and its message count is the row's `msg_count`. Pick any member: the id is real, and none
+of them is a worse choice than the first.
+
+Two consequences for a client that holds a member id:
+
+- **The transcript names the opener, not the id you asked for.** `Transcript.conv_id` and
+  `Explain.conv_id` come back as `members[0]` — the same id the row carries — because that is
+  what the answer is about. Do not assume the reply echoes the request.
+- **`Transcript.seq` is the position in the sitting**, not in the record, which is the
+  coordinate space `Group.match_seqs` already used. The two line up; the record a message came
+  from is still recoverable from its `msg_id`.
+
+`cs show --json` carries a `sitting` of this same shape, so the seam survives the fold. Those
+records were separate HTTP requests with no shared context on Google's side, and a client that
+wants to draw a light rule between them has what it needs — but the fold is not structural, and
+a reader who does not care never has to see it, which is the whole point of putting the chat
+back together.
 
 ## `Run`
 
@@ -343,10 +360,12 @@ Documented rather than changed, because changing them changes a published interf
 ## Not covered here
 
 `cs show --json` is the second client contract ADR 12 published, and it has no written
-statement of its shape either — `chat-search-me9.34`. Nothing in it is ever null, which is a
-sentence worth writing down rather than deriving from Rust. The two contracts now agree on the
-things they share: both carry a `v`, and both name their offset encoding on the wire as
-`mark_offsets`.
+statement of its shape either — `chat-search-me9.34`. One field in it is nullable and the rest
+never are: `sitting` is null for every conversation that is one conversation, which is the whole
+corpus bar the folded Takeout records, and the sentence is worth writing down rather than
+deriving from Rust. The two contracts now agree on the things they share: both carry a `v`, both
+name their offset encoding on the wire as `mark_offsets`, and both answer for the same unit —
+see [`Sitting`](#sitting) for what that means for an id copied from one to the other.
 
 `cs status`, `cs scan`, `cs index`, `cs archive`, `cs needs` and `cs explain` also take
 `--json`; those are operator output rather than a client seam, and nothing has been promised

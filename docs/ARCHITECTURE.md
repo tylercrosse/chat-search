@@ -248,17 +248,19 @@ Five things read as finished from either end and are not. They are here because 
 only place that can say so: the schema looks complete, the code compiles, and the gap is a
 missing edge rather than a missing file.
 
-- **A sitting is a search result nothing can open (chat-search-o1i.5).** `cs_core::sittings`
+- **A sitting opens, and nothing says it is one (chat-search-o1i.9).** `cs_core::sittings`
   reads Google's activity log back as the chats it was, so a `cs search` row can stand for
   eleven conversations and reports its counts that way — 1,271 activity records come back as
-  462 rows. `cs show` takes a conversation id and there is no such thing as a sitting id, by
-  design (ADR 16), so opening that row renders the two messages of the record that opened it
-  while the row above it said twenty-two. `cs explain` has the same seam. Nothing draws
-  `Group::sitting` either, so the reconstruction is not visibly a reconstruction:
-  `grep -rn "sitting:" crates/cs-tui crates/cs --include='*.rs'` returns two `sitting: None`
-  test fixtures and no reader. Filed as chat-search-o1i.8 and chat-search-o1i.9. It fails in
-  the safe direction — a row promises more than it opens, rather than hiding something — but
-  it is still two commands disagreeing about what a result is.
+  462 rows. Opening one used to render the two messages of the record that opened it while the
+  row above said twenty-two; `cs show` and `cs explain` now resolve their argument through
+  `sittings::resolve` and answer for the same unit the ranker grouped, from any member id
+  (chat-search-o1i.8). What is still missing is the *saying so*: no surface draws
+  `Group::sitting`, so an eleven-record row looks exactly like a conversation that had eleven
+  turns, and the reader is not told the grouping is a heuristic this project applied rather
+  than something Google recorded. `cs show` prints a line above the counts; the TUI row and the
+  preview pane print nothing. It fails in the safe direction — a reconstruction presented as a
+  conversation, which is what it almost always was — but a fold that can be wrong should look
+  like one.
 - **Tombstones have a reader and no writer (ADR 9).** `conversation.deleted_upstream_at` is in
   the schema, `search.rs` selects it in four places, and `cs search` renders a
   `deleted-upstream` flag from it in both its flat and grouped output. Nothing ever sets it.

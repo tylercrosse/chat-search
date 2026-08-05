@@ -14,7 +14,7 @@
 //! # One door, and the routing behind it
 //!
 //! [`answer`] is the whole of asking. An empty or too-short query is answered out of the recent
-//! list *inside* this call, so no caller has to know [`crate::search::recent`] exists: the TUI's
+//! list *inside* this call, so no caller has to know the recent route exists at all: the TUI's
 //! old habit of blanking its own query text to force that branch has nothing left to force, and
 //! a client that never learns the two routes apart cannot send a question down the wrong one.
 //!
@@ -82,9 +82,9 @@ pub struct Answer {
     pub total: usize,
     /// Whether `total` is the whole number rather than a floor.
     ///
-    /// Two flat scalars rather than one polymorphic key: the [`Total`] enum stays honest inside
-    /// Rust, and a Swift `Codable` never meets a value that is sometimes a number and sometimes
-    /// an object.
+    /// Two flat scalars rather than one polymorphic key: the `Total` enum stays honest inside
+    /// this crate, where it is now the only thing that reads it, and a Swift `Codable` never
+    /// meets a value that is sometimes a number and sometimes an object.
     pub settled: bool,
     /// Filter tokens that named a value nothing can be selected on — `date:nope`, a half-typed
     /// `agent:`. Returning unfiltered results for a query that names a filter is a worse answer
@@ -252,8 +252,7 @@ pub struct Group {
     ///
     /// **Empty unless [`SearchOptions::shape`] asked for it**, which is not the same thing as a
     /// conversation with nothing in it — see that flag for what filling it costs, and
-    /// [`crate::search::Group::kind_runs`] for the two coordinate spaces this and `match_seqs`
-    /// live in.
+    /// `search::Group::kind_runs` for the two coordinate spaces this and `match_seqs` live in.
     pub kind_runs: Vec<crate::blocks::Run>,
     /// Gone from the source, kept here (ADR 9).
     pub deleted_upstream: bool,

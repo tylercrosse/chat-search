@@ -163,11 +163,11 @@ pub struct SearchOptions {
     /// See [`DECAY`], which is the default.
     pub decay: f64,
     /// How many matching messages each returned conversation carries. Formerly a positional
-    /// argument to [`search_grouped`], which put one of the ten options somewhere the other
+    /// argument to the grouped search, which put one of the ten options somewhere the other
     /// nine could not be read from.
     pub nested: usize,
-    /// Fill [`Group::kind_runs`] — what each conversation is made of, for a client that draws
-    /// it as a strip.
+    /// Fill `kind_runs` — what each conversation is made of, for a client that draws it as a
+    /// strip ([`crate::answer::Group::kind_runs`] is where it lands).
     ///
     /// Off by default because it is the one field whose cost scales with the *conversations*
     /// returned rather than with the matches in them: it reads every head-path message of
@@ -301,7 +301,11 @@ fn filter_sql(query: &Query, now_ms: i64, binds: &mut Vec<Value>) -> String {
     sql
 }
 
-pub fn search(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::Result<Vec<Hit>> {
+pub(crate) fn search(
+    conn: &Connection,
+    query: &Query,
+    q: &SearchOptions,
+) -> rusqlite::Result<Vec<Hit>> {
     if !query.is_searchable() {
         return Ok(Vec::new());
     }
@@ -840,10 +844,13 @@ mod tests {
 
 // ---------------------------------------------------------------- grouping
 
-/// A conversation and its best matching messages — the Algolia DocSearch shape: the
-/// conversation is the result, matching messages nest beneath it.
+/// A conversation and its best matching messages, as the ranking builds it.
+///
+/// Crate-private: what a client reads is [`crate::answer::Group`], which this is one `From`
+/// away from. The two are kept apart rather than merged because this one carries whatever the
+/// ranking needs to carry, and that is not a decision the wire should have to follow.
 #[derive(Debug, Clone, Serialize)]
-pub struct Group {
+pub(crate) struct Group {
     pub conv_id: String,
     pub source: String,
     /// The source's own id (ADR 2 makes it stable).
@@ -965,7 +972,7 @@ pub const REPEAT_WEIGHT: f64 = 0.25;
 /// Filtered, though nothing is ranked: `date:today` with no search terms is a real question —
 /// "what did I work on today" — and answering it with the whole recent list would be the
 /// silent-no-op this crate refuses everywhere else.
-pub fn recent(
+pub(crate) fn recent(
     conn: &Connection,
     query: &Query,
     now_ms: i64,
@@ -1030,28 +1037,24 @@ fn fill_shape(conn: &Connection, groups: &mut [Group]) -> rusqlite::Result<()> {
     Ok(())
 }
 
-/// Conversations matching `q`, best-first, each carrying up to [`SearchOptions::nested`]
-/// messages.
+/// Conversations matching `q`, best-first, with no count beside them.
 ///
-/// [`search_grouped_counted`] when how many were left out matters too.
-pub fn search_grouped(
+/// Test-only. It was the public way in until chat-search-me9.36.3, and what retired it is that
+/// the count is free: [`search_grouped_counted`] answers it off work the ranking pass had to do
+/// anyway, so a ranking whose size cannot be reported is not a thing any caller wants. Plenty of
+/// tests are about the order of the rows and nothing else, and this keeps them saying so.
+#[cfg(test)]
+fn grouped(
     conn: &Connection,
     query: &Query,
     q: &SearchOptions,
 ) -> rusqlite::Result<Vec<Group>> {
-    // Both `Empty` and `TooShort` fall back to recency. The client decides how to *say* which
-    // of the two it is showing; the routing is the same, and doing it here is what lets the
-    // TUI stop blanking its own query text to force this branch.
-    if !query.is_searchable() {
-        return recent(conn, query, q.now_ms, q.limit, q.shape);
-    }
-    let (ranked, _) = rank(conn, query, q)?;
-    best_of(conn, query, q, ranked)
+    Ok(search_grouped_counted(conn, query, q)?.groups)
 }
 
 /// How many conversations a query selects, as far as a search could tell for free.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Total {
+pub(crate) enum Total {
     /// The whole number. The pass that produced it saw every match, so nothing is missing.
     Exact(usize),
     /// At least this many, and how many more is not known: the ranking scan stopped at its
@@ -1065,7 +1068,7 @@ pub enum Total {
 }
 
 /// A result set and what the search learned about its true size on the way past.
-pub struct Counted {
+pub(crate) struct Counted {
     /// The conversations `limit` left room for, best-first.
     pub groups: Vec<Group>,
     /// Never below `groups.len()`, and [`Total::Exact`] with exactly that value whenever
@@ -1086,7 +1089,7 @@ pub struct Counted {
 /// worth the second pass. In a typeahead client that judgement is "once the user stops typing":
 /// a broad prefix is the expensive case *and* the one whose total nobody is reading yet, so
 /// spending the milliseconds there is spending them at the one moment they buy nothing.
-pub fn search_grouped_counted(
+pub(crate) fn search_grouped_counted(
     conn: &Connection,
     query: &Query,
     q: &SearchOptions,
@@ -1135,7 +1138,7 @@ fn best_of(
 /// a count over any other set would describe a result list nobody is looking at. Nothing here
 /// touches `message.text`, so the cost is the posting list and the rowid lookups, not the
 /// widest column in the schema.
-pub fn count_matching(
+pub(crate) fn count_matching(
     conn: &Connection,
     query: &Query,
     q: &SearchOptions,
@@ -1290,7 +1293,7 @@ struct Ranked {
 
 /// Ten cells showing where in a conversation the matches fall, densest marked heaviest.
 ///
-/// Rendered here rather than by each client for the same reason as [`Group::ended_date`]:
+/// Rendered here rather than by each client for the same reason as the local day on a group:
 /// every surface wants it, and a second implementation is a second chance to get the
 /// bucketing subtly different from the first.
 pub fn match_density(seqs: &[i64], msg_count: i64) -> String {
@@ -1490,7 +1493,7 @@ mod group_tests {
         let q = SearchOptions { limit: 10, nested: 3, ..SearchOptions::new(NO_DECAY) };
         // An empty MATCH expression is a syntax error, so the point is that this does not
         // merely return nothing — it returns something useful, which is what a TUI opens on.
-        let groups = search_grouped(&conn, &Query::typeahead(""), &q).unwrap();
+        let groups = grouped(&conn, &Query::typeahead(""), &q).unwrap();
         let ids: Vec<_> = groups.iter().map(|g| g.conv_id.as_str()).collect();
         assert_eq!(ids, ["c:a", "c:c", "c:b", "c:z"]);
         assert!(groups.iter().all(|g| g.hits.is_empty()), "no query means no hits to nest");
@@ -1552,7 +1555,7 @@ mod group_tests {
         .unwrap();
 
         let opts = SearchOptions { limit: 5, nested: 3, ..SearchOptions::new(NO_DECAY) };
-        let groups = search_grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
+        let groups = grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].ended_at, Some(ended));
         assert_eq!(groups[0].ended_date, crate::time::local_ymd(ended));
@@ -1637,7 +1640,7 @@ mod group_tests {
 
         let opts =
             SearchOptions { limit: 5, nested: 1, shape: true, ..SearchOptions::new(NO_DECAY) };
-        let groups = search_grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
+        let groups = grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
         let shape = &groups[0].kind_runs;
 
         // Main thread entire, then the sidechain entire.
@@ -1675,7 +1678,7 @@ mod group_tests {
 
         let opts =
             SearchOptions { limit: 5, nested: 1, shape: true, ..SearchOptions::new(NO_DECAY) };
-        let groups = search_grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
+        let groups = grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
         let group = &groups[0];
 
         let drawn = crate::blocks::load(&conn, "c:1", &[])
@@ -1707,10 +1710,10 @@ mod group_tests {
             ("main", false, 0, "user", "prose", false, "the borrow checker"),
         ]);
         let opts = SearchOptions { limit: 5, nested: 1, ..SearchOptions::new(NO_DECAY) };
-        let quiet = search_grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
+        let quiet = grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
         assert!(quiet[0].kind_runs.is_empty(), "nobody asked for it");
 
-        let asked = search_grouped(
+        let asked = grouped(
             &conn,
             &Query::exact("borrow"),
             &SearchOptions { shape: true, ..opts },
@@ -1785,7 +1788,7 @@ mod group_tests {
                 limit: 10, nested: 1, repeat_weight: w, decay: 0.0,
                 ..SearchOptions::new(NO_DECAY)
             };
-            search_grouped(&conn, &Query::exact("widget"), &q).unwrap()[0].conv_id.clone()
+            grouped(&conn, &Query::exact("widget"), &q).unwrap()[0].conv_id.clone()
         };
         assert_eq!(top(0.0), "c:one-strong", "pure max: the single best hit is the whole score");
         assert_eq!(top(1.0), "c:many-weak", "pure sum: volume wins, which is what damping prevents");
@@ -1807,7 +1810,7 @@ mod group_tests {
                 limit: 10, nested: 1, decay: d, now_ms: 3 * year,
                 ..SearchOptions::new(NO_DECAY)
             };
-            search_grouped(&conn, &Query::exact("widget"), &q).unwrap()[0].conv_id.clone()
+            grouped(&conn, &Query::exact("widget"), &q).unwrap()[0].conv_id.clone()
         };
         assert_eq!(top(0.0), "c:a-old", "recency-blind: equal scores, tie broken by id");
         assert_eq!(top(DECAY), "c:b-new", "three years of age is enough to lose the top slot");
@@ -1885,7 +1888,7 @@ mod group_tests {
             seed(&conn, &format!("c:{i:03}"), 1_000, &["widget"]);
         }
         let q = SearchOptions { limit: 10, ..SearchOptions::new(NO_DECAY) };
-        let plain = search_grouped(&conn, &Query::exact("widget"), &q).unwrap();
+        let plain = grouped(&conn, &Query::exact("widget"), &q).unwrap();
         let counted = search_grouped_counted(&conn, &Query::exact("widget"), &q).unwrap();
         let ids = |gs: &[Group]| gs.iter().map(|g| g.conv_id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&plain), ids(&counted.groups), "one ranking, two views of it");
@@ -1987,7 +1990,7 @@ mod filter_tests {
 
     /// Conversation ids a query returns, sorted so the assertion is about the set.
     fn ids(conn: &Connection, text: &str) -> Vec<String> {
-        let mut got: Vec<String> = search_grouped(conn, &Query::exact(text), &opts())
+        let mut got: Vec<String> = grouped(conn, &Query::exact(text), &opts())
             .unwrap()
             .into_iter()
             .map(|g| g.conv_id)
@@ -2097,7 +2100,7 @@ mod filter_tests {
         // the whole recent list.
         let conn = corpus();
         let recent_ids = |text: &str| {
-            let mut got: Vec<String> = search_grouped(&conn, &Query::typeahead(text), &opts())
+            let mut got: Vec<String> = grouped(&conn, &Query::typeahead(text), &opts())
                 .unwrap()
                 .into_iter()
                 .map(|g| g.conv_id)
@@ -2136,7 +2139,7 @@ mod filter_tests {
         let typed = Query::exact("agent:codex borrow");
         let run = |q: &Query| {
             let mut got: Vec<String> =
-                search_grouped(&conn, q, &opts()).unwrap().into_iter().map(|g| g.conv_id).collect();
+                grouped(&conn, q, &opts()).unwrap().into_iter().map(|g| g.conv_id).collect();
             got.sort();
             got
         };
@@ -2391,7 +2394,7 @@ mod filter_cost {
             (0..7)
                 .map(|_| {
                     let t0 = std::time::Instant::now();
-                    let groups = search_grouped(&conn, &query, &opts()).unwrap();
+                    let groups = grouped(&conn, &query, &opts()).unwrap();
                     std::hint::black_box(groups);
                     t0.elapsed().as_secs_f64() * 1000.0
                 })
@@ -2461,7 +2464,7 @@ mod count_cost {
                             search_grouped_counted(&conn, &query, &opts()).unwrap().matched,
                         );
                     } else {
-                        std::hint::black_box(search_grouped(&conn, &query, &opts()).unwrap().len());
+                        std::hint::black_box(grouped(&conn, &query, &opts()).unwrap().len());
                     }
                     t0.elapsed().as_secs_f64() * 1000.0
                 })

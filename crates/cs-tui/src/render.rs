@@ -287,7 +287,7 @@ fn header_row(
     cell(frame, body, cols.title, dy, &format!("{marker} {title}"), row_style);
 
     cell(frame, body, cols.dir, dy, &text::display_dir(g.cwd.as_deref().unwrap_or(""), home().as_deref()), merge(row_style, app.theme.dim, selected));
-    cell(frame, body, cols.density, dy, &cs_core::search::match_density(&g.match_seqs, g.msg_count), row_style);
+    cell(frame, body, cols.density, dy, &cs_core::match_density(&g.match_seqs, g.msg_count), row_style);
     cell(frame, body, cols.msgs, dy, &g.user_turns.to_string(), row_style);
     cell(frame, body, cols.age, dy, &age_of(g.ended_at, app.now), merge(row_style, app.theme.dim, selected));
 }

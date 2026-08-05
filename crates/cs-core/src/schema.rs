@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS message(
   is_error     INTEGER NOT NULL DEFAULT 0,  -- a tool_result reporting a failure
   -- The model that produced this message, as declared; NULL on user turns and tool results.
   -- 166 of 3,097 conversations name more than one, so this is where that fact lives; the
-  -- `conversation.model` label is a summary of this column (chat-search-n58.25, ADR 23).
+  -- `conversation.model` label is a summary of this column (chat-search-n58.25, ADR 24).
   model        TEXT,
   text         TEXT NOT NULL
 );

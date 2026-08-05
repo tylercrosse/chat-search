@@ -562,6 +562,15 @@ published material.
     importers collapse the archive's per-message model in opposite directions,
     `claude_desktop` keeping the last and `chatgpt_export` the first, both silently and
     neither tested. Filed as `chat-search-n58.25`.
+
+    **Answered, 2026-08-04.** Read off the archive rather than the index: **166 of 3,134
+    conversations name more than one model**, ~5%, and the switches are real ones —
+    `claude-opus-4-8` → `claude-haiku-4-5`, `gpt-5.4` → `gpt-5.4-mini`. So a ribbon or
+    badge that assumes one model per conversation is wrong about one row in twenty. The
+    fix (ADR 23) put the model on the message and made the conversation label a summary
+    of it, so the index answers this now: `count(distinct model) > 1` over `message`
+    gives **171**. It also found that 134 ChatGPT conversations were labelled `auto` —
+    the router setting, not a model — which is what the badge would have been drawing.
 22. **Rejected a cycling control for the wrong reason.** The note said cycling forced
     you through `hidden` to get from expanded back to collapsed — true, but that is the
     *rare* transition. The common path is hidden → collapsed → expanded → hidden: peek

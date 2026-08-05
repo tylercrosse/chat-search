@@ -823,3 +823,90 @@ is a hypothetical seam.
 **Revisit when.** A second thing in the reply becomes expensive and optional the way
 `kind_runs` already is. One knob is a knob; two are a sections model arriving one field at a
 time, and at that point the rejected design is the right one.
+---
+
+## 24. The model is a property of the message; the conversation label is a summary of it
+
+`accepted` · 2026-08-04
+
+**Context.** `conversation.model` was a single column, there was no per-message model anywhere,
+and each of the five importers that could read one collapsed it privately — in two different
+directions. `claude_code` and `chatgpt_export` kept the **first** model they saw; `claude_desktop`,
+`codex` and `gemini` kept the **last**. None of them said so where the other could see it, none
+had a test that fed two models, and `chatgpt_export` additionally let `default_model_slug`
+outrank every message in the file.
+
+The defect was found while asking whether a model switch was worth drawing in the interface
+prototype. The measurement taken then — "0 of 3,057 conversations use more than one model" —
+could not have said anything: it joined a single conversation column onto each message and
+counted distinct, which is 1 by construction (`poc/ui/NOTES.md` §3.23). The index could not
+answer the question at all.
+
+**What the archive actually says.** Measured 2026-08-04 by reading the raw archive rather than
+the index, because the index was the thing that could not answer:
+
+| source | conversations | naming >1 model | first ≠ last |
+| --- | --- | --- | --- |
+| chatgpt-export | 2,011 | 110 | 56 |
+| codex | 684 | 33 | 31 |
+| claude-code | 428 | 23 | 22 |
+| gemini-cli | 11 | 0 | 0 |
+
+**166 of the 3,134**, about 5%, and the pairs are not cosmetic: `claude-opus-4-8` → `claude-haiku-4-5`,
+`gpt-5.4` → `gpt-5.4-mini`, `o3-mini-high` → `gpt-4o`. A downgrade part-way through an agentic
+session is an epistemic boundary in the transcript, and the single label denied it existed.
+
+Two further things the same scan turned up. `default_model_slug` names something no message ever
+names in 154 conversations, **134 of them the literal `auto`** — the router setting that picks a
+model, recorded as though it were the model. And `<synthetic>`, which `claude_code` rejected as
+"not a model that ever ran", reaches `claude_desktop` too through the same claude-shaped audit
+log, where nothing rejected it.
+
+**Decision.** Three parts.
+
+(a) **`message.model`** holds the model that produced that message, as the source declares it,
+`NULL` on messages no model produced — user turns and tool results. Never inferred: a user turn
+is not backfilled with whatever was running, because that is a reading of the transcript rather
+than something it states. Codex is the one source whose declaration is not on the message —
+`turn_context` heads a turn and names what will run for it — so it is carried forward onto the
+assistant messages of the turns it governs.
+
+(b) **No importer collapses.** `Conversation::model` is renamed `declared_model` and holds only
+what the *conversation* says about itself: ChatGPT's `default_model_slug`, the Claude Desktop
+state file, a codex rollout whose `turn_context` records precede every message.
+
+(c) **The label is resolved once**, in the rollup at the bottom of `index::write_conversations_with`,
+as the model of the last message that named one, ordered by `ts`. `declared_model` is the
+`COALESCE` fallback beneath it.
+
+**Why last, and why in the rollup.** Last because it is what the conversation *ended on*, so the
+label predicts what resuming it would run — the reason `codex.rs` already gave for its own rule,
+now the only rule. In the rollup because the alternative was five importers agreeing by
+convention, and this codebase has already paid for that once: the local-date bug came from three
+clients each deriving the day. Ordering by `ts` rather than by insertion is also strictly more
+correct than any importer could be. A conversation is assembled from several files (ADR 7) and
+file order is path order, so for the 6 claude-code sessions whose files disagree, "first file
+wins" froze an arbitrary one; and ChatGPT's mapping is walked in id order, so "first seen" there
+was never even "first chronologically".
+
+**What it changed, measured over the full corpus.** 4,377 conversations in both the old and new
+index: **4,182 labels unchanged, 195 changed.** 134 stopped saying `auto` (128 now say `gpt-4o`,
+5 now say nothing, which is the honest answer when no message named a model); 45 stopped saying
+the router name and now say the variant the messages name, `gpt-5` → `gpt-5-thinking` and
+similar; 16 claude-code and codex conversations flipped end for end. Zero conversations are
+labelled `auto`. The index now answers the question it could not: **171 conversations name more
+than one model**, queryable as `count(distinct model) > 1` over `message`.
+
+**Cost.** One `TEXT` column over 196,450 messages, ~1% of a 345 MB index, and an `IMPORTER_VERSION`
+bump to 5 — the column is a pure function of (archive, importer version), so ADR 1 makes
+`rm index.db && cs index` the whole migration.
+
+**Not done.** Nothing reads `message.model` yet: it is not in the `cs search --json` envelope and
+the preview does not mark a switch. That is deliberate — this ADR is about the index being able
+to answer, and what to draw is a design question for whoever draws it (`chat-search-n58.26` is
+the adjacent case, compaction boundaries, which are also structurally invisible).
+
+**Revisit when.** A source appears whose model varies *within* a message, or one that reports a
+model for a user turn in a way that is a statement rather than an inference. Also when the first
+consumer lands, since drawing a switch may want the run boundaries precomputed rather than
+derived per query.

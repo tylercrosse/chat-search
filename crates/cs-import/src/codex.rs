@@ -59,7 +59,7 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         // name lives on `turn_context`, which is emitted at the head of each turn and names
         // what will run for it — so it is not collapsed here but carried forward onto the
         // assistant messages of the turns that follow, until the next one says otherwise.
-        // 33 of 684 rollouts here change it mid-file (ADR 23).
+        // 33 of 684 rollouts here change it mid-file (ADR 24).
         if record_type == "turn_context" {
             if let Some(m) = text_field(payload, "model") {
                 current_model = model_name(&m).map(str::to_string).or(current_model);

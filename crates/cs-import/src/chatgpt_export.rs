@@ -165,7 +165,7 @@ fn import_conversation(raw: &Value) -> Option<Conversation> {
                         // What answered this node, kept on it. The mapping is walked in id
                         // order rather than in time order, so collapsing here would not even
                         // have produced "the first model" — it would have produced whichever
-                        // one sorted first (ADR 23).
+                        // one sorted first (ADR 24).
                         let model = non_empty_str(
                             msg.get("metadata").and_then(|m| m.get("model_slug")),
                         )
@@ -229,7 +229,7 @@ fn import_conversation(raw: &Value) -> Option<Conversation> {
         // Demoted to a fallback, and it had no business outranking the messages: it is the
         // *picker*, not the pick. 154 conversations carry a `default_model_slug` that no
         // message ever names, 134 of them the literal `auto` — which `model_name` now
-        // rejects outright, taking those 134 mislabelled conversations to 5 (ADR 23).
+        // rejects outright, taking those 134 mislabelled conversations to 5 (ADR 24).
         declared_model: non_empty_str(raw.get("default_model_slug"))
             .and_then(model_name)
             .map(String::from),

@@ -153,7 +153,7 @@ where
            -- The one model-collapse rule, and the reason it is here rather than in each
            -- importer: a conversation is labelled with what it *ended on*, so the label
            -- predicts what resuming it would run. Five importers each collapsed this
-           -- privately and two of them chose the opposite end (chat-search-n58.25, ADR 23).
+           -- privately and two of them chose the opposite end (chat-search-n58.25, ADR 24).
            --
            -- Ordering by ts and not by insertion is what makes it true across the several
            -- files one conversation can be assembled from (ADR 7) — 6 claude-code sessions
@@ -496,6 +496,67 @@ mod tests {
         assert_eq!(threads, 2, "main plus one subagent thread");
         assert_eq!(head, "codex:c1:b", "head is the last main-thread message");
         std::fs::remove_file(&path).ok();
+    }
+
+    /// `m` with a clock and the model that produced it.
+    fn ran(mut msg: Message, ts: i64, model: Option<&str>) -> Message {
+        msg.ts = Some(ts);
+        msg.model = model.map(String::from);
+        msg
+    }
+
+    /// Write every conversation into a fresh index and read back the resolved label.
+    fn label_of(convs: &[Conversation]) -> Option<String> {
+        let path = std::env::temp_dir().join(format!("cs-model-{}.db", uuid::Uuid::new_v4()));
+        let mut conn = open(path.to_str().unwrap()).unwrap();
+        write_conversations(&mut conn, convs.iter()).unwrap();
+        let got = conn
+            .query_row("SELECT model FROM conversation WHERE id='codex:c1'", [], |r| r.get(0))
+            .unwrap();
+        std::fs::remove_file(&path).ok();
+        got
+    }
+
+    #[test]
+    fn a_conversation_is_labelled_with_the_model_it_ended_on() {
+        // The case no importer had a test for and two of them answered backwards: one
+        // conversation, two models (chat-search-n58.25).
+        let c = conv(vec![
+            ran(m("a", None, 1, "main", false, "ask"), 10, None),
+            ran(m("b", Some("a"), 2, "main", false, "answered by the first"), 20, Some("opus")),
+            ran(m("c", Some("b"), 3, "main", false, "then by the second"), 30, Some("haiku")),
+        ]);
+        assert_eq!(label_of(&[c]).as_deref(), Some("haiku"));
+    }
+
+    #[test]
+    fn the_label_follows_the_clock_and_not_the_order_the_files_were_written() {
+        // One conversation assembled from two transcript files (ADR 7). The file written
+        // first holds the *later* half, which is exactly what path-sorted discovery produces
+        // when file names are uuids — 6 claude-code sessions on the reference corpus have
+        // files whose models disagree, and COALESCE alone would have frozen the wrong one.
+        let later = conv(vec![ran(m("c", None, 1, "f2", false, "second half"), 30, Some("haiku"))]);
+        let earlier = conv(vec![ran(m("a", None, 1, "f1", false, "first half"), 10, Some("opus"))]);
+        assert_eq!(label_of(&[later, earlier]).as_deref(), Some("haiku"));
+    }
+
+    #[test]
+    fn a_conversation_level_declaration_is_only_consulted_when_no_message_names_a_model() {
+        // ChatGPT's `default_model_slug` used to outrank every message. It is the picker,
+        // not the pick, so it now speaks only into silence.
+        let mut c = conv(vec![
+            ran(m("a", None, 1, "main", false, "ask"), 10, None),
+            ran(m("b", Some("a"), 2, "main", false, "answer"), 20, Some("gpt-5-thinking")),
+        ]);
+        c.declared_model = Some("gpt-5".into());
+        assert_eq!(label_of(&[c]).as_deref(), Some("gpt-5-thinking"));
+
+        let mut silent = conv(vec![ran(m("a", None, 1, "main", false, "ask"), 10, None)]);
+        silent.declared_model = Some("gpt-5".into());
+        assert_eq!(label_of(&[silent]).as_deref(), Some("gpt-5"));
+
+        let nothing = conv(vec![ran(m("a", None, 1, "main", false, "ask"), 10, None)]);
+        assert_eq!(label_of(&[nothing]), None);
     }
 
     #[test]

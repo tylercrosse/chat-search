@@ -62,7 +62,7 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         };
 
         // The record states which model answered, so it is carried on the message rather
-        // than collapsed here; the single conversation label is the indexer's (ADR 23). Only
+        // than collapsed here; the single conversation label is the indexer's (ADR 24). Only
         // a `gemini` record names one, so a user turn is null either way.
         let model = text_field(record, "model")
             .as_deref()

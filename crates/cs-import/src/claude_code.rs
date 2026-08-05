@@ -39,7 +39,7 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
     //
     // `model` is deliberately not in this list. It changes mid-session too — 23 of 428
     // sessions here — but unlike `cwd` the source states it per message, so it is carried
-    // per message and the single label is resolved once by the indexer (ADR 23).
+    // per message and the single label is resolved once by the indexer (ADR 24).
     let mut session_id: Option<String> = None;
     let mut cwd: Option<String> = None;
     let mut git_branch: Option<String> = None;

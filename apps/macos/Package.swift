@@ -20,9 +20,14 @@ let package = Package(
     ],
     targets: [
         .target(name: "CsKit", swiftSettings: [.swiftLanguageMode(.v6)]),
+        // The token layer, and a target of its own rather than a folder inside the app: the app
+        // has to be able to read tokens and must not be able to author them, and a module boundary
+        // is the only place that distinction can actually be enforced. Not a product — nothing
+        // outside this package draws anything yet.
+        .target(name: "CsTheme", swiftSettings: [.swiftLanguageMode(.v6)]),
         .executableTarget(
             name: "ChatSearch",
-            dependencies: ["CsKit"],
+            dependencies: ["CsKit", "CsTheme"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

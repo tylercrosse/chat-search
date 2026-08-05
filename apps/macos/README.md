@@ -51,7 +51,7 @@ not offer the other two.
 
 ## Facets: the query text is the filter
 
-Clicking a source in the rail does exactly one thing — it puts a string in the search box. There
+Clicking anything in the rail does exactly one thing — it puts a string in the search box. There
 is no filter state anywhere in this app, so there is nothing that can fall out of step with what
 is typed, and a filter arrived at by clicking is one you can then edit, copy out, or paste into
 `cs explain`. That is docs/TUI-DESIGN.md §5, where the tool this was lifted from kept a selection
@@ -77,11 +77,28 @@ and conclude you used a different tool (`chat-search-a7k.29`). A source that is 
 and configured by nothing is drawn dim and does not offer to be clicked, because its conversations
 are not being captured and filtering to it would return an empty list.
 
-Three things this does not do:
+**Three sections, and the app cannot tell them apart.** A second source widens the `agent:`
+token; a second span *replaces* the `date:` one, because two date tokens intersect and the
+overlap of two spans is the smaller of them or nothing; one `dir:` fragment lights every
+directory beneath it, because `dir:` is a substring match. Every one of those rules is in
+`cs_core::query` with the grammar, so this side is three shapes and no rules
+(`chat-search-1ld`).
 
-- **Only `agent:` has a rail.** `date:` and `dir:` already filter — they are in the grammar, they
-  are applied, and you can type them — but `date:` needs a toggling rule of its own, since its
-  tokens intersect rather than union, and `dir:` needs a corpus-true project list. `chat-search-1ld`.
+They are ordered by *coverage* rather than by how interesting the facet is, which is `poc/ui`'s
+ordering: `ended_at` answers for every conversation, a source for every conversation, a `cwd` for
+a quarter of them. The `dir:` section says both halves of that last number — it draws the busiest
+12 of 128 directories, and its final line is the 3,303 conversations that record none at all.
+Only the agent sources have a working directory, so `dir:` cannot reach a ChatGPT conversation,
+and a section that showed only the directories would read as a complete account of where the work
+happened. Its chips are paths rather than project names: deriving one collapsed seven unrelated
+directories onto a single label, which is why `chat-search-6eb.26` was closed.
+
+A directory whose click cannot be written is not offered at all. No `dir:` token can carry a path
+with a space or a comma, so `cs facets` reparses each click and drops the ones that do not come
+back naming the directory — `chat-search-me9.8.16` is the quoting that would make them reachable.
+
+Two things this does not do:
+
 - **No source colour.** The five `--src-*` hues are in the token layer and the rule that maps eight
   source ids onto five of them is not written yet; it belongs with the row's agent badge
   (`chat-search-me9.8.2`), and writing a second copy here is what the epic's sequencing exists to

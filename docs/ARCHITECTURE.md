@@ -264,16 +264,22 @@ missing edge rather than a missing file.
   list. An export is not written by anything — it is mailed, downloaded and unpacked wherever
   you happen to put it — so `chatgpt-export` cannot be detected and is not in the list
   (`grep -n chatgpt crates/cs-archive/src/config.rs` returns nothing). The importer, the source
-  id and its permanence (ADR 16) are all real; the `[[sources]]` block is hand-written, which
-  means `cs init` on a second machine writes a config silently missing 69% of this corpus.
-  `google-takeout` (chat-search-o1i) is the second source with this shape and inherits the same
-  gap — the recommended `[[sources]]` block is in the module doc of
-  `crates/cs-import/src/google_takeout.rs` so it is at least recoverable from the code.
-  **This paragraph is now load-bearing.** `cs-archive`'s staleness nag (chat-search-a7k.10)
-  derives "export-shaped" from exactly this — absence from the candidate list — so adding an
-  export id to `candidate_sources()` would silently switch its nag off rather than fail.
-  `staleness::the_real_candidate_list_classifies_the_two_export_sources_it_ships_with` is the
-  test that turns that from a silence into a failure.
+  id and its permanence (ADR 16) are all real; the `[[sources]]` block stays hand-written, and
+  `google-takeout` (chat-search-o1i) is the second source of that shape. What used to follow —
+  `cs init` on a second machine writing a config **silently** missing 69% of this corpus — no
+  longer does. `cs_archive::unreachable::SERVER_SIDE` states the three surfaces no detection can
+  reach, `cs init` names them as it writes the config, and `cs archive` says it again once a day,
+  with the recommended `[[sources]]` blocks, until each one is configured (chat-search-a7k.22).
+  The gap is still a gap: it is a stated list rather than a discovered one, so a fourth surface
+  is invisible until somebody adds it, and `claude-ai` is named without a block because no export
+  of that shape has been seen here. What changed is that the omission announces itself.
+  **This paragraph is load-bearing.** `cs-archive`'s staleness nag (chat-search-a7k.10) derives
+  "export-shaped" from exactly this — absence from the candidate list — so adding an export id
+  to `candidate_sources()` would silently switch its nag off rather than fail, and would also
+  make the same id both a candidate and an unreachable surface.
+  `staleness::the_real_candidate_list_classifies_the_two_export_sources_it_ships_with` and
+  `unreachable::no_server_side_surface_is_also_a_detectable_candidate` are the two tests that
+  turn that from a silence into a failure.
 - **Compressed Codex rollouts are captured and cannot be read.** The `codex` source globs
   `**/rollout-*.jsonl.zst` as well as `.jsonl`, because Codex zstd-compresses rollouts older
   than about a week and everything older would otherwise stop being captured. Capture stores

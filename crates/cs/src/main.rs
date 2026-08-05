@@ -678,20 +678,20 @@ fn print_unreachable(pending: &[&cs_archive::Surface], config_path: &Path) {
     for s in pending {
         println!("  unreachable   {:<14} {} — {}", s.id, s.name, s.fetch);
     }
-    // The share is restated on every printing for the reason the staleness remedy is: the line
-    // above is a fact about plumbing, and this is the only thing that says why it is worth
-    // acting on. It is also the figure the bug was filed with, so it stays checkable.
+    // The share is restated on every printing for the reason the staleness remedy is: the lines
+    // above are a fact about plumbing, and this is the only thing that says why it is worth
+    // acting on. It is stated about the whole category rather than about whichever surfaces are
+    // still pending, because the measured one is usually the first to be configured — and the
+    // stakes of the two left do not shrink when it is.
     println!(
         "\n  These keep every conversation on a vendor's machine and write nothing here, so no\n  \
          detection can find them and no improvement to detection ever will (ADR 21) — the\n  \
-         config is the only place they can be named. Not a rounding error, either:\n  \
-         `chatgpt-export` alone was {} of the {} conversations indexed on the machine this\n  \
-         was built for, {}%, and the other two contributed nothing at all, so the true share\n  \
-         is higher. Only Takeout can be scheduled to repeat; the rest are one-offs, which is\n  \
-         what the `stale` line exists to catch.",
-        cs_archive::unreachable::MEASURED_FROM_EXPORT,
-        cs_archive::unreachable::MEASURED_CORPUS,
-        cs_archive::unreachable::measured_percent(),
+         config is the only place they can be named. Not a rounding error either: the one\n  \
+         of them ever measured is the ChatGPT export, at {}\n  \
+         on the machine this was built for — and the others contributed nothing to that\n  \
+         count, so it is a floor and not a share. Once one is configured, the `stale` line\n  \
+         is what says it has stopped arriving.",
+        cs_archive::unreachable::measured_share(),
     );
 
     let toml = cs_archive::unreachable::adoption_toml(pending);

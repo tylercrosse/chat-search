@@ -59,7 +59,9 @@ pub const SERVER_SIDE: &[Surface] = &[
     Surface {
         id: "chatgpt-export",
         name: "ChatGPT",
-        fetch: "chatgpt.com → Settings → Data controls → Export data, then unpack the mailed zip",
+        // Kept to the few words that get someone there. The line it lands in is already
+        // carrying a label and an id, and the archive table beside it is 88 columns wide.
+        fetch: "Settings → Data controls → Export data",
         // Two shapes, because an export has had two. The sharded
         // `Conversations__<hash>-chatgpt-NNNN/conversations-NNN.json` is what the reference
         // export on this machine unpacks to; a single `conversations.json` is the older
@@ -70,7 +72,7 @@ pub const SERVER_SIDE: &[Surface] = &[
     Surface {
         id: "claude-ai",
         name: "Claude on claude.ai",
-        fetch: "claude.ai → Settings → request a data export (chat-search-a7k.24 plans a fetcher)",
+        fetch: "Settings → request a data export",
         // No export of this shape has been seen here, so nothing is offered. The id is still
         // named: knowing what to call it is most of the value, since it is permanent (ADR 16)
         // and is already the id `cs-tui` reserves a colour for.
@@ -79,12 +81,13 @@ pub const SERVER_SIDE: &[Surface] = &[
     Surface {
         id: "google-takeout",
         name: "Gemini on the web",
-        fetch: "takeout.google.com → \"My Activity\" → Gemini Apps; schedule it, it runs 2-monthly",
-        // Copied from the block `cs-import`'s `google_takeout` module doc used to be the only
-        // home for. Two things about them are deliberate: they lead with `**/` because Takeout
-        // always unpacks to a bare `Takeout/` and telling two exports apart means renaming them,
-        // and they name conversation files rather than sweeping the tree because 311 MB of the
-        // 330 MB reference export is NotebookLM source PDFs and audio.
+        // The domain rather than a settings path, because Takeout is not reached from Gemini.
+        fetch: "takeout.google.com → Gemini Apps",
+        // Moved here from `cs-import`'s `google_takeout` module doc, which could hold them but
+        // never print them. Why they are shaped this way — a leading `**/` because Takeout
+        // unpacks to a bare `Takeout/` every time, and named files rather than a sweep because
+        // 311 MB of the 330 MB reference export is NotebookLM PDFs and audio — is still written
+        // out there, beside the format they belong to.
         include: &[
             "**/My Activity/*/MyActivity.json",
             "**/Conversation History/conversation_*.txt",
@@ -113,6 +116,29 @@ pub const MEASURED_CORPUS: u64 = 2_935;
 /// the bug it came from is a figure nobody can check.
 pub fn measured_percent() -> u64 {
     (100.0 * MEASURED_FROM_EXPORT as f64 / MEASURED_CORPUS as f64).round() as u64
+}
+
+/// The measurement as a reader should see it, rendered here so every caller says it the same way.
+pub fn measured_share() -> String {
+    format!(
+        "{} of {} conversations, {}%",
+        grouped(MEASURED_FROM_EXPORT),
+        grouped(MEASURED_CORPUS),
+        measured_percent()
+    )
+}
+
+/// Thousands separators. Four digits beside a date-shaped sentence read as a year, and this
+/// figure is quoted in the bug and in `docs/ARCHITECTURE.md` with the comma in it.
+fn grouped(n: u64) -> String {
+    let digits = n.to_string();
+    digits
+        .as_bytes()
+        .rchunks(3)
+        .rev()
+        .map(|c| std::str::from_utf8(c).expect("ascii digits"))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Where a pasted block points until someone edits it.
@@ -251,10 +277,19 @@ mod tests {
 
     #[test]
     fn the_measured_share_is_the_one_the_bug_was_filed_with() {
-        // 2,011 of 2,935 rounds to 69, and integer division would say 68. The number is quoted in
-        // chat-search-a7k.22 and in docs/ARCHITECTURE.md; a report that said 68 would read as a
-        // different measurement of a different thing.
+        // 2,011 of 2,935 rounds to 69, and integer division would say 68. The figure is quoted in
+        // chat-search-a7k.22 and in docs/ARCHITECTURE.md; a report that said 68, or that dropped
+        // the commas the docs carry, would read as a different measurement of a different thing.
         assert_eq!(measured_percent(), 69);
+        assert_eq!(measured_share(), "2,011 of 2,935 conversations, 69%");
+    }
+
+    #[test]
+    fn grouping_holds_at_every_length_a_corpus_can_be() {
+        assert_eq!(grouped(0), "0");
+        assert_eq!(grouped(999), "999");
+        assert_eq!(grouped(1_000), "1,000");
+        assert_eq!(grouped(1_234_567), "1,234,567");
     }
 
     #[test]

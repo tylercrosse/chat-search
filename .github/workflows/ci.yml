@@ -44,8 +44,10 @@ jobs:
       - uses: actions/checkout@v7
 
       # rusqlite is `bundled`, so a cold cache compiles sqlite3.c from source every run.
-      # The key rotates on the lockfile; a compiler bump needs no key of its own, because
-      # cargo already fingerprints the rustc version and rebuilds what it invalidates.
+      # The key rotates on the workspace lockfile alone — `**/Cargo.lock` would also match
+      # poc/rust, which Cargo.toml excludes from the workspace precisely so its pinned deps
+      # cannot reach this build. A compiler bump needs no key of its own, because cargo
+      # already fingerprints the rustc version and rebuilds what it invalidates.
       - name: Cache cargo registry and build artifacts
         uses: actions/cache@v6
         with:
@@ -54,7 +56,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.os }}-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: ${{ matrix.os }}-cargo-
 
       # `--locked` is a check in its own right: Cargo.lock is committed, so a branch that

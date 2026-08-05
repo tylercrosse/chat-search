@@ -12,6 +12,9 @@
 //! rule for naming the local day an instant fell on. `blocks` is the same idea one level up:
 //! which messages a reader draws and which matches may claim to have ranked the conversation,
 //! answered once for the TUI, `cs show --json`, and everything downstream of that JSON.
+//! `inventory` is the third: which sources exist and how much of each one is indexed, joined
+//! here rather than in each client, from facts the caller supplies because this crate reads
+//! no config.
 //!
 //! `answer` is `blocks` for the other half of the interface: the reply to a search, owned here
 //! so that clients adapt to it rather than each assembling one (ADR 23). `search` ranks; the
@@ -30,6 +33,7 @@ pub mod destination;
 pub mod eval;
 pub mod highlight;
 pub mod index;
+pub mod inventory;
 pub mod model;
 pub mod query;
 pub mod querylog;
@@ -50,6 +54,7 @@ pub use index::{
     built_by, ensure_current, open, record_importer_version, reset, write_conversations,
     write_conversations_with, IndexOptions, IndexStats, TOOL_TEXT_MAX,
 };
+pub use inventory::{Coverage, SourceCoverage, Watched};
 pub use model::{model_name, Conversation, Kind, Message, Role, Titles};
 pub use query::{Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection, Window};
 pub use schema::IMPORTER_VERSION;

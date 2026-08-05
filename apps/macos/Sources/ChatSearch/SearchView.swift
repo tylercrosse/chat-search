@@ -2,9 +2,11 @@ import CsKit
 import CsTheme
 import SwiftUI
 
-/// A search field, a list, and a line saying what the index is doing. That is the whole shell —
-/// the row's anatomy, the reader, grouping and facets are `chat-search-me9.8.2` onward, and
-/// taking any of them here is what re-blocks them.
+/// A search field, a list, a drawer, and a line saying what the index is doing.
+///
+/// The drawer is `ReaderView` and everything about it lives there; what is here is the seam it
+/// hangs on — a selection, and where it sits beside the results. The row's anatomy, grouping and
+/// facets are `chat-search-me9.8.2` onward, and taking any of them here is what re-blocks them.
 ///
 /// Nothing below names a colour, a size or a face. Every one is a token off `\.theme`
 /// (`chat-search-me9.8.8`), which is what makes a change of direction a change to one generated
@@ -34,6 +36,21 @@ struct SearchView: View {
     /// of `--rule` is the same line and is the theme's.
     private var rule: some View {
         Rectangle().fill(theme.color(.rule)).frame(height: 1)
+    }
+
+    /// Which conversation the drawer has open, as the list's selection.
+    ///
+    /// A binding built here rather than a property on the model, because the two are one gesture:
+    /// selecting a row opens it and deselecting closes it, so there is no state to keep in step.
+    /// The reader is handed the whole row and not its id, which is what lets the drawer stay open
+    /// when the query moves on and the row it came from is no longer in the results.
+    private var opened: Binding<String?> {
+        Binding(
+            get: { model.reader.conv?.id },
+            set: { id in
+                model.reader.open(
+                    model.conversations.first { $0.id == id }, query: model.query)
+            })
     }
 
     private var field: some View {
@@ -121,35 +138,27 @@ struct SearchView: View {
         // The three states that came with results. The banner above is where they differ; here
         // they are the same screen, because in all three the rows are the answer.
         case .ready, .rebuilding, .unrecognised:
-            if model.conversations.isEmpty {
-                // Not an error state and not styled like one. An empty result is the most common
-                // thing a search says.
-                placeholder(
-                    "no results",
-                    model.query.isEmpty ? "type to search" : "nothing matched \(model.query)",
-                    icon: "text.magnifyingglass", tone: theme.color(.ink3))
-            } else {
-                // `List` and not `ScrollView { LazyVStack }`: `chat-search-me9.22` measured the
-                // whole corpus through all three containers and this is the only one that
-                // recycles — 5.2 MB scrolling 3,200 rows against LazyVStack's 65.6 MB and plain
-                // VStack's 566 MB. The question is answered, so the app does not offer the others.
-                List(model.conversations) { conv in
-                    ResultRow(conv: conv)
-                        .listRowInsets(
-                            EdgeInsets(
-                                top: theme.metric(.rowPaddingTop),
-                                leading: theme.metric(.rowPaddingX),
-                                bottom: theme.metric(.rowPaddingBottom),
-                                trailing: theme.metric(.rowPaddingX))
-                        )
-                        .listRowBackground(theme.color(.bg))
+            HStack(spacing: 0) {
+                if model.conversations.isEmpty {
+                    // Not an error state and not styled like one. An empty result is the most
+                    // common thing a search says.
+                    placeholder(
+                        "no results",
+                        model.query.isEmpty ? "type to search" : "nothing matched \(model.query)",
+                        icon: "text.magnifyingglass", tone: theme.color(.ink3))
+                } else {
+                    results
                 }
-                .listStyle(.plain)
-                // The list is the page, so it takes the page's ground rather than the system's
-                // list ground. `.plain` and not `.inset` for the same reason the insets above are
-                // set by hand: the row's margin is `--row-px`, which a direction gets to move.
-                .scrollContentBackground(.hidden)
-                .background(theme.color(.bg))
+                // Beside the results and outside the empty case, because the drawer belongs to
+                // what you are reading rather than to what the last keystroke returned. Typing on
+                // with something open is ordinary — you have found it and are now looking for the
+                // next one — and a drawer that shut itself on the first query that matched
+                // nothing would take the conversation away mid-sentence.
+                if let open = model.reader.conv {
+                    Rectangle().fill(theme.color(.rule)).frame(width: 1)
+                    ReaderView(conv: open, reader: model.reader)
+                        .frame(minWidth: 380, idealWidth: 460, maxWidth: 620)
+                }
             }
         case .noIndex(let detail):
             placeholder(
@@ -170,6 +179,33 @@ struct SearchView: View {
         case .failed(let detail):
             placeholder("cs failed", detail, icon: "exclamationmark.triangle", tone: theme.color(.err))
         }
+    }
+
+    /// `List` and not `ScrollView { LazyVStack }`: `chat-search-me9.22` measured the whole corpus
+    /// through all three containers and this is the only one that recycles — 5.2 MB scrolling
+    /// 3,200 rows against LazyVStack's 65.6 MB and plain VStack's 566 MB. The question is
+    /// answered, so the app does not offer the others.
+    private var results: some View {
+        List(model.conversations, selection: opened) { conv in
+            ResultRow(conv: conv)
+                .listRowInsets(
+                    EdgeInsets(
+                        top: theme.metric(.rowPaddingTop),
+                        leading: theme.metric(.rowPaddingX),
+                        bottom: theme.metric(.rowPaddingBottom),
+                        trailing: theme.metric(.rowPaddingX))
+                )
+                // The open row is `--sel-bg` and not the system's selection colour, which is
+                // chosen somewhere this app cannot see.
+                .listRowBackground(theme.color(conv.id == model.reader.conv?.id ? .selBg : .bg))
+        }
+        .listStyle(.plain)
+        // The list is the page, so it takes the page's ground rather than the system's list
+        // ground. `.plain` and not `.inset` for the same reason the insets above are set by hand:
+        // the row's margin is `--row-px`, which a direction gets to move.
+        .scrollContentBackground(.hidden)
+        .background(theme.color(.bg))
+        .frame(minWidth: 280)
     }
 
     /// The mockup's `.empty`: a dashed rule, the quiet tier, and no chrome. The icon was the

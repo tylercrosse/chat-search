@@ -179,10 +179,43 @@ public enum ThemeCheck {
     public static func run(
         _ theme: Theme, as themeClass: ThemeClass, log: (String) -> Void = { print($0) }
     ) -> Int32 {
-        let report = measure(theme, as: themeClass)
-        report.lines.forEach(log)
-        log("\n" + verdict(report))
-        return report.holds ? 0 : 1
+        run([theme], as: themeClass, log: log)
+    }
+
+    /// The same, for every theme of one class at once.
+    ///
+    /// The gate measures `Theme.directions` and not `Theme.shipped`, because a build now carries
+    /// several and any of them can be chosen at launch (`chat-search-me9.8.9`). Measuring only the
+    /// default would fence the one direction least likely to be wrong — it is the one that was
+    /// looked at — and leave the other three offered by a picker and checked by nobody. One miss
+    /// anywhere fails the run: a direction that misses does not ship, and they ship together.
+    public static func run(
+        _ themes: [Theme], as themeClass: ThemeClass, log: (String) -> Void = { print($0) }
+    ) -> Int32 {
+        let reports = themes.map { measure($0, as: themeClass) }
+        for (index, report) in reports.enumerated() {
+            if index > 0 { log("") }
+            report.lines.forEach(log)
+        }
+        log("\n" + verdict(reports, as: themeClass))
+        return reports.allSatisfy(\.holds) ? 0 : 1
+    }
+
+    /// The last line, over however many themes were measured.
+    ///
+    /// One theme keeps the sentence it had, because that is the reading somebody takes on a token
+    /// set they wrote. Several get named individually when they miss: "FAILED" over a run of four
+    /// says nothing about which palette to go and re-solve.
+    private static func verdict(_ reports: [Report], as themeClass: ThemeClass) -> String {
+        guard reports.count > 1 else {
+            return reports.first.map(verdict) ?? "nothing to measure."
+        }
+        let missed = reports.filter { !$0.holds }.map(\.name)
+        guard !missed.isEmpty else {
+            return "\(reports.count) \(themeClass.label)s measured, and every one holds."
+        }
+        return "\(headline(themeClass)) — \(missed.joined(separator: ", ")) of \(reports.count) "
+            + "\(themeClass.label)s missed. " + consequence(themeClass)
     }
 
     /// The last line, which is the only part of this that differs by class.
@@ -190,16 +223,33 @@ public enum ThemeCheck {
         switch (report.themeClass, report.holds) {
         case (.direction, true):
             "\(report.name) holds — which is what a direction has to do to ship."
-        case (.direction, false):
-            "FAILED — see the lines marked above. A direction that misses these does not ship: "
-                + "re-solve it through poc/ui/palette.py, or load it as a user theme instead "
-                + "(docs/DECISIONS.md ADR 25)."
         case (.userTheme, true):
             "\(report.name) holds — it clears the same fence a shipped direction has to."
-        case (.userTheme, false):
-            "UNFENCED — see the lines marked above. The app draws this anyway, because you loaded "
-                + "it and it is your screen; what that costs is up there (docs/DECISIONS.md "
-                + "ADR 25)."
+        case (_, false):
+            "\(headline(report.themeClass)) — see the lines marked above. "
+                + consequence(report.themeClass)
+        }
+    }
+
+    /// How a miss is announced. A direction that misses is this project failing its own gate; a
+    /// user theme that misses is a reading about a file somebody wrote, and the app draws it
+    /// anyway — so the two do not get the same word for the same measurement.
+    private static func headline(_ themeClass: ThemeClass) -> String {
+        switch themeClass {
+        case .direction: "FAILED"
+        case .userTheme: "UNFENCED"
+        }
+    }
+
+    /// What the miss costs, which is the whole of what the class decides (docs/DECISIONS.md ADR 25).
+    private static func consequence(_ themeClass: ThemeClass) -> String {
+        switch themeClass {
+        case .direction:
+            "A direction that misses these does not ship: re-solve it through poc/ui/palette.py, "
+                + "or load it as a user theme instead (docs/DECISIONS.md ADR 25)."
+        case .userTheme:
+            "The app draws this anyway, because you loaded it and it is your screen; what that "
+                + "costs is up there (docs/DECISIONS.md ADR 25)."
         }
     }
 

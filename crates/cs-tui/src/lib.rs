@@ -1,9 +1,10 @@
 //! The native search surface.
 //!
 //! Depends on `cs-core` and nothing else in this workspace (docs/TUI-DESIGN.md §1). It is
-//! handed the index path and a query-log sink rather than resolving either, so it holds no
-//! filesystem policy: `cs` knows where the archive is, this does not, and a test can capture
-//! log events without touching disk.
+//! handed the index path, a query-log sink and the watched source set rather than resolving
+//! any of them, so it holds no filesystem or config policy: `cs` knows where the archive is
+//! and what this machine captures, this does not, and a test can capture log events without
+//! touching disk.
 
 use std::path::PathBuf;
 

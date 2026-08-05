@@ -82,8 +82,10 @@ is a loop back:
   action time rather than read out of a column (`cs-core/src/destination.rs`). `cs tui` execs
   the agent in place so it inherits the terminal, and prints an `eval`-able line instead
   whenever stdout is not one.
-- **The query log flows back into the ranking, by hand.** `cs search`, `cs pick` and `cs tui`
-  append what was searched for and what was opened; `cs needs` folds it into one entry per
+- **The query log flows back into the ranking, by hand.** `cs search`, `cs pick`, `cs abandon`
+  and `cs tui` append what was searched for and what was opened — and, through the third of
+  those, what was searched for and *not* opened, which is the only thing the log ever learns
+  that is not a success; `cs needs` folds it into one entry per
   *need* — not per query string, which counted every keystroke of a slowly typed query as its
   own need (ADR 22). Nothing reads it automatically — converting it into an eval set is
   `6eb.21`, and until then the eval set in `evals/ranking.toml` is written by hand.

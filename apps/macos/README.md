@@ -122,9 +122,41 @@ line resolves against the `PATH` the user has rather than the one a GUI process 
 
 **Every path records the pick**, including the two that open nothing. A conversation that was
 wanted and could not be reached is as much of a relevance judgement as one that was, and picks are
-the only judgements the query log has (docs/TUI-DESIGN.md §6). What it does *not* yet record is
-the other half — quitting with a query and no pick, the abandonment signal — which is
-`chat-search-pdw`.
+the only judgements the query log has (docs/TUI-DESIGN.md §6).
+
+### And the other half: quitting without opening anything
+
+Close the window with something in the search box and nothing opened, and the log gets one
+`Search`. That is the abandonment signal — *the ranking showed me nothing worth opening* — and it
+is the only thing `queries.jsonl` ever learns that is not a success. Without it a ranking is
+measured against the answers it did produce, which cannot find it wanting.
+
+| moment | event |
+| --- | --- |
+| a keystroke | **nothing** |
+| Enter, a double-click, a context menu | one `Pick`, through `cs pick` |
+| quit with a non-blank query and no pick | one `Search`, through `cs abandon` |
+
+`cs abandon` is a verb this bead added, because there was nothing to call. `cs search` records a
+`Search` on the non-`--prefix` path only — one line per keystroke would bury the handful of real
+queries under every prefix of each — and that is every path this app takes. It re-ranks the
+finished query on the far side rather than writing down what was on screen, for the reason
+`cs pick` recomputes a rank: the list here is a typeahead list of whatever was half-typed at the
+time, and a `Search` and the `Pick` it might have been are only comparable if both describe the
+same ask. It also decides what counts as a query with a need behind it, so nothing here re-derives
+that: whitespace, `??` and a bare filter record nothing.
+
+A pick answers the query it was made under and nothing after it. Type on and the box holds an
+unanswered query again, which is the ordinary way this gets used — you found one conversation and
+went looking for the next — so quitting there records that second search as abandoned.
+
+**The scripted runs are excluded at the time rather than afterwards.** `--measure` and `--shot`
+quit with their last phrase still in the box and nothing opened, which is precisely the shape of a
+person giving up, so each would otherwise append a need nobody had to a file that cannot be
+rebuilt from anything. Both run every `cs` with `CS_LOG_QUERIES=0` and say so in their output.
+That is ADR 22's convenience, set by the flag that made the run scripted rather than by somebody
+remembering to export it — and it is why nothing downstream has to tell a benchmark from a need,
+which ADR 22 is clear nothing can.
 
 ## The theme seam
 
@@ -180,12 +212,38 @@ solve the eight fenced tokens, write the rest into `directions.css`, and run `to
 that skips the solve will fail `--verify-theme`, which is the check doing its job rather than
 being in the way.
 
+**Which is a real cost, because the published palettes miss.** Solarized's kinds read
+2.79 / 3.43 / 4.75 / 5.61 against `base03` where the ramp asks for 2.20 / 4.00 / 7.20 / 13.00, and
+`base01` — the tier Solarized itself designates for secondary content — is 2.42:1 on `base02`,
+under half the AA floor. That is what those palettes *are*, not a mistake in porting them: every
+assignment of Solarized's sixteen published colours was measured and the most even ramp available
+is 1.46× 1.38× 2.18×, because nothing sits between `base1` at 5.61 and `base2` at 12.25. Gruvbox
+comes far closer — its dark side has an even ramp in `bg3 gray green fg0` at 1.77× 1.78× 1.82×,
+sitting ~1.11× above the targets — and its light side is 0.09 out.
+
+**So a theme belongs to one of two classes, and the class decides what a miss costs**
+(docs/DECISIONS.md ADR 25). A **direction** is compiled in and offered by the app: fenced, and one
+that misses does not ship. A **user theme** is one you load off your own disk: measured by the same
+code, and then drawn whatever the readings say, with the misses on stderr and the class beside the
+name. `--verify-theme` prints which it measured on its first line, and its last line says which of
+those two consequences applies.
+
+That leaves three routes for a named palette, and none of them pretends to be another: load it as
+a user theme exactly as published; ship it as `solarized-derived` / `gruvbox-derived` with its hues
+re-solved through `palette.py`, which moves Gruvbox by a few percent lightness and moves
+Solarized's brightest kind from `base1` (L 60%) to L 93%, past `base2`; or find a palette that
+holds as authored, which neither of these two is.
+
 Three things this seam does **not** do yet, each filed:
 
 - **One theme per binary.** `Tokens.swift` holds the direction in force; picking between several
-  at runtime needs them to coexist, plus a flag and a preference. `chat-search-me9.8.9`.
+  at runtime needs them to coexist, plus a flag and a preference. Every one of them is a direction,
+  so `--verify-theme` has to measure all of them and not only the one in force.
+  `chat-search-me9.8.9`.
 - **Nothing loads at runtime.** Dialling in type and spacing is edit, regenerate, rebuild, relaunch.
-  Reading a token set from a file would make it edit and relaunch. `chat-search-me9.8.10`.
+  Reading a token set from a file would make it edit and relaunch — and that file is the user-theme
+  class, so it is measured on load, drawn regardless, and a file that cannot be *read* falls back to
+  the shipped direction rather than being drawn unfenced. `chat-search-me9.8.10`.
 - **Padding is mostly still literal.** The row's rhythm is tokenised because a direction moves it
   and it trades against rows-per-screen. The search bar's, the banner's and the footer's are not —
   they are literal in `styles.css` too — so dialling those is still a view edit.
@@ -477,10 +535,12 @@ number was taken again on what actually ships:
 swift run -c release chat-search --measure --config /tmp/scratch-config.toml
 ```
 
-**Give it a scratch `--config`.** Every named query it types appends to the archive's
-`queries.jsonl`, which is authored data and cannot be reconstructed; `archive_root` pointed at a
-temp directory plus `log_queries = false` is enough. Leave `--db` on the real index, which is what
-makes the number worth taking. It runs as an accessory app and does not steal focus, which is also
+**Give it a scratch `--config`.** Belt and braces rather than the mechanism: a scripted run
+already switches query logging off for every `cs` it spawns and prints a line saying so, but
+`archive_root` is where a stray write would land and `queries.jsonl` is authored data that cannot
+be reconstructed. A temp `archive_root` plus `log_queries = false` is enough. Leave `--db` on the
+real index, which is what makes the number worth taking. It runs as an accessory app and does not
+steal focus, which is also
 how §1 was measured — a latency taken in a frontmost app and one taken in a background app are not
 the same measurement.
 

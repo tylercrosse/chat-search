@@ -72,7 +72,8 @@ enum Measure {
     @MainActor
     static func typing(model: SearchModel, frames: FrameClock, interval: Duration) async {
         print("keystroke → frame, on the promoted app. \(machineLine())")
-        print("  \(fmt(interval.ms)) ms per character, no debounce, one `cs search --json` each\n")
+        print("  \(fmt(interval.ms)) ms per character, no debounce, one `cs search --json` each")
+        print("  \(drivenLine())\n")
 
         for phrase in phrases {
             model.query = ""
@@ -108,6 +109,7 @@ enum Measure {
     /// of the app whose correctness is a thing you have to look at.
     @MainActor
     static func shot(model: SearchModel, window: NSWindow, query: String, to path: String) async {
+        print(drivenLine())
         model.query = query
         model.queryChanged()
         try? await Task.sleep(for: .seconds(2))
@@ -221,6 +223,19 @@ enum Measure {
         let sorted = values.sorted()
         let rank = max(0, min(sorted.count - 1, Int((q * Double(sorted.count)).rounded(.up)) - 1))
         return sorted[rank]
+    }
+
+    /// Printed by both scripted modes, because a run that deliberately records nothing should be
+    /// the one saying so.
+    ///
+    /// This matters more since the app started recording abandonments. A scripted run quits with
+    /// its last phrase still in the box and nothing opened, which is the exact shape of a person
+    /// giving up on a search — so without `CsClient.driven` every `--measure` would append a need
+    /// nobody had, to a file that cannot be rebuilt from anything. Nothing downstream could tell
+    /// those lines apart afterwards either: `cs_core::querylog::Event::Driven` exists because
+    /// that mistake is only ever fixable by hand, and this run avoids making it.
+    static func drivenLine() -> String {
+        "nothing here reaches queries.jsonl: CS_LOG_QUERIES=0 on every `cs` this run spawns"
     }
 
     /// Printed with the numbers. This is a working laptop with browsers and several agents on it,

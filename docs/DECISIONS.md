@@ -910,3 +910,120 @@ the adjacent case, compaction boundaries, which are also structurally invisible)
 model for a user turn in a way that is a statement rather than an inference. Also when the first
 consumer lands, since drawing a switch may want the run boundaries precomputed rather than
 derived per query.
+
+---
+
+## 25. A theme the project ships is fenced; a theme a person loads is measured and drawn anyway
+
+`accepted` · 2026-08-05
+
+**Context.** The token seam (`chat-search-me9.8.8`) carries two measurements that a theme has to
+hold: the kind ramp at 2.2 / 4.0 / 7.2 / 13.0 against the ribbon track with even ~1.8× steps, and
+the 4.5:1 AA floor on every text tier, taken on the harder of the two grounds it lands on. Neither
+was assumed — `chat-search-4ar.11` raised `--ink-3` from 2.90 to 4.60 for the second, and
+`poc/ui/NOTES.md` §2 argues the first from the ~2px the ribbon draws a kind at, where hue is the
+channel that degrades first.
+
+Two follow-ups then arrived at the same question from opposite ends: several directions in one
+binary (`chat-search-me9.8.9`) and a token set loaded off disk (`chat-search-me9.8.10`). Both need
+to know whether a theme is allowed to miss. Tyler wants Solarized and Gruvbox, and the published
+values of both miss — on their own dark tracks:
+
+| | tool | reasoning | user | agent | steps |
+| --- | --- | --- | --- | --- | --- |
+| solarized on `base03` | 2.79 | 3.43 | 4.75 | 5.61 | 1.23× 1.39× 1.18× |
+| gruvbox on `bg0_h` | 2.52 | 5.98 | 7.79 | 11.95 | 2.37× 1.30× 1.53× |
+
+Their quiet tiers miss too, and Solarized's is the designated one: `base01`, which Solarized itself
+labels comments and secondary content, reads 2.79:1 on `base03` and 2.42:1 on `base02` — under half
+the floor. Low contrast is what these palettes *are*.
+
+**None of that is a porting mistake, and the search says so.** Every assignment of each palette's
+own published colours to (track, four kinds) was measured — 16 colours for Solarized, 19 for
+Gruvbox, both themes, every colour allowed to be the track:
+
+| | the best a published palette can do | steps | what it means |
+| --- | --- | --- | --- |
+| solarized | `base01 blue base1 base2` on `base03` — 2.79 4.08 5.61 12.25 | 1.46× 1.38× 2.18× | no assignment is even. Nothing sits between `base1` at 5.61 and `base2` at 12.25, and that gap is the palette |
+| gruvbox dark | `bg3 gray green fg0` on `bg0_h` — 2.52 4.47 7.94 14.45 | 1.77× 1.78× 1.82× | evenly spaced, the whole ramp ~1.11× above the targets |
+| gruvbox light | `bg4 green red fg0` on `bg0` — 2.45 4.29 7.60 12.99 | 1.75× 1.77× 1.71× | one step 0.09 out |
+
+**And the re-solve costs what the palette's own range costs.** Feeding each palette's hues through
+`poc/ui/palette.py`'s `solve` at the fenced targets, on the dark side:
+
+| | tool | reasoning | user | agent |
+| --- | --- | --- | --- | --- |
+| solarized | `#586e75` → `#4b5e63` | `#6c71c4` → `#797ec9` | `#2aa198` → `#34c8bc` | `#93a1a1` → `#edefef` |
+| | L 40% → 34% | 60% → 63% | 40% → 49% | **60% → 93%** |
+| gruvbox | `#665c54` → `#5d544c` | `#d3869b` → `#c45c78` | `#8ec07c` → `#83ba70` | `#ebdbb2` → `#f0e5c7` |
+| | L 36% → 33% | 68% → 56% | 62% → 58% | 81% → 86% |
+
+Gruvbox survives a nudge — every band lands within a few percent of where its author put it.
+Solarized's brightest kind has to leave the grey ramp it belongs to entirely, past `base2`. That is
+the difference between a direction that can carry a palette's name with *derived* after it and one
+that would be wearing the name.
+
+Worth saying once: fidelity was never on the table anyway. A theme here is 30 colour tokens per
+side. Solarized publishes 16 colours and Gruvbox 19, so a port invents at least half the set —
+panels, rules, selection grounds, match grounds, five source hues — before it reaches any fence.
+The question was never whether to invent, only which parts and whether to say so.
+
+**Decision.** Two classes of theme, and the class is **provenance, not content**.
+
+A **direction** is compiled into the binary. It is fenced: `--verify-theme` measures every
+direction present and a direction that misses does not ship. Everything the picker offers is one.
+
+A **user theme** is read at launch off a file the person wrote. It is measured by exactly the same
+code, and then drawn whatever the readings say.
+
+**What the app does about a user theme that misses**, so that `chat-search-me9.8.10` decides none
+of it:
+
+1. **It is always measured**, by `ThemeCheck` and not by a second copy of these rules. One rule,
+   one place — the local-date bug is what happens otherwise.
+2. **It is drawn as authored, entire.** Never partially merged with a direction to patch the
+   failing tokens: half a palette from each is a palette nobody designed and nobody can debug.
+3. **The misses are said out loud** — `Report.failures` on stderr at launch, and the class beside
+   the name wherever the app names a theme. No modal and no banner: the only person who can be
+   nagged here is the one who wrote the file, and they already know.
+4. **Unreadable is not unfenced.** A file that is malformed, or missing a token, is not a theme —
+   fall back to the shipped direction and say why. (`Palette`'s precondition treats an incomplete
+   set as a programmer error, which is right for a generated file and fatal for a typed one, so
+   the loader validates before it constructs.)
+
+**Why the class cannot be a field on the theme.** The alternative was letting a theme declare
+itself unfenced. That fails the first time it is used: the themes that fail the fence are exactly
+the themes that would declare the exemption, and a fence that only measures what already passes is
+decoration. Provenance cannot be asserted by the thing being measured, which is the whole reason to
+use it.
+
+**Why relaxing the fence was rejected, having been measured.** The obvious middle — keep "even
+steps and a visible foot", drop the absolute 2.2 / 4.0 / 7.2 / 13.0 — buys Gruvbox's dark side and
+nothing else. Its light side is still 0.09 out and Solarized is 0.42 out, so no *complete* palette
+is rescued by it, and `NOTES.md` §2 holds the ratios constant across directions on purpose: it is
+what makes four directions that look nothing alike read identically at 2px. A relaxation that
+admits no new theme is a weaker check bought for nothing.
+
+**Why a person is allowed to break AA on their own screen.** The fence is a promise about what this
+project ships, not a restraint on what somebody may look at. Refusing would also be worse for the
+loop `chat-search-me9.8.10` exists to shorten: a refusal means the edit silently does nothing, and
+dialling a palette in means passing through dozens of failing intermediate states on the way to a
+good one. What it costs is bounded, because nothing in this client is encoded in colour alone
+(docs/TUI-DESIGN.md §7) — the reader draws a band as a 3pt spine *and* a sigil *and* a change of
+face. The ribbon is the exception and the honest cost: when `kind_runs` lands it is 2px of colour
+with no second channel available, so an unfenced theme makes that strip unreadable, and the reader
+still says everything the strip was summarising.
+
+**Where Solarized and Gruvbox land.** Three routes, none of which pretends to be another:
+
+- **as a user theme, exactly as published** — which is usually what "I want Solarized" means;
+- **as `solarized-derived` / `gruvbox-derived`**, hues through `palette.py`'s solve, shipped as
+  directions, with the table above as the record of how far each one had to move;
+- **as itself, if a palette is found that holds as authored.** Nothing here forbids that. Neither
+  of these two is it.
+
+**Revisit when.** A theme can be authored *inside* the app rather than in a file — a picker that
+edits is the app authoring a theme, and the argument above turns on the app not being the author.
+Also when the ribbon lands, because that is the first surface where the ramp is load-bearing on its
+own, and the answer may want to be "the ribbon draws in the shipped direction's ramp when the
+loaded one is unfenced" rather than "the ribbon is unreadable".

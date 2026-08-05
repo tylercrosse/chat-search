@@ -378,6 +378,68 @@ pub fn pick(
     Ok(())
 }
 
+/// Record that a search ended in nothing being opened.
+///
+/// The other half of [`pick`], and the only line this log ever gets that is not a success. A
+/// `Search` with no `Pick` after it is the abandonment signal — *the ranking showed me nothing
+/// worth opening* — and docs/TUI-DESIGN.md §6 keeps it because chat-search-6eb.21 cannot get it
+/// any other way: a ranking measured only against the answers it did produce cannot be found
+/// wanting.
+///
+/// It is a verb because a typeahead client cannot get one out of `cs search`. That path logs on
+/// `!prefix` only, deliberately — one line per keystroke would bury the handful of real queries
+/// under every prefix of each — so a client that searches as you type has nothing there to call,
+/// and running a second whole search at quit for the side effect would rank and print a result
+/// set nobody asked for. `cs tui` is under the same rule and emits the event itself, in process.
+///
+/// **The list is recomputed rather than passed in**, for the reason [`pick`] recomputes it and
+/// then one more. An interactive client's list is a `--prefix` list of whatever was typed at the
+/// time, so a `shown` taken off the screen would describe a different ranking than the `Pick`
+/// recorded beside it for the same text — and the pair only means anything to a tuning run if
+/// both describe the same ask.
+///
+/// A query with nothing searchable in it records nothing, which is [`log_search`]'s rule read
+/// off the same [`cs_core::Mode`]: `""`, whitespace and `"??"` are not needs somebody gave up
+/// on. Decided here rather than in each client, so a second client cannot spell it differently.
+pub fn abandon(
+    config_path: &Path,
+    db_path: Option<PathBuf>,
+    text: &str,
+    source: Option<&str>,
+    limit: i64,
+) -> Result<()> {
+    let cfg = Config::load(config_path)?;
+    let parsed = cs_core::Query::exact(text).with_source(source);
+    // Ahead of the index: with nothing to record there is nothing worth ranking either, and a
+    // driven run that switched the log off should not be paying for an answer it throws away.
+    if !cfg.recording_queries() || parsed.mode() == cs_core::Mode::Empty {
+        return Ok(());
+    }
+
+    let db_path = db_path.unwrap_or_else(|| cfg.default_db());
+    let index = open_index(&db_path, false)?;
+    let opts = cs_core::SearchOptions { limit, ..cs_core::SearchOptions::new(cs_core::now_ms()) };
+    let answer = cs_core::answer(&index, &parsed, &opts)?;
+    let shown: Vec<String> = answer.results.iter().map(|g| g.conv_id.clone()).collect();
+    // What the ranking offered, not what the index holds. `settle` is that other number and this
+    // does not ask for it: `cs pick` and `cs tui` both record the length of the list, so a
+    // `Search` and the `Pick` it might have been stay comparable.
+    let n = shown.len();
+
+    // Never propagated, like every other write to this log: losing a line costs a data point.
+    let _ = cs_core::querylog::append(&cfg.query_log(), &cs_core::querylog::Event::Search {
+        ts: cs_core::now_ms(),
+        q: text.to_string(),
+        source: source.map(String::from),
+        shown: cs_core::querylog::truncate_shown(shown),
+        n,
+        // Off the answer rather than measured around it, so the number an abandoned need is
+        // recorded under is the cost of the search and not of the round trip that reported it.
+        ms: answer.ms,
+    });
+    Ok(())
+}
+
 /// What has been searched for, and what answered it.
 ///
 /// The counts printed under the table are not decoration. The fold sets aside far more than it

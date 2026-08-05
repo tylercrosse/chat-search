@@ -125,7 +125,7 @@ public enum ColorToken: String, CaseIterable, Sendable {
 
     /// The kind ramp: four categories on an even luminance ramp against `mapBg`, because hue is
     /// the channel that degrades fastest at the ~2px the bands are drawn at. `ThemeCheck` holds
-    /// the ratios; `poc/ui/NOTES.md` §3 is the argument.
+    /// the ratios; `poc/ui/NOTES.md` §2 is the argument.
     case kUser = "--k-user"
     case kAgent = "--k-agent"
     case kReason = "--k-reason"

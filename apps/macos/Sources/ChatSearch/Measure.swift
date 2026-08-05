@@ -1,6 +1,7 @@
 import AppKit
 import CsKit
 import Darwin
+import Foundation
 import QuartzCore
 
 // The one instrument the app keeps, and the reason it keeps it: a number measured on the spike is
@@ -95,6 +96,75 @@ enum Measure {
             print("    main-thread lag  \(line(frames.lag))")
             print("      \(f.count) of \(phrase.count) keystrokes rendered, "
                 + "\(frames.missed) of \(frames.lag.count) vsyncs missed")
+        }
+    }
+
+    /// Search, open the first result, and draw the window to a PNG from inside the process.
+    ///
+    /// `cacheDisplay(in:to:)` and not a screenshot: it renders the view hierarchy into a bitmap
+    /// with no window server and no screen-recording grant, which is what makes this runnable
+    /// from a script and on a machine nobody is sitting at. `poc/swift`'s `snapshot` bench took
+    /// the same route for the same reason, and this is the drawer's version of it — the one part
+    /// of the app whose correctness is a thing you have to look at.
+    @MainActor
+    static func shot(model: SearchModel, window: NSWindow, query: String, to path: String) async {
+        model.query = query
+        model.queryChanged()
+        try? await Task.sleep(for: .seconds(2))
+        guard let conv = model.conversations.first else {
+            print("nothing matched \"\(query)\" — nothing to open")
+            return
+        }
+        model.reader.open(conv, query: query)
+        // Long enough for a `cs show` on the corpus's longest conversation, which measured 50–90
+        // ms, plus the layout of however many messages it turned out to have.
+        try? await Task.sleep(for: .seconds(2))
+
+        // Printed beside the image, because a picture cannot say which of the two it is: a drawer
+        // with no messages in it and a drawer that never loaded look identical at a glance.
+        print("\"\(query)\" → \(model.conversations.count) rows, opened \(conv.convId)")
+        print("  \(path) \(capture(window, to: path))")
+        if let t = model.reader.transcript {
+            let folds = t.drawnMessages.reduce(into: [0, 0]) { n, b in
+                n[b.fold == .expanded ? 0 : 1] += 1
+            }
+            print("  \(t.drawn) of \(t.count) drawn · \(folds[0]) expanded, \(folds[1]) collapsed "
+                + "· \(t.threads) thread(s) · marked against \(t.terms)")
+            print("  \(t.drawnMessages.filter { !$0.marks.isEmpty }.count) messages carry marks, "
+                + "\(t.drawnMessages.filter(\.isError).count) failed results kept")
+        } else {
+            print("  no transcript: \(model.reader.failure ?? "still reading")")
+        }
+
+        // After the first picture, because it changes the screen. Typing on with a conversation
+        // open is an ordinary thing to do and the drawer is supposed to survive it — including
+        // when the row it was opened from is no longer in the results, which is the case a
+        // list-driven selection closes without being asked to.
+        let after = path.replacingOccurrences(of: ".png", with: "-typed-on.png")
+        model.query += "zzz"
+        model.queryChanged()
+        try? await Task.sleep(for: .seconds(2))
+        print("  typed on → \(model.conversations.count) rows, drawer "
+            + (model.reader.conv == nil
+                ? "closed" : "still open on \(model.reader.transcript?.count ?? 0) messages"))
+        print("  \(after) \(capture(window, to: after))")
+    }
+
+    /// The window's own view hierarchy as a PNG, with no window server in it.
+    @MainActor
+    private static func capture(_ window: NSWindow, to path: String) -> String {
+        guard let view = window.contentView,
+            let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+        else { return "(no bitmap for the window)" }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        guard let png = rep.representation(using: .png, properties: [:]) else {
+            return "(could not encode the bitmap)"
+        }
+        do {
+            try png.write(to: URL(fileURLWithPath: path))
+            return "(\(png.count) bytes)"
+        } catch {
+            return "(\(error))"
         }
     }
 

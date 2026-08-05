@@ -13,9 +13,10 @@ import SwiftUI
 ///
 /// **The agent badge is the word, not an icon.** The mockup dropped the word to buy `cwd` back the
 /// 66px it needed at 706. This row does not spend that: with no model cell and no ribbon it costs
-/// about 200pt less than the mockup's, so at the window's 720pt floor `cwd` still gets ~470pt —
-/// about 78 characters against the mockup's 17-character budget. Even once the ribbon lands `cwd`
-/// keeps ~27. The word is also the only channel left, since a package with no asset catalog has no
+/// about 200pt less than the mockup's, so at the window's 720pt floor there is ~470pt left for the
+/// directory and the gutter between the clusters, against a mockup that could afford the path 17
+/// characters. Even once the ribbon lands the directory keeps ~27 of its 44. The word is also the
+/// only channel left, since a package with no asset catalog has no
 /// per-source icon and SF Symbols has no glyph for a vendor; `poc/ui/NOTES.md` §7 asks for three
 /// redundant channels and this row has two, colour and text, rather than the mockup's shape and
 /// colour. Text is the one that survives greyscale and a colourblind reader.
@@ -59,9 +60,10 @@ struct ResultRow: View {
     /// right. `cwd` sits with the date because both answer *which of my worlds was this* rather
     /// than *what is it*.
     ///
-    /// Every cell but `cwd` has a fixed width so that the eye can run down a column, which is the
-    /// reason the mockup uses a grid and not a flex row. `cwd` takes the slack, which is what makes
-    /// the row work at a window width the mockup never had.
+    /// Every cell has a fixed width so that the eye can run down a column, which is the reason the
+    /// mockup uses a grid and not a flex row. `cwd` is the one that stretches, and only up to a
+    /// ceiling; past that the gutter takes the slack, which is what keeps the two clusters two
+    /// clusters at a window width the mockup never had.
     private var meta: some View {
         HStack(spacing: theme.metric(.rowGap)) {
             Text(Display.sourceLabel(conv.source))
@@ -120,9 +122,9 @@ struct ResultRow: View {
     /// first 10 rows of anything, so the absence is drawn in the quiet tier rather than left to
     /// look like a title somebody chose.
     private var title: some View {
-        Text(titleText)
+        Text(titleText ?? "untitled")
             .font(theme.font(.body, weight: .medium))
-            .foregroundStyle(theme.color(hasTitle ? .ink : .ink3))
+            .foregroundStyle(theme.color(titleText == nil ? .ink3 : .ink))
             .lineLimit(1)
             .truncationMode(.tail)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -160,9 +162,11 @@ struct ResultRow: View {
 
     // MARK: - What the fields say
 
-    private var hasTitle: Bool { !(conv.title ?? "").isEmpty }
+    /// Null and empty are the same absence here. The contract makes `title` nullable and says
+    /// nothing about it being non-empty, and a row that drew one as "untitled" and the other as
+    /// blank would be reporting a difference nobody meant.
+    private var titleText: String? { conv.title.flatMap { $0.isEmpty ? nil : $0 } }
     private var hasDir: Bool { !(conv.cwd ?? "").isEmpty }
-    private var titleText: String { hasTitle ? conv.title! : "untitled" }
 
     /// The snippet as one line: the highlight runs the ranker returned, and the label if the
     /// match could not be located.

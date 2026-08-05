@@ -15,9 +15,15 @@ let package = Package(
     name: "chat-search-macos",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "CsKit", targets: ["CsKit"])
+        .library(name: "CsKit", targets: ["CsKit"]),
+        .executable(name: "chat-search", targets: ["ChatSearch"]),
     ],
     targets: [
-        .target(name: "CsKit", swiftSettings: [.swiftLanguageMode(.v6)])
+        .target(name: "CsKit", swiftSettings: [.swiftLanguageMode(.v6)]),
+        .executableTarget(
+            name: "ChatSearch",
+            dependencies: ["CsKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
     ]
 )

@@ -90,6 +90,10 @@ This shared session id is why per-file message ordinals collide (7,637 messages,
 
 **Source** One upstream tool in one location — `codex`, `claude-code`, `opencode`, `gemini-cli`, `chatgpt-export`. Each has one importer.
 
+**Coverage** **[code: `cs_core::inventory`]** Where one source stands with the config and this disk, in four names: `live` (a `[[sources]]` entry names it and its directory is here), `missing` (configured, directory gone), `unconfigured` (directory here, nothing claims it — conversations accruing uncaptured), `retired` (neither, but the index still holds its rows). The conversation count is a separate fact and stays separate on purpose: a configured source holding zero conversations is a broken importer or an archive run that never happened, and folding that into the state would make it indistinguishable from a tool nobody uses — which is how it was invisible (chat-search-a7k.29).
+
+Joined once in `cs-core` from what the caller knows, never derived per client. `cs-core` reads no config; `cs` supplies the config and filesystem half from `Config::sources` and `drift::detect`.
+
 **Archiver** Copies raw transcript bytes from live source directories into the raw archive, append-only, and records what it saw in the manifest. **Deliberately dumb: it never parses content.** It knows paths, sizes, mtimes, hashes and per-source layout policy — nothing about conversations or messages. One per source _location_.
 
 If the archiver fails, data is lost permanently, which is why it is kept simple and why it can ship complete before any importer works.

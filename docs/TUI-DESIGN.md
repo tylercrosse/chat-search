@@ -30,8 +30,9 @@ cites §5 and §7 as binding on itself and that reading is correct.
 ```
 cs-tui   depends on cs-core only.
          Entry: run(db_path: PathBuf, log: &mut dyn FnMut(querylog::Event), opts) -> Result<Exit>
-cs       depends on cs-archive already.  Resolves cfg.default_db() and the queries.jsonl
-         path, passes both in, and exposes the TUI as a `cs tui` subcommand.
+cs       depends on cs-archive already.  Resolves cfg.default_db(), the queries.jsonl
+         path and the watched source set, passes all three in, and exposes the TUI
+         as a `cs tui` subcommand.
 ```
 
 **The TUI takes a log sink, not a log path.** `querylog::append` writes to
@@ -51,6 +52,16 @@ path as a parameter costs nothing and keeps the edge clean.
 This resolves the contradiction in `me9.12`'s acceptance criteria, which permits `default_db()`
 living in `cs-archive` in one clause and asks that a second Rust client get it from `cs-core` in
 another. It gets it from its caller.
+
+**The TUI takes the watched source set, not the config** (`a7k.29`). The facet bar needs
+something the index cannot answer: whether a source holding zero conversations is configured
+and broken or simply not a tool this machine runs. Both halves of that live in `cs-archive` —
+`Config::sources` and `drift::detect` — so the third option was the one taken. `cs` passes a
+`Vec<cs_core::Watched>`, the id and two booleans, and `cs_core::inventory` joins it against the
+index counts. The join is a rule, so it lives in exactly one place rather than in each client;
+`cs-core` still reads no config, because it is handed facts rather than a path to read them
+from. Empty is a usable value: the bar then lists what the index holds, which is what it did
+before any of this existed.
 
 **Ships as `cs tui`, not a separate binary.** `build_info` records `IMPORTER_VERSION` so a stale
 index is detectable rather than silently wrong (`schema.rs:66-68`). A separately-installed TUI

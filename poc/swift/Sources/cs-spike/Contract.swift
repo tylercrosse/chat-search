@@ -25,6 +25,7 @@ enum Contract {
             await flat(client, phrase, limit: limit, into: &report)
         }
         await browse(client, into: &report)
+        await transcripts(client, into: &report)
 
         print("")
         for failure in report.failures { print("  FAIL  \(failure)") }
@@ -153,6 +154,125 @@ enum Contract {
         }
         for band in bands.subtracting(["user", "agent", "reasoning", "tool"]).sorted() {
             print("    note: run band \"\(band)\" postdates this client — it cannot colour those")
+        }
+    }
+
+    // MARK: - The transcript
+
+    /// `cs show --json`, the second contract, on the conversations the searches above returned.
+    ///
+    /// Real transcripts and not fixtures, for the reason the rest of this file is: the defects
+    /// this check has found were all in rows nobody had looked at. It asks for the *top* result of
+    /// each phrase because that is the conversation the reader will actually open, and because a
+    /// top result is the one guaranteed to carry marks.
+    private static func transcripts(_ client: CsClient, into report: inout Report) async {
+        print("\n  transcripts — `cs show --json`, marked against the same query")
+        var bands: Set<String> = []
+        var folds: Set<String> = []
+        var multibyteMarked = 0
+        var unranked = 0
+
+        // The four phrases, plus one filtered probe. Without it this check reads only Claude Code
+        // conversations, which carry no `reasoning` — so two states a reader has to draw
+        // differently, the reasoning band and the mark that may not claim to have ranked
+        // anything, would go unexercised while the check said "ok".
+        for phrase in Bench.phrases + ["reasoning agent:codex"] {
+            guard let top = try? await client.search(phrase, limit: 3).response.results,
+                !top.isEmpty
+            else {
+                report.failures.append("transcripts \"\(phrase)\": the search it follows failed")
+                continue
+            }
+            for conv in top {
+                let t: Transcript
+                do {
+                    t = try await client.show(conv.convId, query: phrase)
+                } catch {
+                    report.failures.append("show \(conv.convId): \(describe(error))")
+                    continue
+                }
+
+                let drawn = t.drawnMessages
+                check(t.count == t.messages.count, "show \(t.convId): count \(t.count) but "
+                    + "\(t.messages.count) messages", into: &report)
+                check(t.drawn == drawn.count, "show \(t.convId): drawn \(t.drawn) but "
+                    + "\(drawn.count) messages say so", into: &report)
+                check(t.markOffsets == .utf8Bytes, "show \(t.convId): "
+                    + "\(marksLabel(t.markOffsets)) — this reader can no longer mark a message",
+                    into: &report)
+                report.messages += t.count
+
+                for block in t.messages {
+                    bands.insert(label(block.band))
+                    folds.insert(block.fold == .expanded ? "expanded" : "collapsed")
+                    if case .unrecognised(let raw) = block.markKind {
+                        report.failures.append(
+                            "show \(t.convId) \(block.msgId): mark kind \"\(raw)\" postdates this "
+                                + "reader, which cannot say how loudly to mark it")
+                    }
+                    if !block.marks.isEmpty, block.markKind == .unranked { unranked += 1 }
+                    if !block.marks.isEmpty, block.text.utf8.count != block.text.count {
+                        multibyteMarked += 1
+                    }
+                    marks(block.text, block.marks, t.markOffsets,
+                        at: "show \(t.convId) \(block.msgId)", into: &report)
+                    collapsing(block, t.markOffsets, at: "show \(t.convId) \(block.msgId)",
+                        into: &report)
+                }
+            }
+        }
+
+        print("    bands: \(bands.sorted().joined(separator: ", "))"
+            + " · folds: \(folds.sorted().joined(separator: ", "))")
+        print("    \(multibyteMarked) marked messages contain multi-byte characters, "
+            + "\(unranked) carry marks that may not claim to have ranked anything")
+        // Counted rather than asserted, for the reason `browse`'s census is: what a count adds is
+        // whether this corpus still exercises the state. A band no transcript contains is a band
+        // the reader is being asked to draw on trust, and saying so is cheaper than a failure
+        // that fires the day someone deletes their Codex history.
+        for band in Set(["user", "agent", "reasoning", "tool"]).subtracting(bands).sorted() {
+            print("    note: nothing in this sample is a \"\(band)\" message, so that spine went "
+                + "undrawn here")
+        }
+        if unranked == 0 {
+            print("    note: every mark in this sample was entitled to claim it ranked, so the "
+                + "quieter form went undrawn")
+        }
+    }
+
+    /// The one-line form a collapsed message is drawn as has to keep every mark where it was.
+    ///
+    /// This is the whole reason `lineBreaksAsSpaces` is spelled in bytes. A transform that shifted
+    /// so much as one offset would highlight the wrong word in the fold that 388 of 563 messages
+    /// in a real agent session are drawn in — and it would do it silently, because a mark in the
+    /// wrong place still looks like a mark.
+    private static func collapsing(
+        _ block: Block, _ units: MarkOffsets, at where_: String, into report: inout Report
+    ) {
+        let flat = block.text.lineBreaksAsSpaces
+        guard flat.utf8.count == block.text.utf8.count else {
+            report.failures.append("\(where_): collapsing moved \(block.text.utf8.count) bytes to "
+                + "\(flat.utf8.count), so every mark after the first line break is now a lie")
+            return
+        }
+        for span in block.marks {
+            guard let was = block.text.range(of: span, in: units),
+                let now = flat.range(of: span, in: units)
+            else { continue }  // Unresolvable in either form is already `marks`'s complaint.
+            let expected = String(block.text[was]).lineBreaksAsSpaces
+            check(String(flat[now]) == expected, "\(where_): collapsed, span "
+                + "\(span.start)–\(span.end) marks \"\(String(flat[now]).prefix(40))\" where the "
+                + "message has \"\(expected.prefix(40))\"", into: &report)
+        }
+    }
+
+    private static func label(_ band: Band) -> String {
+        switch band {
+        case .user: "user"
+        case .agent: "agent"
+        case .reasoning: "reasoning"
+        case .tool: "tool"
+        case .unrecognised(let raw): "\"\(raw)\" (unknown to this reader)"
         }
     }
 

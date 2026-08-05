@@ -27,6 +27,13 @@ enum RowContainer: String, CaseIterable, Identifiable {
 final class SearchModel {
     var query = ""
     var conversations: [Conversation] = []
+    /// Read off the last response rather than assumed. A row cannot mark a snippet without
+    /// knowing what units its offsets are in, and this client is the one that once guessed.
+    var marks: MarkOffsets = .utf8Bytes
+    /// How many conversations match with `--limit` ignored, and whether that number is whole.
+    /// `--prefix` is on for every keystroke here, so the unsettled case is the common one.
+    var total = 0
+    var settled = true
     var health: IndexHealth = .ready
     var lastTiming: Timing?
     var container: RowContainer = .list
@@ -82,9 +89,12 @@ final class SearchModel {
         }
     }
 
-    private func apply(_ result: QueryResult, keystrokeAt started: Double) {
+    private func apply(_ result: QueryResult<SearchResponse>, keystrokeAt started: Double) {
         health = .ready
         conversations = result.response.results
+        marks = result.response.markOffsets
+        total = result.response.total
+        settled = result.response.settled
         lastTiming = result.timing
         queryCount += 1
         toData.add((CACurrentMediaTime() - started) * 1000)
@@ -153,8 +163,15 @@ struct SearchView: View {
                 icon: "tray", tone: .secondary)
         case .rebuilding(let detail):
             placeholder(
-                "index is being rebuilt", "results resume on their own when it finishes\n\(detail)",
+                "index is being built", "results arrive on their own when it finishes\n\(detail)",
                 icon: "arrow.triangle.2.circlepath", tone: .secondary)
+        case .stale(let detail):
+            // Distinct from `noIndex` because the sentence a user needs is different: something
+            // is there and cannot be read, which is not the same as nothing being there. The two
+            // were one screen while the client had only prose to go on.
+            placeholder(
+                "index cannot be read", "run `cs index` to rebuild it\n\(detail)",
+                icon: "questionmark.folder", tone: .secondary)
         case .noBinary(let detail):
             placeholder("cs not found", detail, icon: "exclamationmark.triangle", tone: .red)
         case .failed(let detail):
@@ -177,18 +194,22 @@ struct SearchView: View {
     private var rows: some View {
         switch model.container {
         case .list:
-            List(model.conversations) { ConversationRow(conv: $0) }
+            List(model.conversations) { ConversationRow(conv: $0, marks: model.marks) }
                 .listStyle(.inset)
         case .lazyStack:
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.conversations) { ConversationRow(conv: $0).padding(.horizontal, 8) }
+                    ForEach(model.conversations) {
+                        ConversationRow(conv: $0, marks: model.marks).padding(.horizontal, 8)
+                    }
                 }
             }
         case .eagerStack:
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(model.conversations) { ConversationRow(conv: $0).padding(.horizontal, 8) }
+                    ForEach(model.conversations) {
+                        ConversationRow(conv: $0, marks: model.marks).padding(.horizontal, 8)
+                    }
                 }
             }
         }
@@ -196,7 +217,11 @@ struct SearchView: View {
 
     private var footer: some View {
         HStack(spacing: 14) {
-            Text("\(model.conversations.count) shown")
+            // `total` is only a number when `settled`; otherwise it is a floor, and a poor one —
+            // the typeahead `the` came back at 1,025 against a true 4,243 — so it is ranged
+            // rather than printed. Saying "1,025 matches" when the answer is four times that is
+            // the one thing this field exists to stop a client doing.
+            Text("\(model.conversations.count) of \(model.settled ? "\(model.total)" : "\(model.total)+")")
             if let t = model.lastTiming {
                 Text(String(format: "%.0f ms round trip", t.total))
                 Text(String(format: "%.1f in sqlite", t.serverMs)).foregroundStyle(.secondary)
@@ -216,6 +241,9 @@ struct SearchView: View {
 
 struct ConversationRow: View {
     let conv: Conversation
+    /// Handed down from the response the row came out of, because the units the marks are in are
+    /// a fact about that response and not about this view.
+    let marks: MarkOffsets
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -227,13 +255,15 @@ struct ConversationRow: View {
                 if let p = conv.project { Text("· \(p)") }
                 if let d = conv.endedDate { Text("· \(d)") }
                 Text("· \(conv.msgCount) msgs")
-                if conv.matchCount > 0 { Text("· \(conv.matchCount) hits") }
+                if conv.matchCount > 0 { Text("· \(conv.matchCount) matches") }
             }
             .font(.system(size: 10))
             .foregroundStyle(.secondary)
             .lineLimit(1)
-            if let hit = conv.hits.first {
-                Text(highlighted(hit))
+            // The best matching message, which is the first: `matches` is ranked, so truncating
+            // it takes the message that won rather than an arbitrary one.
+            if let match = conv.matches.first {
+                Text(highlighted(match))
                     .font(.system(size: 11))
                     .lineLimit(2)
             }
@@ -245,10 +275,10 @@ struct ConversationRow: View {
     /// Marks the spans `cs` found, rather than re-finding them here. `cs` stems, so the client
     /// cannot reproduce the marks by substring search — `[Checker]` is marked for the query
     /// `check` and no naive client would find it.
-    private func highlighted(_ hit: Hit) -> AttributedString {
-        var s = AttributedString(hit.snippet)
-        for span in hit.snippetSpans {
-            guard let r = hit.snippet.range(ofByteSpan: span),
+    private func highlighted(_ match: Match) -> AttributedString {
+        var s = AttributedString(match.snippet)
+        for span in match.snippetSpans {
+            guard let r = match.snippet.range(of: span, in: marks),
                   let lo = AttributedString.Index(r.lowerBound, within: s),
                   let hi = AttributedString.Index(r.upperBound, within: s)
             else { continue }

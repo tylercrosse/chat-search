@@ -53,7 +53,9 @@ pub use blocks::{Block, Density, Fold, MarkKind, Transcript, WireBlock};
 pub use build::{open_for_read, IndexBuild, IndexState, Reader, Unreadable};
 pub use destination::{destinations, Destination};
 pub use eval::{Grade, Judged, QueryScore, Report};
-pub use facets::{AllChip, ChipState, SourceChip, SourceFacet};
+pub use facets::{
+    AllChip, ChipState, DateChip, DateFacet, DirChip, DirFacet, SourceChip, SourceFacet,
+};
 pub use index::{
     built_by, ensure_current, open, record_importer_version, reset, write_conversations,
     write_conversations_with, IndexOptions, IndexStats, TOOL_TEXT_MAX,

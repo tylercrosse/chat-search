@@ -15,16 +15,16 @@
 //! **Facts in, one answer out**, the same arrangement as [`crate::inventory`] and for the same
 //! reason: this crate reads no config, so the caller supplies the census and gets the join.
 //!
-//! Only the `agent:` facet has a rail today. `dir:` needs a corpus-true project list
-//! (`chat-search-6eb.26`) and `date:` needs a toggling rule of its own — its tokens intersect
-//! rather than union, so [`Query::toggling`] is the wrong verb for it — and both are additive
-//! keys on the reply when they land. What is *not* deferred is that both already filter: they
-//! are part of the grammar, they are applied, and a client with an input box can type them.
+//! All three facets have a rail (`chat-search-1ld`), and they are three sections rather than one
+//! generic list because what each is a census *of* differs. Sources are config ∪ index, so a
+//! configured source at zero can be drawn. Directories are the index alone, ordered by weight and
+//! cut off, because there is no config that names a project and the tail of that distribution is
+//! scratch directories. Spans are arithmetic — the same four for an empty index as for a full one.
 
 use serde::Serialize;
 
-use crate::inventory::SourceCoverage;
-use crate::query::{Facet, Query};
+use crate::inventory::{DateCoverage, DirCensus, SourceCoverage};
+use crate::query::{Facet, Query, Selection, DATE_SPANS};
 
 /// What the query says about one chip. Three states, because the query has three things to say
 /// about a source, and an excluded one drawn like an untouched one is filtering the reader
@@ -79,27 +79,40 @@ pub struct SourceFacet {
     pub values: Vec<SourceChip>,
 }
 
-/// The rail for one query and one census.
+/// What the query says about one value, decided the way the SQL decides it.
+///
+/// Comparison is [`Facet::selects`], so a chip never claims a state the filter would not produce
+/// — which for `agent:` is equality against the lowercased id, and for `dir:` is the substring
+/// match that lets one `dir:web-app` light every directory beneath it.
+///
+/// **An exclusion wins**, because in the SQL it is an `AND NOT`: under `dir:dev -dir:dev/scratch`
+/// the scratch directory is dropped, so its chip says dropped. Drawing it as kept would be a chip
+/// disagreeing with the list beside it about a conversation the reader can see is missing.
+fn state(selection: &Selection, facet: Facet, candidate: &str) -> ChipState {
+    if selection.exclude.iter().any(|v| facet.selects(v, candidate)) {
+        ChipState::Exclude
+    } else if selection.include.iter().any(|v| facet.selects(v, candidate)) {
+        ChipState::Include
+    } else {
+        ChipState::Off
+    }
+}
+
+/// The `agent:` rail for one query and one census.
 ///
 /// Every source the caller supplies gets a chip, in the order the census is in — which
 /// [`crate::inventory::join`] sorts by id, so the rail does not reshuffle between runs.
 ///
-/// Selection is decided by equality against the *lowercased* value, because that is what
-/// `search`'s SQL compares `conversation.source` to: a chip whose id the filter would miss must
-/// not claim to be on. A source id that is not already lowercase therefore draws off and stays
-/// off, which is visible rather than silent — and `Config::validate` does not admit one today.
+/// Selection is decided against the *lowercased* value, because that is what `search`'s SQL
+/// compares `conversation.source` to: a chip whose id the filter would miss must not claim to be
+/// on. A source id that is not already lowercase therefore draws off and stays off, which is
+/// visible rather than silent — and `Config::validate` does not admit one today.
 pub fn sources(query: &Query, census: &[SourceCoverage]) -> SourceFacet {
     let selection = query.selection(Facet::Agent);
     let values = census
         .iter()
         .map(|source| SourceChip {
-            state: if selection.include.contains(&source.id) {
-                ChipState::Include
-            } else if selection.exclude.contains(&source.id) {
-                ChipState::Exclude
-            } else {
-                ChipState::Off
-            },
+            state: state(&selection, Facet::Agent, &source.id),
             query: query.toggling(Facet::Agent, &source.id),
             value: source.id.clone(),
             coverage: source.coverage.as_str(),
@@ -114,10 +127,147 @@ pub fn sources(query: &Query, census: &[SourceCoverage]) -> SourceFacet {
     }
 }
 
+/// One directory chip: the census fact, the query fact, and the click.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DirChip {
+    /// The `cwd` as the index recorded it, which is what `dir:` selects on. Not a project name:
+    /// `chat-search-6eb.26` measured basename collapsing seven unrelated directories onto one
+    /// label, and the nearest-`.git`-ancestor alternative reads the live filesystem and so breaks
+    /// ADR 1. Shortening a path for display is a client's business and reversible; naming it is
+    /// neither.
+    pub value: String,
+    pub state: ChipState,
+    /// Conversations the index holds for it.
+    pub conversations: i64,
+    /// The whole query text after clicking this chip.
+    pub query: String,
+}
+
+/// The `dir:` rail: the All chip, then the busiest directories the caller counted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DirFacet {
+    pub keyword: &'static str,
+    pub all: AllChip,
+    pub values: Vec<DirChip>,
+    /// Distinct directories in the index, which may be more than there are chips. What lets a
+    /// client say it is showing the head of a list rather than the whole of one.
+    pub indexed: i64,
+    /// Conversations that record no directory at all, and which therefore no `dir:` token can
+    /// ever reach. Two thirds of this corpus: only the agent sources have a working directory,
+    /// and a rail that did not carry this number would read as a filter over everything
+    /// (`chat-search-6eb.26`).
+    pub undirected: i64,
+}
+
+/// The `dir:` rail for one query and one census.
+///
+/// **A directory is offered only when its click can be proved.** No `dir:` token can carry a path
+/// with a space or a comma — whitespace separates words and commas separate values, so
+/// `~/Mobile Documents` comes back as a filter *and* a search term (`chat-search-me9.8.16`). So
+/// each click is reparsed here and a directory the round trip does not name is dropped, which
+/// costs a chip and saves a chip that lies. The check is the grammar's own reading rather than a
+/// list of forbidden characters, so it stays true the day the grammar gains quoting.
+///
+/// A directory the query names but the census did not reach gets no chip of its own. The rail is
+/// the busiest directories, not the query's, and the token is visible and editable where every
+/// filter is: in the box (`docs/TUI-DESIGN.md` §5). What says so is the All chip, which is off
+/// while any `dir:` stands.
+pub fn dirs(query: &Query, census: &DirCensus) -> DirFacet {
+    let selection = query.selection(Facet::Dir);
+    let values = census
+        .busiest
+        .iter()
+        .filter_map(|dir| {
+            let state = state(&selection, Facet::Dir, &dir.path);
+            let click = query.toggling(Facet::Dir, &dir.path);
+            let after = Query::typeahead(&click).selection(Facet::Dir);
+            let names_it = after.include.iter().any(|v| *v == dir.path.to_lowercase());
+            let honest = match state {
+                // Turning off is stripping, which no path can spell wrongly.
+                ChipState::Include => !after.include.iter().any(|v| Facet::Dir.selects(v, &dir.path)),
+                _ => names_it,
+            };
+            honest.then(|| DirChip {
+                value: dir.path.clone(),
+                state,
+                conversations: dir.conversations,
+                query: click,
+            })
+        })
+        .collect();
+
+    DirFacet {
+        keyword: Facet::Dir.keyword(),
+        all: AllChip { selected: selection.is_empty(), query: query.without(Facet::Dir) },
+        values,
+        indexed: census.indexed,
+        undirected: census.undirected,
+    }
+}
+
+/// One span chip: how far back it reaches, what is in it, and the click.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DateChip {
+    /// The `date:` value, as the query text will carry it.
+    pub value: &'static str,
+    /// The same span in words. Carried because `>1mo` reads as syntax rather than as something to
+    /// click, and two clients writing "Older" beside it is one rule written twice.
+    pub label: &'static str,
+    pub state: ChipState,
+    /// Conversations the index holds inside this span. The spans nest, so these do not sum to the
+    /// corpus — each answers "how many if I go back this far".
+    pub conversations: i64,
+    /// The whole query text after clicking this chip. It **replaces** whatever `date:` was there,
+    /// because two date tokens intersect; see [`Query::toggling`].
+    pub query: String,
+}
+
+/// The `date:` rail: the All chip, then [`DATE_SPANS`], newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DateFacet {
+    pub keyword: &'static str,
+    pub all: AllChip,
+    pub values: Vec<DateChip>,
+}
+
+/// The `date:` rail for one query and one census.
+///
+/// The vocabulary is [`DATE_SPANS`] rather than the census, so an index that answered for none of
+/// them still draws four chips at zero — the same reading as a configured source with no rows,
+/// and for the same reason: a rail that omits what it cannot count is a rail that says the corpus
+/// has no history.
+///
+/// A `date:` value outside the four — `date:yesterday`, `date:<3h`, a bound the reader typed —
+/// lights no chip and turns the All chip off, which is the honest pair: something is filtering,
+/// and it is not one of these. Two spellings of one span *are* one selection, because
+/// [`Facet::selects`] compares the windows they resolve to rather than their text.
+pub fn dates(query: &Query, census: &[DateCoverage]) -> DateFacet {
+    let selection = query.selection(Facet::Date);
+    let values = DATE_SPANS
+        .iter()
+        .map(|(value, label)| DateChip {
+            value,
+            label,
+            state: state(&selection, Facet::Date, value),
+            conversations: census
+                .iter()
+                .find(|c| c.value == *value)
+                .map_or(0, |c| c.conversations),
+            query: query.toggling(Facet::Date, value),
+        })
+        .collect();
+
+    DateFacet {
+        keyword: Facet::Date.keyword(),
+        all: AllChip { selected: selection.is_empty(), query: query.without(Facet::Date) },
+        values,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::inventory::Coverage;
+    use crate::inventory::{Coverage, DirCoverage};
 
     fn census() -> Vec<SourceCoverage> {
         vec![
@@ -210,5 +360,141 @@ mod tests {
     fn the_rail_carries_the_keyword_it_writes() {
         // So a client can label the section without knowing the grammar it is a rail for.
         assert_eq!(rail("").keyword, "agent:");
+    }
+
+    #[test]
+    fn a_value_the_query_both_keeps_and_drops_is_drawn_dropped() {
+        // Which is what the SQL does with it: the exclusion is an `AND NOT`, so it survives the
+        // include beside it. A chip drawn as kept would disagree with a list the reader can see
+        // the conversation is missing from.
+        assert_eq!(chip(&rail("agent:codex -agent:codex"), "codex").state, ChipState::Exclude);
+    }
+
+    // ---- the other two rails (chat-search-1ld) ----
+
+    fn census_of(dirs: &[(&str, i64)], indexed: i64, undirected: i64) -> DirCensus {
+        DirCensus {
+            busiest: dirs
+                .iter()
+                .map(|(path, n)| DirCoverage { path: (*path).into(), conversations: *n })
+                .collect(),
+            indexed,
+            undirected,
+        }
+    }
+
+    fn dir_rail(text: &str) -> DirFacet {
+        dirs(
+            &Query::typeahead(text),
+            &census_of(&[("/home/t/dev/web-app", 88), ("/home/t/dev/api-server", 12)], 40, 2011),
+        )
+    }
+
+    #[test]
+    fn one_dir_token_lights_every_chip_it_selects() {
+        // `dir:` is a substring in the SQL, so a fragment filters to several directories at once
+        // and the rail has to say which ones. Equality here would draw a rail of dark chips over
+        // a list that is plainly filtered.
+        let rail = dir_rail("dir:dev rust");
+        assert!(rail.values.iter().all(|c| c.state == ChipState::Include));
+        assert!(!rail.all.selected);
+        // And the click on a lit chip takes out what lit it, rather than leaving a filter the
+        // chip no longer reflects.
+        assert_eq!(rail.values[0].query, "rust");
+    }
+
+    #[test]
+    fn clicking_a_second_directory_widens_rather_than_replacing() {
+        let first = dir_rail("rust").values[0].query.clone();
+        assert_eq!(first, "dir:/home/t/dev/web-app rust");
+        let both = dir_rail(&first).values[1].query.clone();
+        assert_eq!(both, "dir:/home/t/dev/web-app,/home/t/dev/api-server rust");
+        assert_eq!(dir_rail(&both).values[1].state, ChipState::Include, "and both are lit");
+    }
+
+    #[test]
+    fn a_directory_whose_click_cannot_be_written_is_not_offered_at_all() {
+        // No `dir:` token can carry a space or a comma (`chat-search-me9.8.16`), so this click
+        // would come back as a filter *and* a search term. The chip is dropped rather than
+        // handed over: a rail that cannot prove a click may not offer it.
+        let census = census_of(&[("/home/t/Mobile Documents", 9), ("/home/t/dev/api", 4)], 2, 0);
+        let rail = dirs(&Query::typeahead(""), &census);
+        assert_eq!(rail.values.len(), 1);
+        assert_eq!(rail.values[0].value, "/home/t/dev/api");
+        // The count of what exists is unchanged by what could be drawn, or the client would
+        // report a corpus that shrank when a rule was applied to it.
+        assert_eq!(rail.indexed, 2);
+    }
+
+    #[test]
+    fn the_dir_rail_carries_what_it_did_not_draw_and_what_it_cannot_reach() {
+        let rail = dir_rail("");
+        assert_eq!(rail.values.len(), 2);
+        assert_eq!(rail.indexed, 40, "so a client can say it is showing two of forty");
+        assert_eq!(rail.undirected, 2011, "and that `dir:` reaches none of these at all");
+        assert!(rail.all.selected);
+        assert_eq!(rail.keyword, "dir:");
+    }
+
+    fn date_rail(text: &str) -> DateFacet {
+        dates(
+            &Query::typeahead(text),
+            &[
+                DateCoverage { value: "today", conversations: 12 },
+                DateCoverage { value: "week", conversations: 96 },
+                DateCoverage { value: "month", conversations: 402 },
+                DateCoverage { value: ">1mo", conversations: 2453 },
+            ],
+        )
+    }
+
+    #[test]
+    fn every_span_gets_a_chip_whatever_the_census_could_answer() {
+        // The `a7k.29` reading, carried to the facet that has no config half: an index that can
+        // count nothing still has four spans, because they are arithmetic. Omitting them would
+        // say the corpus has no history rather than that it has nothing in it yet.
+        let empty = dates(&Query::typeahead(""), &[]);
+        assert_eq!(empty.values.len(), 4);
+        assert!(empty.values.iter().all(|c| c.conversations == 0));
+        let counted = date_rail("");
+        assert_eq!(
+            counted.values.iter().map(|c| (c.value, c.label, c.conversations)).collect::<Vec<_>>(),
+            [
+                ("today", "Today", 12),
+                ("week", "This week", 96),
+                ("month", "This month", 402),
+                (">1mo", "Older", 2453)
+            ]
+        );
+    }
+
+    #[test]
+    fn clicking_a_second_span_replaces_the_first() {
+        // Where a source chip would widen. Two `date:` tokens intersect, so a rail that added
+        // beside would hand back `date:today date:>1mo` — a query that cannot match anything
+        // that has ever been indexed.
+        let rail = date_rail("date:today rust");
+        let today = &rail.values[0];
+        assert_eq!(today.state, ChipState::Include);
+        assert_eq!(today.query, "rust", "the lit chip is the one that turns it off");
+        assert_eq!(rail.values[3].query, "date:>1mo rust", "and any other replaces it");
+    }
+
+    #[test]
+    fn a_span_typed_another_way_lights_the_chip_it_is() {
+        // `date:<7d` *is* this week, and a rail comparing text would draw the chip dark while
+        // filtering to exactly it — then add a second token when it was clicked.
+        assert_eq!(date_rail("date:<7d").values[1].state, ChipState::Include);
+        assert!(!date_rail("date:<7d").all.selected);
+    }
+
+    #[test]
+    fn a_span_the_rail_does_not_offer_lights_nothing_and_is_still_not_all() {
+        // `date:yesterday` is in the grammar and has no chip. The honest pair is every chip off
+        // and All off: something is filtering, and it is not one of these.
+        let rail = date_rail("date:yesterday rust");
+        assert!(rail.values.iter().all(|c| c.state == ChipState::Off));
+        assert!(!rail.all.selected);
+        assert_eq!(rail.all.query, "rust", "and All is still the way out of it");
     }
 }

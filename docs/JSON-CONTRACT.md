@@ -17,8 +17,8 @@ and the difference is invisible until a client hits a row that exercises it. So 
 below says which of the three it is, and `crates/cs/tests/json_contract.rs` fails if the answer
 changes.
 
-Changes here are additive (ADR 12). Adding a key is safe; making a non-null key nullable, or a
-nullable key absent, is not, and the test is what makes that a decision rather than an accident.
+Nullability is also the first thing an extension can quietly break, so what may change here
+without warning, and what may not, has [its own section](#extending-this-contract).
 
 Since `chat-search-me9.36` the reply has an author: `cs_core::answer` builds it and the CLI
 serializes it, the way `cs_core::blocks` already builds what `cs show --json` prints. Nothing
@@ -44,7 +44,7 @@ for, and a `count` that means something different depending on the value of anot
 
 | key | type | null? | |
 | --- | --- | --- | --- |
-| `v` | integer | never | Contract version, `1`. Bumped only when a field changes *meaning* — the one change a decoder cannot detect any other way. A rename breaks loudly and an addition is ignored, so neither is a bump. |
+| `v` | integer | never | Contract version, `1`. What moves it and what does not is [Extending this contract](#extending-this-contract); a decoder that reads no further can treat an unexpected value as "this reply was written for someone else". |
 | `query` | string | never | The query **as parsed**, with `--source` desugared into it: `--source codex` reaches the ranker as the token `agent:codex` and is reported that way. So this is what was actually run, not a flag and a string a client would have to recombine. Echo it back to tell which of several responses is in hand, and paste it into `cs explain` unchanged. |
 | `ms` | number | never | Wall time for the ranking pass and the building of this reply, rounded to 2dp. Excludes opening the index, process start, and the second pass behind `settled`. Measured once, in core: three clients used to round their own copy and one of them fed the query log. |
 | `count` | integer | never | `results.length`. Not how many conversations match — `--limit` truncates before this is taken. |
@@ -98,7 +98,7 @@ Identity is stated once, here, and never repeated inside `matches`.
 | `msg_count` | integer | never | Every message, tool traffic included. The denominator `match_seqs` positions are relative to. |
 | `prose_count` | integer | never | Prose messages only: what a prose search could possibly have matched. |
 | `cwd` | string | **nullable** | Working directory, for sources that have one. |
-| `score` | number | never | Ranking score, and negative: it is bm25, which is negative here, divided by a recency decay. The list arrives sorted; re-deriving an order from this means reading `search::DECAY` first. Always finite — a message with no timestamp is scored as though it were current rather than producing a NaN, which would reach the wire as `null`. |
+| `score` | number | never | **Opaque ordering.** The rows arrive best first and that order *is* the ranking; a client never re-sorts on this number and never parses it. Today it is damped bm25 divided by a recency factor, which makes it negative and meaningful only against the other rows of the same response — none of which is promised, because the ranking is expected to grow past term matching (GLOSSARY.md's Indexer entry already says "and later vectors") and that moves the sign and the range without changing what the number is *for*. Always finite: a message with no timestamp is scored as though it were current rather than producing a NaN, which would reach the wire as `null`. |
 | `match_count` | integer | never | Total matching messages, including any not returned in `matches`. |
 | `match_seqs` | array of integer | never; may be empty | Where the matches sit, as 0-based message positions, ascending. **Positions into `msg_count`**, which is *not* the coordinate space `kind_runs` uses — `chat-search-me9.25` is that gap. Empty when nothing matched. |
 | `kind_runs` | array of [`Run`](#run) | never; **may be empty** | What the conversation is made of, in reading order, run-length encoded. |
@@ -121,9 +121,9 @@ the message, so stating it on the group would assert a fact about several thread
 | `role` | string | never | `user` · `assistant` · `tool` · `system`. |
 | `kind` | string | never | `prose` · `reasoning` · `tool_call` · `tool_result`. `reasoning` is stored and never indexed (ADR 5, `chat-search-8mb`), so it cannot appear in a search result — only in `cs show`. |
 | `ts` | integer | **nullable** | Epoch milliseconds. |
-| `score` | number | never | As `Group.score`, for this message alone. |
+| `score` | number | never | As `Group.score` — opaque in the same way — for this message alone. |
 | `snippet` | string | never | A window of the message around what matched, whitespace flattened. May begin with the literal prefix `⟨no match⟩ `, which means the match could not be located in the text and what follows is the head of the message rather than the matching part. It is a label, not content. |
-| `snippet_spans` | array of [`Span`](#span) | never; may be empty | Where to highlight, as offsets into `snippet` in the units `mark_offsets` names. Empty says the same thing the `⟨no match⟩ ` prefix says, in the channel a machine reads. |
+| `snippet_spans` | array of [`Span`](#span) | never; may be empty | Where to highlight, as offsets into `snippet` in the units `mark_offsets` names. **May be empty**, which is an ordinary outcome rather than a failure: there is nothing in this snippet to mark. Today that happens only when the match could not be located, and a ranking that matches on meaning rather than on words will produce it whenever a result holds no query term at all — so draw the snippet unmarked rather than re-tokenizing it, and do not infer the `⟨no match⟩ ` prefix from it. The prefix is a sentence for a reader, these are offsets for a decoder, and the two coincide only while matching is lexical. |
 | `on_head_path` | boolean | never | False when the message sits on a branch that was edited away — still searchable, but not part of the conversation as currently displayed. Only ever false when `--include-off-path` was passed. |
 | `is_sidechain` | boolean | never | The message came from a subagent thread, which runs parallel to the main one rather than being an abandoned branch. |
 | `thread_key` | string | never | Which thread within the conversation, usually the transcript filename. Opaque — do not parse it. |
@@ -150,7 +150,7 @@ restate the conversation:
 | `ts` | integer | **nullable** | As `Match.ts`. |
 | `score` | number | never | As `Match.score`. |
 | `snippet` | string | never | As `Match.snippet`. |
-| `snippet_spans` | array of [`Span`](#span) | never; may be empty | As `Match.snippet_spans`. |
+| `snippet_spans` | array of [`Span`](#span) | never; may be empty | As `Match.snippet_spans`, empty on the same terms. |
 | `on_head_path` | boolean | never | As `Match.on_head_path`. |
 | `is_sidechain` | boolean | never | As `Match.is_sidechain`. |
 | `thread_key` | string | never | As `Match.thread_key`. |
@@ -325,6 +325,28 @@ things they share: both carry a `v`, and both name their offset encoding on the 
 `cs status`, `cs scan`, `cs index`, `cs archive`, `cs needs` and `cs explain` also take
 `--json`; those are operator output rather than a client seam, and nothing has been promised
 about them.
+
+## Extending this contract
+
+**Additions are silent** (ADR 12). A key that appears in a later release is a key an older
+decoder ignores, so a new field on a row, a new `Destination` kind, a new `Run` band and a
+source nobody has watched before all reach a shipped client without breaking it. That is why
+the open sets above say to decode an unknown variant as one this client cannot act on rather
+than as an error: the alternative makes every addition a coordinated release.
+
+**`v` moves only when a field changes meaning** — the one change a decoder cannot detect for
+itself. A rename fails loudly at the first missing key and an addition is ignored, so neither is
+a bump. A field that keeps its name and its type while its units, its sign, its coordinate space
+or its nullability move is a client that goes on working and starts lying. Making a non-null key
+nullable, or a nullable key absent, is that same change wearing a smaller hat, which is why the
+pin below reads nullability in both directions rather than one.
+
+Two fields above are therefore promised in the weakest form that is still useful to a client:
+`score` and `snippet_spans` both narrow as the ranking grows past term matching, and neither
+narrowing adds or removes a key. Promised now, that release is an addition. Left unstated until
+a client had shipped against what the fields happen to do today, it would be a bump — and a bump
+is a second decoder in every client, kept alive for as long as an old binary might still be on
+someone's machine.
 
 ## How this stays true
 

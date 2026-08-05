@@ -279,8 +279,9 @@ pub struct Match {
     /// **Opaque ordering** — see [`Group::score`], which this is the message-level half of.
     pub score: f64,
     /// A window of the message around what matched, whitespace flattened, ellipses included.
-    /// Prefixed with `⟨no match⟩ ` when the match could not be located — the same fact
-    /// `snippet_spans` states by being empty.
+    /// Prefixed with `⟨no match⟩ ` when the match could not be located — the sentence a
+    /// reader gets, and not the same statement as an empty `snippet_spans`, which also covers a
+    /// match that never had a lexical term to locate.
     pub snippet: String,
     /// Where the matched words are in `snippet`, in the units [`Answer::mark_offsets`] names.
     ///
@@ -877,11 +878,17 @@ mod tests {
 
     #[test]
     fn a_snippet_and_its_spans_are_one_statement_made_twice() {
-        // `snippet_spans` may be empty, and a client must be able to tell which case it is in
-        // without re-tokenizing anything: the string says it for a reader, the list for a
-        // decoder, and they never disagree. Today only a match this crate's own tokenizer
-        // cannot find produces the empty case; a semantic match will produce it routinely,
-        // which is why the contract promises it now rather than after a client has shipped.
+        // While matching is lexical the two channels agree: a match this crate's own tokenizer
+        // cannot find is the only thing that empties the spans, so the prefix a reader sees and
+        // the empty list a decoder sees are one fact stated twice, and neither has to be
+        // re-derived from the other.
+        //
+        // That agreement is a property of this matcher, not a promise to clients.
+        // docs/JSON-CONTRACT.md promises only that the spans may be empty, because a ranking
+        // that matches on meaning will empty them for a result that holds no query term and is
+        // not "no match" in any sense worth printing. So this test failing when that lands is
+        // the signal to decide what the prefix means then — not licence to keep the equality by
+        // labelling a semantic hit as unmatched.
         let r = reader(&corpus(), IndexState::Ready);
         let a = answer(&r, &Query::exact("borrow"), &opts()).unwrap();
         for g in &a.results {

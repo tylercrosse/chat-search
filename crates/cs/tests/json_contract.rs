@@ -454,11 +454,14 @@ fn a_run_is_a_band_and_a_length_and_counts_only_what_is_drawn() {
 #[test]
 fn a_span_is_a_pair_of_utf8_byte_offsets_into_the_snippet_it_marks() {
     // The sibling defect the Swift spike found: read as `Character` offsets these mis-highlight
-    // every snippet containing an em-dash, and this corpus is made of em-dashes. Nothing on the
-    // wire says which they are (chat-search-me9.33), so the fixture puts a multi-byte character
-    // in front of the match and this asserts the difference is real rather than incidental.
+    // every snippet containing an em-dash, and this corpus is made of em-dashes. The envelope
+    // now names the encoding rather than leaving a client to infer it (chat-search-me9.33), so
+    // the fixture puts a multi-byte character in front of the match and this asserts both that
+    // the difference between the two readings is real and that the wire names the right one —
+    // a value that travelled beside offsets it does not describe would be worse than silence.
     let f = Fixture::new();
     let hits = f.search(TERM, &["--flat"]);
+    assert_eq!(hits["mark_offsets"], "utf8-bytes");
     let marked = hits["hits"]
         .as_array()
         .unwrap()

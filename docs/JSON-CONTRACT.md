@@ -298,6 +298,26 @@ than a search. `cs facets [QUERY] --json`:
       { "value": "claude-code", "state": "off", "coverage": "live", "conversations": 458,
         "query": "borrow checker agent:codex,claude-code" }
     ]
+  },
+  "dates": {
+    "keyword": "date:",
+    "all": { "selected": true, "query": "borrow checker agent:codex" },
+    "values": [
+      { "value": "today", "label": "Today", "state": "off", "conversations": 8,
+        "query": "date:today borrow checker agent:codex" },
+      { "value": ">1mo", "label": "Older", "state": "off", "conversations": 3763,
+        "query": "date:>1mo borrow checker agent:codex" }
+    ]
+  },
+  "dirs": {
+    "keyword": "dir:",
+    "all": { "selected": true, "query": "borrow checker agent:codex" },
+    "indexed": 128,
+    "undirected": 3303,
+    "values": [
+      { "value": "/Users/t/dev/projects/chat-search", "state": "off", "conversations": 138,
+        "query": "dir:/Users/t/dev/projects/chat-search borrow checker agent:codex" }
+    ]
   }
 }
 ```
@@ -321,7 +341,9 @@ do not splice a token.
 | `v` | integer | never | `1`. Moves under the same rule as the search envelope's. |
 | `query` | string | never | The query this is a projection of, as parsed. |
 | `index_state` | string | never | What is at the index path — the same four names `cs status` reports, `no_index` and `building` included. **This command never refuses**, unlike a search: on a first run the true rail is every configured source at zero, which is the state a client most needs to draw and the one an error would hide. This key is what says the counts are provisional. |
-| `sources` | object | never | The `agent:` rail. Additional facets arrive as sibling keys. |
+| `sources` | object | never | The `agent:` rail. |
+| `dates` | object | never | The `date:` rail. |
+| `dirs` | object | never | The `dir:` rail. |
 
 `sources`:
 
@@ -336,16 +358,59 @@ One chip:
 | key | type | null? | |
 | --- | --- | --- | --- |
 | `value` | string | never | The source id, which is what `agent:` selects on and is permanent (ADR 16). |
-| `state` | string | never | `include` · `exclude` · `off`. Three states because the query has three things to say about a source: an excluded one drawn like an untouched one is filtering the reader cannot see. Clicking an excluded chip includes it — the rewrite strips the value from every token first, negated ones included. |
+| `state` | string | never | `include` · `exclude` · `off`. Three states because the query has three things to say about a source: an excluded one drawn like an untouched one is filtering the reader cannot see. Clicking an excluded chip includes it — the rewrite strips the value from every token first, negated ones included. A value the query both keeps and drops reads `exclude`, because in the SQL the exclusion is an `AND NOT` and survives the include beside it. |
 | `coverage` | string | never | `live` · `missing` · `unconfigured` · `retired`, as `cs status` reports them. Read beside `conversations`: a configured source at zero is a broken importer, and a source nobody configured is a tool nobody uses. Drawn from the index alone the two are one absence, which is the failure `chat-search-a7k.29` exists to prevent. |
 | `conversations` | integer | never | What the index holds for it. Zero is an answer, not an absence. |
 | `query` | string | never | The whole query text after clicking this chip. |
 
-Only `agent:` has a rail. `dir:` wants a corpus-true project list (`chat-search-6eb.26`) and
-`date:` wants a toggling rule of its own — its tokens intersect rather than union, so the
-`agent:` verb is the wrong one for it. Both **already filter**: they are in the grammar, they
-are applied, and a client with an input box can type them. What they lack is a rail, and each
-arrives as a sibling key of `sources` when it gets one.
+`dates`:
+
+| key | type | null? | |
+| --- | --- | --- | --- |
+| `keyword` | string | never | `date:`. |
+| `all` | object | never | `selected` is true exactly when the query carries no `date:` token — including one this rail has no chip for, which is the honest pair: something is filtering, and it is not one of these. |
+| `values` | array | never | The spans, newest first. Fixed vocabulary, not a census: an index that can count nothing still has four, because they are arithmetic. All but the last nest — today ⊂ this week ⊂ this month — and the last is the complement of the one before it, so the counts do not sum to the corpus. |
+
+One span:
+
+| key | type | null? | |
+| --- | --- | --- | --- |
+| `value` | string | never | The `date:` value the query text will carry: `today`, `week`, `month`, `>1mo`. |
+| `label` | string | never | The same span in words. Carried because `>1mo` is syntax rather than something to click, and two clients writing "Older" beside it is one rule written twice. |
+| `state` | string | never | `include` · `exclude` · `off`, as a source's. Two spellings of one span are one selection: `date:<7d` lights the week chip, because the comparison is of the window each resolves to and not of the text. |
+| `conversations` | integer | never | What the index holds inside the span, counted the way `search` filters it — an undated conversation is in none of them. |
+| `query` | string | never | The whole query text after clicking. It **replaces** whatever `date:` was there rather than widening, because two `date:` tokens intersect and the overlap of two spans is the smaller of them or nothing at all. That rule is `cs_core::query`'s; nothing about it is visible here beyond the string. |
+
+`dirs`:
+
+| key | type | null? | |
+| --- | --- | --- | --- |
+| `keyword` | string | never | `dir:`. |
+| `all` | object | never | `selected` is true exactly when the query carries no `dir:` token. |
+| `values` | array | never; may be empty | The busiest directories, most conversations first, ties broken by path. **Not every directory**: a rail is not a list, and the tail of this distribution is per-conversation scratch directories (`chat-search-6eb.26`). |
+| `indexed` | integer | never | Distinct directories in the index, which may be more than there are chips — what lets a client say it is showing 12 of 128. |
+| `undirected` | integer | never | Conversations recording no directory at all, which no `dir:` token can reach. Most of the corpus: only the agent sources have a working directory. A client that does not say so draws a facet that reads as a filter over everything. |
+
+One directory:
+
+| key | type | null? | |
+| --- | --- | --- | --- |
+| `value` | string | never | The `cwd` as recorded, which is what `dir:` selects on. A path, not a project name — deriving one collapsed seven unrelated directories onto a single label and the alternative read the live filesystem, which is why `chat-search-6eb.26` was closed. Shortening it for display is a client's business and reversible. |
+| `state` | string | never | `include` · `exclude` · `off`. `dir:` is a case-insensitive substring in the SQL, so **one token lights every directory beneath it**: `dir:dev` includes all of them, and clicking one off takes that token out rather than leaving a filter its chip no longer reflects. |
+| `conversations` | integer | never | What the index holds for it. |
+| `query` | string | never | The whole query text after clicking. A second directory widens, as a second source does. |
+
+**A directory whose click cannot be written is not offered.** No `dir:` token can carry a path
+with a space or a comma — whitespace separates words and commas separate values, so
+`dir:~/Mobile Documents` comes back as a filter *and* a search term. Each click is reparsed
+before it is handed over and the directory is dropped if the round trip does not name it, which
+costs a chip and saves a chip that lies. `indexed` still counts it. `chat-search-me9.8.16` is the
+quoting that would make it reachable.
+
+**A value the query names and this reply has no chip for** — a directory outside the busiest,
+`date:yesterday`, a bound someone typed — lights nothing and turns that section's `all.selected`
+off. That pair is the whole statement: something is filtering, and it is not one of these. The
+token itself is visible and editable where every filter is, in the box (docs/TUI-DESIGN.md §5).
 
 ---
 

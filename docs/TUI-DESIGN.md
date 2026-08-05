@@ -369,6 +369,29 @@ projects the rail here and hands each chip the query text clicking it produces. 
 Swift side assembles an `agent:` token, which is what keeps this section's rule true across the
 language boundary rather than only inside it. The shape is in docs/JSON-CONTRACT.md.
 
+**The other two facets, 2026-08-05 (`1ld`).** `agent:` reached a rail on one verb because its
+values are enum members that union. The other two are not, and the differences are decisions
+about the grammar, so they live in `cs_core::query` with it rather than in either client:
+
+- **A second `date:` chip replaces the first.** Date tokens *intersect* — that is what lets two
+  bounds describe a range — so a rail that widened would hand back `date:today date:>1mo`, whose
+  overlap is empty. `Facet::tokens_intersect` is the rule, one line beside the keyword, so
+  `Query::toggling` stays one verb and no client learns that the facets differ.
+- **A `date:` chip is lit by the window, not by the text.** `date:week` and `date:<7d` are one
+  selection written two ways. `Query::selection` answers for `date:` now — it read only
+  `FilterKind::Names` before, so a date chip could never light and toggling one always added.
+- **One `dir:` token lights every directory beneath it**, because `dir:` is a substring in the
+  SQL. Comparison for every rail goes through `Facet::selects`, which states each facet's own
+  comparison once; clicking a lit directory off removes whatever was lighting it.
+- **A directory whose click cannot be written is not offered.** No `dir:` token can carry a path
+  with a space or a comma, so the click is reparsed and dropped if the round trip does not name
+  it (`me9.8.16`). The chips are `cwd`s and not project names: `6eb.26` was closed by its own
+  measurements, and what it leaves is the column `dir:` already selects on.
+
+The `dir:` rail is the busiest twelve of 128 directories, and carries both that number and the
+3,303 conversations recording none — `6eb.26`'s finding that a facet two thirds of the corpus
+cannot answer has to say so rather than look like missing data.
+
 **Done, 2026-08-01 (`me9.16`).** `App` has no source field: a chip click calls
 `Query::toggling`, which returns the query *text* with the `agent:` token added or taken back
 out, and the bar draws itself from `Query::selection`. So a source chosen from the bar is

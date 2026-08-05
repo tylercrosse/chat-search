@@ -53,14 +53,18 @@ pub use blocks::{Block, Density, Fold, MarkKind, Transcript, WireBlock};
 pub use build::{open_for_read, IndexBuild, IndexState, Reader, Unreadable};
 pub use destination::{destinations, Destination};
 pub use eval::{Grade, Judged, QueryScore, Report};
-pub use facets::{AllChip, ChipState, SourceChip, SourceFacet};
+pub use facets::{
+    AllChip, ChipState, DateChip, DateFacet, DirChip, DirFacet, SourceChip, SourceFacet,
+};
 pub use index::{
     built_by, ensure_current, open, record_importer_version, reset, write_conversations,
     write_conversations_with, IndexOptions, IndexStats, TOOL_TEXT_MAX,
 };
-pub use inventory::{Coverage, SourceCoverage, Watched};
+pub use inventory::{Coverage, DateCoverage, DirCensus, DirCoverage, SourceCoverage, Watched};
 pub use model::{model_name, Conversation, Kind, Message, Role, Titles};
-pub use query::{Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection, Window};
+pub use query::{
+    Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection, Window, DATE_SPANS,
+};
 pub use schema::IMPORTER_VERSION;
 pub use search::{
     explain, match_density, snippet_marked, Explain, Field, Hit, SearchOptions, DECAY,

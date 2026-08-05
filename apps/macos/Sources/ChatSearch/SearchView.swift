@@ -27,7 +27,7 @@ struct SearchView: View {
             unappliedBanner
             openBanner
             HStack(spacing: 0) {
-                SourceRail(model: model)
+                Rail(model: model)
                 Rectangle().fill(theme.color(.rule)).frame(width: 1)
                 content
             }

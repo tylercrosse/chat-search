@@ -961,7 +961,13 @@ fn facets(config_path: &PathBuf, db_path: Option<PathBuf>, text: &str, json: boo
     // anything below anyway. The two readings differ only in whether the final term expands,
     // which reaches `match_expr` and nothing the projection touches.
     let query = cs_core::Query::typeahead(text);
-    let rail = cs_core::facets::sources(&query, &inventory::census(&db, &watched));
+    // One clock for the whole reply, so that no two spans can be counted either side of a
+    // midnight and no chip can be labelled from a different day than the one it counted.
+    let (sources, dirs, dates) =
+        inventory::rails(&db, &watched, DIR_CHIPS, cs_core::now_ms());
+    let source_rail = cs_core::facets::sources(&query, &sources);
+    let dir_rail = cs_core::facets::dirs(&query, &dirs);
+    let date_rail = cs_core::facets::dates(&query, &dates);
 
     if json {
         println!(
@@ -972,25 +978,71 @@ fn facets(config_path: &PathBuf, db_path: Option<PathBuf>, text: &str, json: boo
                 // — the same field, for the same reason, as the search envelope's.
                 "query": query.raw(),
                 "index_state": cs_core::IndexState::of(&db).as_str(),
-                "sources": rail,
+                "sources": source_rail,
+                "dirs": dir_rail,
+                "dates": date_rail,
             })
         );
     } else {
-        println!("  {:<6} {:<14} {:>7}  {:<12} {}", "", "source", "convs", "coverage", "click");
-        let all = if rail.all.selected { "[all]" } else { " all " };
-        println!("  {all:<6} {:<14} {:>7}  {:<12} {:?}", "", "", "", rail.all.query);
-        for c in &rail.values {
-            let mark = match c.state {
-                cs_core::ChipState::Include => "[on]",
-                cs_core::ChipState::Exclude => "[not]",
-                cs_core::ChipState::Off => "",
-            };
-            println!(
-                "  {mark:<6} {:<14} {:>7}  {:<12} {:?}",
-                c.value, c.conversations, c.coverage, c.query
-            );
+        // Drawn in the order a client draws them: recency first, because `ended_at` answers for
+        // every conversation and `cwd` for a third of them (`poc/ui`'s sidebar orders by coverage
+        // rather than by how interesting the facet is).
+        section("when", date_rail.keyword, &format!("{} spans", date_rail.values.len()));
+        row(chip_mark(date_rail.all.selected), "any time", "", &date_rail.all.query);
+        for c in &date_rail.values {
+            row(mark(c.state), c.label, &c.conversations.to_string(), &c.query);
+        }
+
+        section("sources", source_rail.keyword, "config ∪ index");
+        row(chip_mark(source_rail.all.selected), "all sources", "", &source_rail.all.query);
+        for c in &source_rail.values {
+            let count = format!("{} {}", c.conversations, c.coverage);
+            row(mark(c.state), &c.value, &count, &c.query);
+        }
+
+        section(
+            "directories",
+            dir_rail.keyword,
+            &format!("{} of {} indexed · {} record none", dir_rail.values.len(), dir_rail.indexed, dir_rail.undirected),
+        );
+        row(chip_mark(dir_rail.all.selected), "anywhere", "", &dir_rail.all.query);
+        for c in &dir_rail.values {
+            row(mark(c.state), &c.value, &c.conversations.to_string(), &c.query);
         }
     }
     Ok(())
+}
+
+/// How many directories the rail carries.
+///
+/// A rail rather than a list. `chat-search-6eb.26` measured a large share of this corpus's
+/// directories to be per-conversation scratch dirs, so the tail is worth counting and not worth
+/// drawing — and `indexed` beside the chips says how much of it was left out.
+const DIR_CHIPS: usize = 12;
+
+fn section(label: &str, keyword: &str, meta: &str) {
+    println!("\n{label}  {keyword} · {meta}");
+}
+
+/// One chip. The click is last because a path can be wider than any column, and the column that
+/// then runs on is the one nobody is reading down.
+fn row(mark: &str, value: &str, count: &str, click: &str) {
+    println!("  {mark:<5} {value:<52} {count:>13}  {click:?}");
+}
+
+fn mark(state: cs_core::ChipState) -> &'static str {
+    match state {
+        cs_core::ChipState::Include => "[on]",
+        cs_core::ChipState::Exclude => "[not]",
+        cs_core::ChipState::Off => "",
+    }
+}
+
+fn chip_mark(selected: bool) -> &'static str {
+    if selected {
+        "[on]"
+    } else {
+        ""
+    }
 }
 

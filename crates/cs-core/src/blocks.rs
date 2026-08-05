@@ -59,8 +59,9 @@ pub enum Fold {
 /// `thread_key` carries which strand a message belongs to. Ordering by `seq` alone therefore
 /// interleaves every thread at once: on a real 9-thread conversation it put all nine opening
 /// user turns first, then all nine first replies, which reads as nonsense. Main thread before
-/// sidechains, each strand contiguous. `idx_message_thread` is (conv_id, thread_key, seq),
-/// which exists for exactly this.
+/// sidechains, each strand contiguous. `idx_message_reading` is this order, and exists for
+/// exactly this — the index it replaced claimed the same and could not deliver it, being
+/// (conv_id, thread_key, seq) against a sort that leads with `is_sidechain`.
 ///
 /// A shared fragment rather than a comment on one query, because two of them now have to
 /// produce the *same* order: [`load`], and the shape `cs search` puts on every row

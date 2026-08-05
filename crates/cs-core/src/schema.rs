@@ -49,7 +49,24 @@ CREATE TABLE IF NOT EXISTS message(
 
 CREATE INDEX IF NOT EXISTS idx_message_conv    ON message(conv_id, seq);
 CREATE INDEX IF NOT EXISTS idx_message_parent  ON message(parent_id);
-CREATE INDEX IF NOT EXISTS idx_message_thread  ON message(conv_id, thread_key, seq);
+
+-- Reading order, covering. `blocks::READING_ORDER` sorts by (is_sidechain, thread_key, seq) and
+-- nothing here could produce it — the old `idx_message_thread` was (conv_id, thread_key, seq),
+-- which omits the column the sort leads with, so every query that reads a conversation in order
+-- built a temp b-tree over its messages first.
+--
+-- Carrying `role`, `kind` and `is_error` past the ordering columns is what makes the
+-- conversation shape (`Group::kind_runs`) an index-only read. That matters more than three
+-- narrow columns look: `message` stores its text inline, so selecting them out of the table
+-- walks the bodies too, and the shape reads every message of every conversation a search
+-- returns.
+--
+-- `on_head_path` sits *after* the ordering columns rather than in the middle of them, so a
+-- query that does not constrain it still gets the order for free. The off-path toggle in
+-- TUI-DESIGN §8 is not built yet, and an index that stopped working the day it was would be a
+-- trap. The cost is walking the 4% of rows that are off-path, against a sort this removes.
+CREATE INDEX IF NOT EXISTS idx_message_reading
+  ON message(conv_id, is_sidechain, thread_key, seq, on_head_path, role, kind, is_error);
 
 -- External content. The index stores postings only, exactly as `content=''` did, and reads
 -- the text back out of `message` by rowid on the rare occasion it needs it — so this is the

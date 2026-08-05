@@ -2103,7 +2103,7 @@ mod sitting_tests {
         // The whole of chat-search-o1i.5. Five conversations hold the word; three of them were
         // one sitting at the keyboard, so the reader is owed three rows and not five.
         let conn = corpus();
-        let groups = search_grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        let groups = grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
         let ids: Vec<&str> = groups.iter().map(|g| g.conv_id.as_str()).collect();
         assert_eq!(ids.len(), 3, "got {ids:?}");
 
@@ -2128,7 +2128,7 @@ mod sitting_tests {
     #[test]
     fn a_sitting_is_counted_and_positioned_as_the_conversation_it_was() {
         let conn = corpus();
-        let groups = search_grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        let groups = grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
         let folded = groups.iter().find(|g| g.conv_id == "g:1").unwrap();
 
         // Six messages and three turns, not the opener's two and one.
@@ -2153,7 +2153,7 @@ mod sitting_tests {
         // the messages under it still name the conversation that actually holds them, which is
         // what lets a client open the right one.
         let conn = corpus();
-        let groups = search_grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        let groups = grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
         let folded = groups.iter().find(|g| g.conv_id == "g:1").unwrap();
         let mut from: Vec<&str> = folded.hits.iter().map(|h| h.conv_id.as_str()).collect();
         from.sort_unstable();
@@ -2202,7 +2202,7 @@ mod sitting_tests {
         use crate::blocks::{Band, Run};
         let conn = corpus();
         let shaped = SearchOptions { shape: true, ..opts() };
-        let groups = search_grouped(&conn, &Query::exact("monad"), &shaped).unwrap();
+        let groups = grouped(&conn, &Query::exact("monad"), &shaped).unwrap();
         let folded = groups.iter().find(|g| g.conv_id == "g:1").unwrap();
         // Six bands, from three records of two — the opening record's shape alone would be
         // two, and a strip drawn from it would say "one question" about a nine-turn sitting.
@@ -2221,7 +2221,7 @@ mod sitting_tests {
         let conn = crate::open(":memory:").unwrap();
         record(&conn, "g:1", "gemini-apps", 0, &[("monad", "prose")]);
         record(&conn, "g:2", "gemini-apps", MINUTE, &[("monad again", "prose")]);
-        let groups = search_grouped(&conn, &Query::exact("monad"), &shaped).unwrap();
+        let groups = grouped(&conn, &Query::exact("monad"), &shaped).unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].kind_runs, [Run(Band::User, 2)]);
     }
@@ -2250,7 +2250,7 @@ mod sitting_tests {
             conn.execute("INSERT INTO fts_prose(rowid, text) VALUES (?1, 'monad')", params![rowid])
                 .unwrap();
         }
-        let groups = search_grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        let groups = grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
         assert_eq!(groups.len(), 2);
         assert!(groups.iter().all(|g| g.sitting.is_none()));
         assert!(groups.iter().all(|g| g.msg_count == 1));
@@ -2915,7 +2915,7 @@ mod sitting_cost {
         let search = |text: &str| {
             let query = Query::typeahead(text);
             best(&|| {
-                std::hint::black_box(search_grouped(&conn, &query, &opts()).unwrap());
+                std::hint::black_box(grouped(&conn, &query, &opts()).unwrap());
             })
         };
         // The whole row count, settled: a blank query takes the branch that ranks nothing and
@@ -2934,7 +2934,7 @@ mod sitting_cost {
         // 345 MB index is larger than the difference being measured, and lands entirely on
         // the fold, since the fold has to be measured before the tables are emptied.
         for text in queries {
-            std::hint::black_box(search_grouped(&conn, &Query::typeahead(text), &opts()).unwrap());
+            std::hint::black_box(grouped(&conn, &Query::typeahead(text), &opts()).unwrap());
         }
         let with: Vec<(f64, usize)> = queries.iter().map(|t| (search(t), total(t))).collect();
 

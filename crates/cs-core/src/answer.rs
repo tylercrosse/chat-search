@@ -262,6 +262,11 @@ pub struct Group {
     pub kind_runs: Vec<crate::blocks::Run>,
     /// Gone from the source, kept here (ADR 9).
     pub deleted_upstream: bool,
+    /// The conversations this row stands for, when it stands for more than itself, or `null`
+    /// when it is one conversation — which is the whole corpus bar the Google Takeout records.
+    /// A reconstruction over timestamps rather than something an export recorded, reported so a
+    /// client can say so (`chat-search-o1i.5`).
+    pub sitting: Option<crate::search::Sitting>,
     /// The best matching messages, best first, capped by [`SearchOptions::nested`]. Empty when
     /// nothing was asked for and on the recent route, where nothing matched.
     ///
@@ -425,6 +430,7 @@ impl From<search::Group> for Group {
             match_seqs,
             kind_runs,
             deleted_upstream,
+            sitting,
             hits,
         } = g;
         Group {
@@ -444,6 +450,7 @@ impl From<search::Group> for Group {
             match_seqs,
             kind_runs,
             deleted_upstream,
+            sitting,
             matches: hits.into_iter().map(Match::from).collect(),
         }
     }
@@ -662,6 +669,9 @@ mod tests {
                 "native_id",
                 "prose_count",
                 "score",
+                // Null on every row here, and on every row of every source but Google Takeout
+                // — but a key a client decodes, so it is stated (`chat-search-o1i.5`).
+                "sitting",
                 "source",
                 "title",
                 "user_turns",

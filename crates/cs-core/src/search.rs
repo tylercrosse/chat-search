@@ -401,9 +401,18 @@ fn mark(conn: &Connection, query: &Query, field: Field, pending: Vec<Unmarked>) 
 /// in a kind nobody indexes, the text was never indexed at all, or it was indexed and ranked
 /// too low — and they need opposite fixes. Guessing between them is the slowest part of tuning
 /// ranking, so the index answers it directly.
+///
+/// **About the row, not about the record.** Asked for an id the search layer folded into a
+/// sitting, every count below is the whole sitting's, because the thing that failed to come
+/// back was the row — explaining the two messages of the record someone happened to name would
+/// answer a question about a result set that never had it in it (chat-search-o1i.8).
 #[derive(Debug, Serialize)]
 pub struct Explain {
+    /// The unit explained — the record that *opened* it when `sitting` is set, so this is the
+    /// id that would have appeared in the result set and not necessarily the one asked about.
     pub conv_id: String,
+    /// Set when the id names several activity-log records the search layer reads as one chat.
+    pub sitting: Option<crate::sittings::Sitting>,
     pub exists: bool,
     pub messages: i64,
     pub prose_messages: i64,
@@ -443,26 +452,50 @@ pub struct Explain {
     pub verdict: String,
 }
 
+/// `?1, ?2, …` over a range of parameter numbers.
+///
+/// SQLite has no array parameter, so an `IN` list of unknown length has to be spelled out.
+/// What goes in it is a count, never a value — every id is still bound.
+fn placeholders(range: std::ops::RangeInclusive<usize>) -> String {
+    range.map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ")
+}
+
 /// `now_ms` is threaded in rather than read from the clock so this answers about the ranking
 /// that actually ran. It previously built its options with the zero default and therefore
 /// reported a rank no shipping ranker produces — while printing a verdict blaming ranking.
+///
+/// Every count is taken over [`crate::sittings::resolve`]'s answer rather than over the id as
+/// given, so the unit explained is the unit ranked. Whatever resolves `cs show` resolves this.
 pub fn explain(
     conn: &Connection,
     conv_id: &str,
     text: &str,
     now_ms: i64,
 ) -> rusqlite::Result<Explain> {
-    let exists: bool =
-        conn.query_row("SELECT COUNT(*) FROM conversation WHERE id=?1", params![conv_id], |r| {
-            Ok(r.get::<_, i64>(0)? > 0)
-        })?;
+    crate::sittings::ensure(conn)?;
+    let sitting = crate::sittings::Sitting::of(conn, conv_id)?;
+    // Never empty, so `records[0]` is always a real id and every `IN` below has something in
+    // it. It is the id as given when nothing was folded, and the opener otherwise.
+    let records = crate::sittings::resolve(conn, conv_id)?;
+    let ids = || params_from_iter(records.iter());
+    // `?1, ?2, …`, sized to the sitting. Built rather than bound as a list because SQLite has
+    // no array parameter; the values themselves are still bound, never interpolated.
+    let of_row = placeholders(1..=records.len());
+
+    let exists: bool = conn.query_row(
+        &format!("SELECT COUNT(*) FROM conversation WHERE id IN ({of_row})"),
+        ids(),
+        |r| Ok(r.get::<_, i64>(0)? > 0),
+    )?;
 
     let (messages, prose_messages, off_path): (i64, i64, i64) = conn.query_row(
-        "SELECT COUNT(*),
-                COALESCE(SUM(kind='prose'),0),
-                COALESCE(SUM(on_head_path=0),0)
-         FROM message WHERE conv_id=?1",
-        params![conv_id],
+        &format!(
+            "SELECT COUNT(*),
+                    COALESCE(SUM(kind='prose'),0),
+                    COALESCE(SUM(on_head_path=0),0)
+             FROM message WHERE conv_id IN ({of_row})"
+        ),
+        ids(),
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
 
@@ -477,15 +510,21 @@ pub fn explain(
     // indexer's rule is "every prose message gets a posting", so a count that applied that rule
     // a second time would agree with it by construction and catch nothing.
     let indexed_prose: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM fts_prose_docsize d JOIN message m ON m.rowid = d.id
-         WHERE m.conv_id = ?1",
-        params![conv_id],
+        &format!(
+            "SELECT COUNT(*) FROM fts_prose_docsize d JOIN message m ON m.rowid = d.id
+             WHERE m.conv_id IN ({of_row})"
+        ),
+        ids(),
         |r| r.get(0),
     )?;
 
+    // The opener's, matching the row: `hydrate` reads this column for the conversation the row
+    // points at. A sitting whose third record was deleted upstream and whose first was not is
+    // a state nothing downstream can draw, and inventing an "any of them" answer here would
+    // put a marker on a row the search reply does not carry one for.
     let deleted_upstream: bool = conn.query_row(
         "SELECT deleted_upstream_at IS NOT NULL FROM conversation WHERE id=?1",
-        params![conv_id],
+        params![records[0]],
         |r| r.get(0),
     ).unwrap_or(false);
 
@@ -507,18 +546,27 @@ pub fn explain(
         unindexed_kinds.iter().map(|k| format!("'{k}'")).collect::<Vec<_>>().join(",");
 
     let unindexed_messages: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM message WHERE conv_id=?1 AND kind IN ({unindexed_list})"),
-        params![conv_id],
+        &format!(
+            "SELECT COUNT(*) FROM message
+             WHERE conv_id IN ({of_row}) AND kind IN ({unindexed_list})"
+        ),
+        ids(),
         |r| r.get(0),
     )?;
 
+    // The term goes in the slot after the ids, so the two lists cannot collide as the sitting
+    // grows.
+    let of_term = format!("?{}", records.len() + 1);
     let mut term_hits = Vec::new();
     let mut unindexed_term_hits = Vec::new();
     for term in parsed.terms() {
+        let with_term = || params_from_iter(records.iter().chain(std::iter::once(term)));
         let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM message WHERE conv_id=?1 AND kind='prose'
-               AND lower(text) LIKE '%' || lower(?2) || '%'",
-            params![conv_id, term],
+            &format!(
+                "SELECT COUNT(*) FROM message WHERE conv_id IN ({of_row}) AND kind='prose'
+                   AND lower(text) LIKE '%' || lower({of_term}) || '%'"
+            ),
+            with_term(),
             |r| r.get(0),
         )?;
         term_hits.push((term.clone(), n));
@@ -529,10 +577,11 @@ pub fn explain(
         // a reader to look, where a miss would let them conclude the word does not exist.
         let u: i64 = conn.query_row(
             &format!(
-                "SELECT COUNT(*) FROM message WHERE conv_id=?1 AND kind IN ({unindexed_list})
-                   AND lower(text) LIKE '%' || lower(?2) || '%'"
+                "SELECT COUNT(*) FROM message
+                 WHERE conv_id IN ({of_row}) AND kind IN ({unindexed_list})
+                   AND lower(text) LIKE '%' || lower({of_term}) || '%'"
             ),
-            params![conv_id, term],
+            with_term(),
             |r| r.get(0),
         )?;
         unindexed_term_hits.push((term.clone(), u));
@@ -541,12 +590,20 @@ pub fn explain(
     // Asked of the filters alone, with no MATCH in the way, so the answer holds even for a
     // query with no searchable terms — which is precisely when the text-shaped verdicts have
     // nothing to say and the filter is the whole story.
-    let mut binds = vec![Value::Text(conv_id.to_string())];
+    //
+    // Excluded only when *no* record survives. The ranker applies filters per message against
+    // the conversation that holds it and folds afterwards, so a sitting whose middle record
+    // passes is a row the query can still return — reporting it excluded because its opener
+    // was filtered out would blame the filter for a result that is there.
+    let mut binds: Vec<Value> =
+        records.iter().map(|id| Value::Text(id.clone())).collect();
     let filters = filter_sql(&parsed, now_ms, &mut binds);
     let excluded_by_filter = exists
         && !filters.is_empty()
         && !conn.query_row(
-            &format!("SELECT EXISTS(SELECT 1 FROM conversation c WHERE c.id = ?1{filters})"),
+            &format!(
+                "SELECT EXISTS(SELECT 1 FROM conversation c WHERE c.id IN ({of_row}){filters})"
+            ),
             params_from_iter(binds.iter()),
             |r| r.get::<_, i64>(0).map(|n| n > 0),
         )?;
@@ -556,7 +613,10 @@ pub fn explain(
         &parsed,
         &SearchOptions { limit: 500, include_off_path: true, ..SearchOptions::new(now_ms) },
     )?;
-    let best_rank = ranked.iter().position(|h| h.conv_id == conv_id);
+    // `search` is the ungrouped route, so its hits name the record that holds each message.
+    // Any record of the sitting is the row's best hit, because the row is what the grouped
+    // ranker would have built out of them.
+    let best_rank = ranked.iter().position(|h| records.contains(&h.conv_id));
     let best_score = best_rank.map(|i| ranked[i].score);
 
     let verdict = if !exists {
@@ -596,7 +656,8 @@ pub fn explain(
     };
 
     Ok(Explain {
-        conv_id: conv_id.to_string(),
+        conv_id: records[0].clone(),
+        sitting,
         exists,
         messages,
         prose_messages,
@@ -2255,6 +2316,66 @@ mod sitting_tests {
             assert_eq!(t.count, 2);
             assert!(t.sitting.is_none(), "{id} is one conversation and says so");
         }
+    }
+
+    #[test]
+    fn explaining_a_row_explains_the_sitting_and_not_the_record_that_opened_it() {
+        // `cs explain` is asked why a *result* is missing or misplaced, and the result is the
+        // row. Counting the opener's two messages would answer about something the ranker
+        // never treated as a unit, and the counts beside the verdict would contradict the row
+        // in the very result set the question is about.
+        let conn = corpus();
+        let e = explain(&conn, "g:1", "monad", 0).unwrap();
+        assert_eq!((e.messages, e.prose_messages, e.indexed_prose), (6, 6, 6));
+        assert_eq!(e.sitting.as_ref().unwrap().members, ["g:1", "g:2", "g:3"]);
+        // Three records hold the word, not just the one named.
+        assert_eq!(e.term_hits, [("monad".to_string(), 3)]);
+        assert!(e.best_rank.is_some(), "a record of it did rank");
+
+        // Any member asks the same question and gets the same answer, under the opener's name
+        // — the same resolution `cs show` does, because a client copying an id out of
+        // `Sitting.members` cannot know which of them opened it.
+        for id in ["g:2", "g:3"] {
+            let member = explain(&conn, id, "monad", 0).unwrap();
+            assert_eq!(member.conv_id, "g:1", "{id}");
+            assert_eq!(member.messages, e.messages, "{id}");
+            assert_eq!(member.best_rank, e.best_rank, "{id}");
+        }
+
+        // And a conversation the fold never touched still answers for itself alone.
+        let alone = explain(&conn, "g:4", "monad", 0).unwrap();
+        assert_eq!((alone.conv_id.as_str(), alone.messages), ("g:4", 2));
+        assert!(alone.sitting.is_none());
+    }
+
+    #[test]
+    fn a_sitting_is_only_filtered_out_when_every_record_in_it_is() {
+        // A sitting that began before midnight and ran past it — the one shape where a `date:`
+        // filter can split one row's records. The ranker filters per message against the
+        // conversation holding it and folds afterwards, so the row survives on the record that
+        // passes; judging the opener alone would blame the filter for a result that is in the
+        // list.
+        let midnight = crate::time::local_day_start(30 * 24 * 3_600_000).unwrap();
+        let conn = crate::open(":memory:").unwrap();
+        record(&conn, "g:1", "gemini-apps", midnight - 5 * MINUTE, &[("monad", "prose")]);
+        record(&conn, "g:2", "gemini-apps", midnight + 5 * MINUTE, &[("monad again", "prose")]);
+
+        let today = format!("date:{}", crate::time::local_ymd(midnight).unwrap());
+        assert_ne!(
+            crate::time::local_ymd(midnight - 5 * MINUTE),
+            crate::time::local_ymd(midnight + 5 * MINUTE),
+            "the fixture has to actually put the opener outside the window"
+        );
+
+        let e = explain(&conn, "g:1", &format!("monad {today}"), 0).unwrap();
+        assert!(!e.excluded_by_filter, "g:2 is inside it, so the row is too");
+        assert!(
+            grouped(&conn, &Query::exact(&format!("monad {today}")), &opts())
+                .unwrap()
+                .iter()
+                .any(|g| g.conv_id == "g:1"),
+            "and the verdict agrees with the result set it is about"
+        );
     }
 
     #[test]

@@ -129,11 +129,19 @@ private struct Sparkline: View {
     private static let height: CGFloat = 16
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 1) {
+        // Bucketed once and the peak taken once, rather than per bar: this is a header in a list
+        // that is rebuilt on every keystroke, and the arithmetic below is cheap only while it
+        // happens twelve times fewer than the obvious way of writing it.
+        let buckets = self.buckets
+        let peak = CGFloat(max(1, buckets.max() ?? 1))
+        return HStack(alignment: .bottom, spacing: 1) {
             ForEach(Array(buckets.enumerated()), id: \.offset) { _, count in
                 RoundedRectangle(cornerRadius: 0.5)
                     .fill(theme.color(count == 0 ? .ink3 : .kUser).opacity(count == 0 ? 0.25 : 0.8))
-                    .frame(width: 3, height: count == 0 ? 1.5 : bar(count))
+                    .frame(
+                        width: 3,
+                        height: count == 0
+                            ? 1.5 : max(3, (CGFloat(count) / peak * Self.height).rounded()))
             }
         }
         // Fixed whether or not there are bars, so a group with two conversations in it does not
@@ -152,10 +160,5 @@ private struct Sparkline: View {
             buckets[min(max(position, 0), Self.bars - 1)] += 1
         }
         return buckets
-    }
-
-    private func bar(_ count: Int) -> CGFloat {
-        let peak = max(1, buckets.max() ?? 1)
-        return max(3, (CGFloat(count) / CGFloat(peak) * Self.height).rounded())
     }
 }

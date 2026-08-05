@@ -1,4 +1,11 @@
-//! Which sources exist, and how much of each one the index holds (chat-search-a7k.29).
+//! What the corpus is made of, counted: which sources exist and how much of each one the index
+//! holds (chat-search-a7k.29), which directories it holds, and how far back it goes
+//! (chat-search-1ld).
+//!
+//! All three are *censuses*, and that word is doing work: they count the whole index rather than
+//! the answer to a query. A rail built from what matched can only list what is already in front
+//! of the reader — which is how a source with nothing indexed becomes invisible, and how a
+//! project you have not touched this month stops existing.
 //!
 //! The index can only answer *which sources produced rows*, and that is not the question a
 //! client asks. A configured source holding nothing and a source nobody ever configured are
@@ -160,6 +167,122 @@ pub fn join(watched: &[Watched], indexed: &[(String, i64)]) -> Vec<SourceCoverag
     out.into_values().collect()
 }
 
+// ---- the other two facets' censuses (chat-search-1ld) ---------------------------------------
+//
+// Neither has a config half, so neither needs the caller to supply anything: a directory is only
+// ever a fact of the index, and a span is arithmetic. They are here rather than beside the
+// projection for the same reason `of` is — `cs_core::facets` reads no connection, so that the
+// join can be tested over inputs a test can state rather than an index it has to build.
+
+/// One directory the index holds conversations for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirCoverage {
+    /// The `cwd` as recorded, which is what `dir:` selects on and what a client shortens for
+    /// display. Never a derived project name: `chat-search-6eb.26` measured basename collapsing
+    /// 100 directories to 90, seven of them called `i`, and the nearest-`.git`-ancestor
+    /// alternative reads the live filesystem and so breaks ADR 1.
+    pub path: String,
+    pub conversations: i64,
+}
+
+/// The directories a rail can offer, and the shape of what it leaves out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirCensus {
+    /// The busiest directories, most conversations first and ties broken by path so that the
+    /// rail does not reshuffle between two runs over one index.
+    pub busiest: Vec<DirCoverage>,
+    /// Distinct directories in the index, `busiest` included. What says whether the rail is the
+    /// whole list or the head of one.
+    pub indexed: i64,
+    /// Conversations recording no directory at all. Two thirds of this corpus, because only the
+    /// agent sources have a working directory to record — so a `dir:` rail that did not carry
+    /// this number would read as a filter over everything (`chat-search-6eb.26`).
+    pub undirected: i64,
+}
+
+/// The directory census: the busiest `limit` of them, and the totals that place them.
+///
+/// `limit` is the caller's because the rail is a rail and not a list: the tail of this
+/// distribution is per-conversation scratch directories, which are worth counting and not worth
+/// drawing. Zero means every directory.
+pub fn dirs(conn: &Connection, limit: usize) -> rusqlite::Result<DirCensus> {
+    let sql = format!(
+        "SELECT cwd, COUNT(*) FROM conversation
+          WHERE cwd IS NOT NULL AND cwd <> ''
+          GROUP BY cwd
+          ORDER BY COUNT(*) DESC, cwd{}",
+        if limit == 0 { String::new() } else { format!("\n          LIMIT {limit}") }
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let busiest = stmt
+        .query_map([], |r| Ok(DirCoverage { path: r.get(0)?, conversations: r.get(1)? }))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // `''` counted with NULL rather than as a directory: an importer that recorded an empty
+    // string knows no more about where the conversation ran than one that recorded nothing.
+    let (indexed, undirected) = conn.query_row(
+        "SELECT COUNT(DISTINCT nullif(cwd, '')),
+                COUNT(*) FILTER (WHERE cwd IS NULL OR cwd = '')
+           FROM conversation",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+
+    Ok(DirCensus { busiest, indexed, undirected })
+}
+
+/// How many conversations fall in one of the spans a rail offers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DateCoverage {
+    /// The `date:` value this counts, as a client would click it — one of
+    /// [`crate::query::DATE_SPANS`].
+    pub value: &'static str,
+    pub conversations: i64,
+}
+
+/// The recency census: every span in [`crate::query::DATE_SPANS`], counted against one clock.
+///
+/// The spans nest rather than partition, so these do not sum to the corpus and are not meant to:
+/// each is the answer to "how many are there if I go back this far", which is the question the
+/// rail asks. Counted in one statement against one `now_ms`, so that no two rows can be answered
+/// either side of a midnight.
+///
+/// The predicate is `search`'s — `ended_at IS NOT NULL` and a half-open `[from, until)` — because
+/// a count that did not match the filter it labels is a chip promising rows the click cannot
+/// produce. An undated conversation is in no span, and so is in nothing this counts.
+pub fn dates(conn: &Connection, now_ms: i64) -> rusqlite::Result<Vec<DateCoverage>> {
+    let mut columns = Vec::new();
+    let mut binds: Vec<i64> = Vec::new();
+    for (value, _) in crate::query::DATE_SPANS {
+        // A span that cannot resolve counts nothing rather than counting everything. The values
+        // are constants, so this is unreachable short of a clock outside chrono's range — and
+        // `0` beside a live chip is the reading that does not overstate.
+        let Some(window) =
+            crate::query::DateSpec::parse(value).and_then(|spec| spec.window(now_ms))
+        else {
+            columns.push("0".to_string());
+            continue;
+        };
+        let mut bounds = vec!["ended_at IS NOT NULL".to_string()];
+        for (bound, edge) in [(window.from, ">="), (window.until, "<")] {
+            if let Some(at) = bound {
+                binds.push(at);
+                bounds.push(format!("ended_at {edge} ?{}", binds.len()));
+            }
+        }
+        columns.push(format!("COUNT(*) FILTER (WHERE {})", bounds.join(" AND ")));
+    }
+
+    let sql = format!("SELECT {} FROM conversation", columns.join(", "));
+    conn.query_row(&sql, rusqlite::params_from_iter(binds.iter()), |r| {
+        crate::query::DATE_SPANS
+            .iter()
+            .enumerate()
+            .map(|(i, (value, _))| Ok(DateCoverage { value, conversations: r.get(i)? }))
+            .collect()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +357,107 @@ mod tests {
         // The one the index cannot see at all, which is the point.
         assert_eq!((inventory[0].id.as_str(), inventory[0].conversations), ("claude-code", 0));
         assert_eq!(inventory[0].coverage, Coverage::Live);
+    }
+
+    // ---- the other two censuses (chat-search-1ld) ----
+
+    /// Noon on the day `1_785_000_000_000` falls on, locally. A fixed instant would put "today"
+    /// a few minutes wide on a machine running these at 00:01, and a test that fails once a day
+    /// is a test nobody believes the rest of the time.
+    fn noon() -> i64 {
+        crate::time::local_day_start(1_785_000_000_000).unwrap() + 12 * 3_600_000
+    }
+
+    fn indexed(convs: &[Conversation]) -> rusqlite::Connection {
+        let mut conn = crate::index::open(":memory:").unwrap();
+        crate::index::write_conversations(&mut conn, convs).unwrap();
+        conn
+    }
+
+    #[test]
+    fn the_directory_census_leads_with_the_busiest_and_says_what_it_left_out() {
+        // A rail is a rail: `chat-search-6eb.26` found a large share of this corpus's directories
+        // are per-conversation scratch dirs, so the tail is worth counting and not worth drawing.
+        let conn = indexed(&[
+            in_dir("a", Some("/home/t/web-app")),
+            in_dir("b", Some("/home/t/web-app")),
+            in_dir("c", Some("/home/t/api")),
+            in_dir("d", Some("/home/t/scratch")),
+        ]);
+        let census = dirs(&conn, 2).unwrap();
+        assert_eq!(
+            census.busiest,
+            [
+                DirCoverage { path: "/home/t/web-app".into(), conversations: 2 },
+                DirCoverage { path: "/home/t/api".into(), conversations: 1 },
+            ],
+            "ties break by path, so two runs over one index draw the same rail"
+        );
+        assert_eq!(census.indexed, 3, "the one it did not draw is still counted");
+        assert_eq!(dirs(&conn, 0).unwrap().busiest.len(), 3, "no limit is every directory");
+    }
+
+    #[test]
+    fn a_conversation_that_records_no_directory_is_counted_rather_than_dropped() {
+        // Two thirds of the real corpus. A rail that reported only the directories would read as
+        // a filter over everything, when `dir:` cannot reach a ChatGPT conversation at all.
+        let conn = indexed(&[
+            in_dir("a", Some("/home/t/web-app")),
+            in_dir("b", None),
+            // An importer that recorded an empty string knows no more than one that recorded
+            // nothing, so it is not a third state and certainly not a directory.
+            in_dir("c", Some("")),
+        ]);
+        let census = dirs(&conn, 0).unwrap();
+        assert_eq!(census.indexed, 1);
+        assert_eq!(census.undirected, 2);
+    }
+
+    #[test]
+    fn the_spans_nest_rather_than_partition_the_corpus() {
+        // Which is why they do not sum to it: each answers "how many are there if I go back this
+        // far", and today is inside this week is inside this month.
+        let now = noon();
+        let conn = indexed(&[
+            ended("a", now - 3_600_000),
+            ended("b", now - 3 * 86_400_000),
+            ended("c", now - 20 * 86_400_000),
+            ended("d", now - 200 * 86_400_000),
+        ]);
+        let counts: Vec<i64> = dates(&conn, now).unwrap().iter().map(|d| d.conversations).collect();
+        assert_eq!(counts, [1, 2, 3, 1], "today ⊂ week ⊂ month, and older is the rest");
+        assert_eq!(
+            dates(&conn, now).unwrap().iter().map(|d| d.value).collect::<Vec<_>>(),
+            ["today", "week", "month", ">1mo"],
+            "in the order a rail draws them"
+        );
+    }
+
+    #[test]
+    fn a_conversation_with_no_end_is_in_no_span_at_all() {
+        // `search`'s own reading: the filter is `ended_at IS NOT NULL AND …`, so a count that
+        // swept an undated conversation into "older" would label a chip with rows its click
+        // cannot return.
+        let now = noon();
+        let conn = indexed(&[undated("a"), ended("b", now - 200 * 86_400_000)]);
+        let counts: Vec<i64> = dates(&conn, now).unwrap().iter().map(|d| d.conversations).collect();
+        assert_eq!(counts, [0, 0, 0, 1]);
+    }
+
+    fn in_dir(native_id: &str, cwd: Option<&str>) -> Conversation {
+        Conversation { cwd: cwd.map(str::to_string), ..conv("codex", native_id) }
+    }
+
+    fn ended(native_id: &str, ts: i64) -> Conversation {
+        let mut c = conv("codex", native_id);
+        c.messages[0].ts = Some(ts);
+        c
+    }
+
+    fn undated(native_id: &str) -> Conversation {
+        let mut c = conv("codex", native_id);
+        c.messages[0].ts = None;
+        c
     }
 
     fn conv(source: &str, native_id: &str) -> Conversation {

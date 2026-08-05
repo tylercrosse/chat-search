@@ -187,6 +187,19 @@ pub enum DateSpec {
     Older(Age),
 }
 
+/// The spans a facet rail offers, as `(value, label)`, in the order they are drawn.
+///
+/// Newest first. The first three nest — today is inside this week is inside this month — and the
+/// last is the complement of the third, so the four tile the corpus without partitioning it.
+/// That is `poc/ui`'s `WHEN_ROWS`, and it is the arrangement a reader wants from a *recency*
+/// facet: the question is "how far back do I have to go", not "which bucket is it in".
+///
+/// The label is here and not in a client because it is a rendering of the grammar, not a
+/// decoration on it: `>1mo` reads as syntax, and two clients writing "Older" beside it twice is
+/// the shape of every rule this crate exists to hold once.
+pub const DATE_SPANS: [(&str, &str); 4] =
+    [("today", "Today"), ("week", "This week"), ("month", "This month"), (">1mo", "Older")];
+
 /// A resolved half-open window of epoch millis, `[from, until)`.
 ///
 /// Half-open so that consecutive days tile without a millisecond falling in both or neither.
@@ -1315,6 +1328,22 @@ mod tests {
         assert_eq!(q.selection(Facet::Date).include, ["today"]);
         assert!(q.selection(Facet::Date).exclude.is_empty());
         assert_eq!(q.date_windows(1_785_000_000_000).len(), 1, "one window, not two");
+    }
+
+    #[test]
+    fn every_span_a_rail_offers_is_a_value_this_grammar_parses() {
+        // The constant and its parser are two things, and a span nobody can parse would reach a
+        // client as a chip that filters nothing while counting something.
+        for (value, label) in DATE_SPANS {
+            assert!(DateSpec::parse(value).is_some(), "{value} ({label}) is not a date value");
+            assert!(Query::typeahead(&format!("date:{value}")).rejected().is_empty(), "{value}");
+        }
+        // And they are four different windows, or a rail would draw the same span twice.
+        for (i, (a, _)) in DATE_SPANS.iter().enumerate() {
+            for (b, _) in &DATE_SPANS[i + 1..] {
+                assert!(!Facet::Date.selects(a, b), "{a} and {b} are the same span");
+            }
+        }
     }
 
     #[test]

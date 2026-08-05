@@ -17,7 +17,12 @@ Flags, all of which exist so this can be exercised without touching real data:
 ```bash
 swift run -c release chat-search --db /tmp/scratch.db --config /tmp/scratch-config.toml
 swift run -c release chat-search --bin /path/to/cs --limit 30
+swift run -c release chat-search --size 720x480
 ```
+
+`--size` opens the window at a stated size. It is a verification affordance rather than a
+preference — the row has to hold at several widths and a window that always opens at one makes
+checking that a drag nobody repeats.
 
 ## What it is made of
 
@@ -178,6 +183,65 @@ Three things this seam does **not** do yet, each filed:
   and it trades against rows-per-screen. The search bar's, the banner's and the footer's are not —
   they are literal in `styles.css` too — so dialling those is still a view edit.
   `chat-search-me9.8.11`.
+
+## The row
+
+`poc/ui/index.html` is the structure: line 1 metadata, line 2 the title full width, line 3 the best
+match — and line 3 only when there is one, which the contract decides rather than the view, since
+`matches` is empty for an empty query. Line 1 is two clusters split by a gutter, `source` and size
+on the left, directory and age on the right, because `cwd` answers *which of my worlds was this*
+rather than *what is it*.
+
+What it draws is what the wire carries: source, size, directory, age, the title, and the best match
+with its highlight runs. Four of the mockup's cells are not on the wire at all and one is held back
+on purpose. All five are absent rather than blank — a cell with nothing behind it is not a column to
+reserve space for:
+
+| cell | why not |
+| --- | --- |
+| model | in the index, not in the contract. `chat-search-me9.8.14` |
+| forks | `thread_count`, same |
+| total edit lines | nowhere. `export.py` sums them by parsing `Edit`/`Write` tool arguments |
+| topics | a `poc/ui` clustering over the corpus, not an index fact |
+| the ribbon | deliberate: it needs `kind_runs` and `match_seqs` in one coordinate space, which `chat-search-me9.25` says they are not, and nothing stands in its place |
+
+**The agent badge is the word, not an icon, and that is a re-measure rather than a disagreement.**
+The mockup dropped the word because its list column was a fixed 706px and the word cost the 66px
+`cwd` needed to stop collapsing. This row does not spend that: with no model cell and no ribbon it
+costs about 200pt less, so at the window's 720pt floor `cwd` still gets ~470pt against the mockup's
+17-character budget. It is also the only channel there is — no asset catalog means no per-source
+icon, and SF Symbols has no glyph for a vendor — so the row carries colour and text where the
+mockup carried shape and colour. Text is the channel that survives greyscale.
+
+**The column plan is in characters of the meta face, not in points.** `source` 14, size 9, the
+gutter 4 and `age` 4, with the directory taking what is left up to 44. One character is measured
+off the theme's own size and design, so a direction that moves `--fs-meta` moves the columns with
+it instead of leaving the text to outgrow its cell. The terminal states its own plan in character
+cells for a different reason — it has nothing else — and the two are the same idea.
+
+The directory's ceiling is the corpus's: 88% of directories are 35 characters or fewer, 91% are 44
+or fewer, and the tail is worktree paths, which middle-elide to their leaf. Elision is middle and
+never tail, because tail-elision discards the leaf, which is the discriminating token
+(`docs/TUI-DESIGN.md` §2). Titles elide the other way for the mirror-image reason.
+
+Source labels, `$HOME` collapsing and the age buckets are second implementations of
+`cs-tui/src/text.rs` and `cs-tui/src/theme.rs`, named after their originals. The seam is JSON over
+argv, so a Swift process cannot share that code — but what the terminal calls a source and what the
+window calls it have to be the same word.
+
+Rendered against the live index at 720, 900 and 1400pt. Two things only real data at a real width
+could show:
+
+- The message count was locale-formatted. `Text("\(count) msgs")` is a `LocalizedStringKey`, an
+  `Int` interpolated into one gets thousands separators, and the corpus's largest conversation
+  rendered `2,553 ms…`.
+- `styles.css` makes `cwd` the flexible track while its own comment says the gutter is. At 1400pt
+  an unbounded `cwd` strands the directory mid-row with the age against the far edge and the two
+  clusters stop being clusters, so the ceiling above is what the comment was describing.
+
+Not here, and not this bead's: selection and hover, which are what a row is for once there is a
+reader pane to select into (`chat-search-me9.8.3`); and `deleted_upstream`, which is on the wire and
+has nowhere to be said yet.
 
 ## The four index states
 

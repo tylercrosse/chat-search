@@ -3,8 +3,8 @@ import CsTheme
 import SwiftUI
 
 /// A search field, a list, and a line saying what the index is doing. That is the whole shell —
-/// the row's anatomy, the reader, grouping and facets are `chat-search-me9.8.2` onward, and
-/// taking any of them here is what re-blocks them.
+/// the row's anatomy is `ResultRow`, and the reader, grouping and facets are
+/// `chat-search-me9.8.3` onward, so taking any of those here is what re-blocks them.
 ///
 /// Nothing below names a colour, a size or a face. Every one is a token off `\.theme`
 /// (`chat-search-me9.8.8`), which is what makes a change of direction a change to one generated
@@ -191,7 +191,9 @@ struct SearchView: View {
                 // recycles — 5.2 MB scrolling 3,200 rows against LazyVStack's 65.6 MB and plain
                 // VStack's 566 MB. The question is answered, so the app does not offer the others.
                 List(model.conversations, selection: $model.selected) { conv in
-                    ResultRow(conv: conv)
+                    // `marks` travels with the rows it describes: the offsets in a snippet are
+                    // only readable in the units the envelope that carried them named.
+                    ResultRow(conv: conv, marks: model.marks)
                         .listRowInsets(
                             EdgeInsets(
                                 top: theme.metric(.rowPaddingTop),
@@ -317,35 +319,5 @@ struct SearchView: View {
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(theme.color(.panel))
-    }
-}
-
-/// One conversation, one line.
-///
-/// Deliberately plain. The row's anatomy — the agent badge, the kind ribbon, the marked snippet,
-/// the date column — is `chat-search-me9.8.2`, argued against `poc/ui` and against the corpus
-/// measurements in `poc/ui/NOTES.md`. A shell that guessed at it would have to be undone first.
-///
-/// What it does carry is the row's rhythm, which is a token and not a guess: the padding is set
-/// by `SearchView` from `--row-pt` / `--row-pb` / `--row-px` and the gutter here is `--row-gap`.
-/// Those are the tokens a direction is most likely to get wrong, since every one of them trades
-/// against rows-per-screen.
-struct ResultRow: View {
-    let conv: Conversation
-    @Environment(\.theme) private var theme
-
-    var body: some View {
-        HStack(spacing: theme.metric(.rowGap)) {
-            Text(conv.title.flatMap { $0.isEmpty ? nil : $0 } ?? "untitled")
-                .font(theme.font(.body, weight: .medium))
-                .foregroundStyle(theme.color(.ink))
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 12)
-            Text(conv.source)
-            if let date = conv.endedDate { Text(date) }
-        }
-        .font(theme.font(.meta, .mono))
-        .foregroundStyle(theme.color(.ink3))
     }
 }

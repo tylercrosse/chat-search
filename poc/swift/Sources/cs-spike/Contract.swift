@@ -337,6 +337,101 @@ enum Contract {
         check(lit?.query == start.query,
             "facets: \(busiest.value) does not toggle back off — its click gives "
                 + "\"\(lit?.query ?? "")\"", into: &report)
+
+        await spans(client, start, into: &report)
+        await directories(client, start, into: &report)
+    }
+
+    /// The `date:` rail, whose click is the one that differs (`chat-search-1ld`).
+    ///
+    /// Two `date:` tokens intersect, so clicking a second span has to *replace* the first rather
+    /// than widen — and a rail that widened would hand back `date:today date:>1mo`, a query that
+    /// cannot match a conversation that has ever been indexed. That is the round trip worth
+    /// making against a real corpus: click one span, then another, and see the list still there.
+    private static func spans(
+        _ client: CsClient, _ start: FacetRail, into report: inout Report
+    ) async {
+        guard let rail = start.dates else {
+            print("    note: this `cs` has no `dates` section — nothing to check")
+            return
+        }
+        print("    spans: "
+            + rail.values.map { "\($0.label) \($0.conversations)" }.joined(separator: " · "))
+        check(!rail.values.isEmpty, "facets: a rail with no spans in it", into: &report)
+        check(rail.all.selected, "facets: the empty query reads as a date filter", into: &report)
+        // All but the last nest, so each is at least as large as the one inside it — the last is
+        // the complement of the one before it and is under no such obligation. A census counted
+        // against two clocks, or joined to the wrong span, shows up here and nowhere else.
+        for pair in zip(rail.values.dropLast(), rail.values.dropLast().dropFirst()) {
+            check(pair.0.conversations <= pair.1.conversations,
+                "facets: \(pair.0.label) holds more than \(pair.1.label), which nests it",
+                into: &report)
+        }
+
+        guard let first = rail.values.first, let second = rail.values.dropFirst().first else {
+            return
+        }
+        let after = try? await client.facets(first.query)
+        guard let lit = after?.dates?.values.first(where: { $0.value == first.value }) else {
+            report.failures.append("facets: \"\(first.query)\" lost the \(first.label) chip")
+            return
+        }
+        check(lit.state == .include,
+            "facets: clicking \(first.label) produced a query that does not select it",
+            into: &report)
+
+        // The replacement, which is the whole difference from `agent:`.
+        let swapped = try? await client.facets(
+            after?.dates?.values.first { $0.value == second.value }?.query ?? "")
+        let spans = swapped?.dates?.values.filter { $0.state == .include } ?? []
+        print("    round trip: \(first.label) → \(second.label) leaves "
+            + "\(spans.map(\.label).joined(separator: ", "))")
+        check(spans.count == 1 && spans.first?.value == second.value,
+            "facets: a second span did not replace the first — \(spans.count) are lit",
+            into: &report)
+    }
+
+    /// The `dir:` rail, whose chips are paths out of the index rather than a fixed vocabulary.
+    ///
+    /// The check that matters is that a click *narrows*: `dir:` is a substring match, so a rail
+    /// handing back a fragment rather than a path would filter to far more than the chip claims,
+    /// and a rail handing back a path no token can carry would filter to something else entirely
+    /// (`chat-search-me9.8.16`).
+    private static func directories(
+        _ client: CsClient, _ start: FacetRail, into report: inout Report
+    ) async {
+        guard let rail = start.dirs else {
+            print("    note: this `cs` has no `dirs` section — nothing to check")
+            return
+        }
+        print("    directories: \(rail.values.count) of \(rail.indexed) drawn · "
+            + "\(rail.undirected) conversations record none")
+        check(rail.values.count <= rail.indexed,
+            "facets: more chips than there are directories", into: &report)
+        check(rail.all.selected, "facets: the empty query reads as a directory filter",
+            into: &report)
+
+        guard let busiest = rail.values.first else { return }
+        guard let after = try? await client.facets(busiest.query), let lit = after.dirs else {
+            report.failures.append("facets: \"\(busiest.query)\" did not come back")
+            return
+        }
+        let chip = lit.values.first { $0.value == busiest.value }
+        check(chip?.state == .include,
+            "facets: clicking \(busiest.value) produced a query that does not select it",
+            into: &report)
+        check(chip?.query == start.query,
+            "facets: \(busiest.value) does not toggle back off", into: &report)
+
+        // And the filter reaches the results: a click that lit a chip and returned the same list
+        // would be a rail that only looks like it filters.
+        let all = try? await client.search("", limit: 1)
+        let inside = try? await client.search(busiest.query, limit: 1)
+        let (whole, part) = (all?.response.total ?? 0, inside?.response.total ?? 0)
+        print("    \(busiest.value) → \(part) of \(whole)")
+        check(part > 0 && part < whole,
+            "facets: \(busiest.value) selected \(part) of \(whole), which is not a filter",
+            into: &report)
     }
 
     // MARK: -

@@ -34,6 +34,10 @@ struct Options {
     /// above: the row's column plan has to hold at several widths (`chat-search-me9.8.2`), and a
     /// window that always opens at one size makes checking that a manual drag nobody repeats.
     var size = CGSize(width: 900, height: 620)
+    /// Which axis the list opens grouped by. The same kind of affordance as `--size`: a grouped
+    /// list rebuilds sections on every keystroke where an ungrouped one rebuilds rows, and
+    /// `--measure` cannot take that number on a mode it has no way to enter.
+    var group = Grouping.none
 
     /// Nobody is typing into this run. Both scripted modes stay out of the front, so they can be
     /// run beside whatever a person is actually doing — and out of the query log, because their
@@ -58,6 +62,10 @@ func parse(_ argv: [String]) -> Options {
         case "--interval": if let v = next(), let n = Int(v) { o.interval = .milliseconds(n) }
         case "--measure": o.measure = true
         case "--size": if let v = next(), let size = parseSize(v) { o.size = size }
+        // An axis this build has no name for leaves the list ungrouped rather than guessing at
+        // one, for the reason `--size` ignores a malformed value: an instrument that quietly
+        // changes what it is measuring is worse than one that ignores you.
+        case "--group": if let v = next(), let axis = Grouping(rawValue: v) { o.group = axis }
         case "--verify-theme": o.verifyTheme = true
         case "--shot": o.shot = true
         case "--query": if let v = next() { o.shotQuery = v }
@@ -73,6 +81,7 @@ func parse(_ argv: [String]) -> Options {
                   --query TEXT         what --shot searches for (default "borrow checker")
                   --out PATH           where --shot writes its PNG (default /tmp/chat-search.png)
                   --size WxH           open the window at this size (default 900x620)
+                  --group AXIS         open grouped by none|project|run|source (default none)
                 """)
             exit(0)
         default: break
@@ -122,6 +131,7 @@ final class AppHost: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        model.group(by: options.group)
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: options.size),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -131,7 +141,7 @@ final class AppHost: NSObject, NSApplicationDelegate {
         // and the system default is a grey nobody in this app chose.
         window.backgroundColor = Theme.shipped.nsColor(.bg)
         window.center()
-        let hosting = NSHostingView(rootView: SearchView(model: model))
+        let hosting = NSHostingView(rootView: Shell(model: model))
         window.contentView = hosting
         window.orderFrontRegardless()
         // A scripted run does not steal focus — `.accessory` above — which also keeps the number

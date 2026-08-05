@@ -150,6 +150,32 @@ enum Measure {
             + (model.reader.conv == nil
                 ? "closed" : "still open on \(model.reader.transcript?.count ?? 0) messages"))
         print("  \(after) \(capture(window, to: after))")
+
+        // The same answer, cut three ways. A frame each, because a grouping is exactly the kind of
+        // thing that has no number: whether a residue group of 41 rows reads as information or as
+        // a dumping ground is a question about a picture. The counts are printed beside them for
+        // the half a picture cannot state — which axis placed how much, and how much it could not.
+        model.query = query
+        model.queryChanged()
+        try? await Task.sleep(for: .seconds(2))
+        for axis in Grouping.allCases where axis != .none {
+            model.group(by: axis)
+            try? await Task.sleep(for: .milliseconds(400))
+            let residue = model.groups.first(where: \.isResidue)?.items.count ?? 0
+            let file = path.replacingOccurrences(of: ".png", with: "-by-\(axis.rawValue).png")
+            print("  by \(axis.rawValue) → \(model.groups.count) groups over "
+                + "\(model.conversations.count) rows, \(residue) in the residue")
+            print("  \(file) \(capture(window, to: file))")
+        }
+        model.group(by: .none)
+
+        // The second view. Empty by design and not by accident — there is no store to author into
+        // (`chat-search-6eb.14`) — so what there is to check is that every shelf says which.
+        model.surface = .library
+        try? await Task.sleep(for: .milliseconds(400))
+        let library = path.replacingOccurrences(of: ".png", with: "-library.png")
+        print("  library → \(capture(window, to: library)) \(library)")
+        model.surface = .search
     }
 
     /// The window's own view hierarchy as a PNG, with no window server in it.

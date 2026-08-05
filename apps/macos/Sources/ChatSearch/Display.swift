@@ -100,6 +100,79 @@ enum Display {
         }
     }
 
+    /// One local day, formatted the way `poc/ui`'s `dayLabel` formats it: `Aug 5`, and
+    /// `Oct 25 ’25` once the year is not this one.
+    ///
+    /// **This reformats the day the core rendered and never decides which day it is.**
+    /// `ended_date` arrives as a local `YYYY-MM-DD` rendered once in `cs-core`, precisely so that
+    /// three clients do not each get their own chance to derive the day in UTC — the bug
+    /// `AGENTS.md` names as the reason a rule lives in exactly one place. Every field below is
+    /// read out of that string.
+    ///
+    /// The one thing it does ask a calendar is which year is *this* year, to decide whether the
+    /// year is worth printing — and it asks a **Gregorian** one by name. `Calendar.current` honours
+    /// the region's calendar setting, so on a Japanese, Buddhist, Hebrew or Islamic calendar it
+    /// answers 8, 2569, 5786 or 1448, none of which ever equals the `YYYY` on the wire: every
+    /// label in the app would carry the year suffix this line exists to suppress. A client
+    /// deciding a calendar question for itself is the shape of the original bug, so the calendar
+    /// is named rather than inherited.
+    ///
+    /// A value that is not `YYYY-MM-DD` is shown exactly as it arrived, down to the field widths.
+    /// The alternative is a client that invents a day for a shape it does not recognise, which is
+    /// the same failure one step further along.
+    static func day(_ endedDate: String?, now: Date = .now) -> String {
+        guard let endedDate else { return "—" }
+        let parts = endedDate.split(separator: "-")
+        guard parts.count == 3, parts[0].count == 4, parts[1].count == 2, parts[2].count == 2,
+            let month = Int(parts[1]), (1...12).contains(month),
+            let dayOfMonth = Int(parts[2]), (1...31).contains(dayOfMonth)
+        else { return endedDate }
+        // The year only when it is not this one. Eleven months of corpus means most spans sit
+        // inside one year, and printing it on every label is noise in a cell that is already
+        // narrow.
+        let suffix = parts[0] == String(gregorian.component(.year, from: now))
+            ? "" : " ’\(parts[0].suffix(2))"
+        return "\(months[month - 1]) \(dayOfMonth)\(suffix)"
+    }
+
+    /// A Gregorian calendar in the machine's own zone: the zone is what makes "today" the user's
+    /// today, and the identifier is what stops a region setting renumbering the year underneath it.
+    private static let gregorian: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        return calendar
+    }()
+
+    private static let months = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+
+    /// The days a group of conversations spans, both ends being local days the core rendered. One
+    /// day when the two ends are the same day, which is the common case for a run.
+    static func span(from earliest: String?, to latest: String?) -> String {
+        guard let earliest, let latest else { return "—" }
+        let start = day(earliest)
+        let end = day(latest)
+        return start == end ? start : "\(start) – \(end)"
+    }
+
+    /// A duration, coarse: `38m`, `6h 12m`, `3d`. Nil below a minute, where there is nothing worth
+    /// saying — a group of one conversation spans no time at all.
+    ///
+    /// A duration and not a clock, which is what makes it computable here: the gap between two
+    /// instants has no timezone in it, where `09:14 – 23:40` would be a second local-time rule in
+    /// a second language (see `day` above).
+    static func elapsed(ms: Int) -> String? {
+        switch ms {
+        case ..<minuteMs: nil
+        case ..<hourMs: "\(ms / minuteMs)m"
+        case ..<dayMs:
+            (ms % hourMs) / minuteMs == 0
+                ? "\(ms / hourMs)h" : "\(ms / hourMs)h \((ms % hourMs) / minuteMs)m"
+        default: "\(ms / dayMs)d"
+        }
+    }
+
     /// The literal prefix `cs` puts on a snippet whose match it could not locate in the text.
     ///
     /// `docs/JSON-CONTRACT.md` calls it a label rather than content, so the row draws it as one:

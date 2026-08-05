@@ -72,13 +72,23 @@ struct ResultRow: View {
                 .truncationMode(.tail)
                 .frame(width: cell(Columns.source), alignment: .leading)
 
-            Text("\(conv.msgCount) msgs")
+            // `verbatim` because a `Text` built from a string *literal* is a `LocalizedStringKey`,
+            // and an `Int` interpolated into one is formatted for the locale: this cell read
+            // `2,553 ms…` — the separator pushed it past its width — until it was measured against
+            // the largest conversation in the corpus. Plain digits are also what the terminal and
+            // the mockup print.
+            Text(verbatim: "\(conv.msgCount) msgs")
                 .lineLimit(1)
                 .frame(width: cell(Columns.size), alignment: .trailing)
 
-            // Rigid, not a `Spacer()`: the gutter is a column of the plan, and a flexible one here
-            // would take the width `cwd` is supposed to get.
-            Spacer(minLength: 0).frame(width: cell(Columns.gutter))
+            // The gutter takes the slack, and `cwd` takes it first up to a ceiling. `styles.css`
+            // makes `cwd` the flexible track and its own comment says the gutter is — a
+            // disagreement no fixed 706px column could show. A resizable window shows it at once:
+            // let `cwd` grow without limit and at 1400pt the right cluster is not a cluster, with
+            // the directory stranded mid-row and the age against the far edge. The ceiling is the
+            // corpus's: 88% of directories are 35 characters or fewer and 91% are 44 or fewer, so
+            // past that the tail is worktree paths, which elide to their leaf.
+            Spacer(minLength: cell(Columns.gutter))
 
             Text(Display.dir(conv.cwd))
                 .foregroundStyle(theme.color(hasDir ? .ink2 : .ink3))
@@ -89,7 +99,11 @@ struct ResultRow: View {
                 // because it has no text metrics; here the layout measures the string it actually
                 // drew, so there is no budget to keep in sync with a column width.
                 .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: cell(Columns.dir), alignment: .leading)
+                // Sized before the gutter, which is what makes the ceiling above a ceiling: two
+                // flexible siblings otherwise split the slack, leaving a path elided next to an
+                // empty gap wide enough to have shown it.
+                .layoutPriority(1)
 
             Text(Display.age(endedAt: conv.endedAt))
                 .lineLimit(1)
@@ -201,8 +215,12 @@ struct ResultRow: View {
         static let source = 14.0
         /// `2553 msgs` — the largest conversation in the corpus is 2,553 messages.
         static let size = 9.0
-        /// The split between the two clusters. Wider than the gap between cells within one, which
-        /// is what makes them read as two clusters rather than as nine columns.
+        /// As much of a directory as the row will show before eliding it. Not a fixed width: the
+        /// cell is smaller than this whenever the window is.
+        static let dir = 44.0
+        /// The narrowest the split between the two clusters gets. Wider than the gap between
+        /// cells within one, which is what makes them read as two clusters rather than as nine
+        /// columns, and it is the gutter that grows when the window does.
         static let gutter = 4.0
         /// `11mo` is the widest age `Display.age` renders.
         static let age = 4.0

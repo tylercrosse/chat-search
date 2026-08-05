@@ -1,7 +1,7 @@
 # chat-search for macOS
 
-The Swift surface. A search field, a result list, and a line saying what the index is doing —
-that is all of it, and `chat-search-me9.8.2` onward is what makes it worth using.
+The Swift surface. A search field, a result list, a reader beside it, and a line saying what the
+index is doing — that is all of it, and `chat-search-me9.8.2` onward is what makes it worth using.
 
 ```bash
 cargo build --release                       # the app finds ./target/release/cs by itself
@@ -31,13 +31,16 @@ into `poc/`.
 and may not author one" is a thing the compiler enforces rather than a thing a review notices.
 See [the theme seam](#the-theme-seam) below.
 
-**`Sources/ChatSearch`** — the window, the model and the view. One `cs search --json` per
+**`Sources/ChatSearch`** — the window, the models and the views. One `cs search --json` per
 keystroke with the previous one killed and no debounce, which is not an oversight:
 `chat-search-me9.22` measured fork/exec at 0.3 ms and the whole process boundary at 5–13 ms, so
-a debounce would be latency spent to save a cost that was measured and found small. Rows go
-through `List` because it is the only one of SwiftUI's three containers that recycles — 5.2 MB
-scrolling the whole corpus against `LazyVStack`'s 65.6 MB and `VStack`'s 566 MB. That question
-is answered, so the app does not offer the other two.
+a debounce would be latency spent to save a cost that was measured and found small. With a
+conversation open that is two processes per keystroke rather than one, both cancellable: the
+median conversation is ~10 KB and the corpus's longest measured 50–90 ms end to end, against the
+~50 ms the search beside it already costs. Rows and messages both go through `List` because it is
+the only one of SwiftUI's three containers that recycles — 5.2 MB scrolling the whole corpus
+against `LazyVStack`'s 65.6 MB and `VStack`'s 566 MB. That question is answered, so the app does
+not offer the other two.
 
 [`docs/JSON-CONTRACT.md`]: ../../docs/JSON-CONTRACT.md
 
@@ -105,6 +108,74 @@ Three things this seam does **not** do yet, each filed:
   and it trades against rows-per-screen. The search bar's, the banner's and the footer's are not —
   they are literal in `styles.css` too — so dialling those is still a view edit.
   `chat-search-me9.8.11`.
+
+## The reader
+
+Select a row and the conversation opens beside it, from `cs show --json`. Every message that a
+reader draws, with its band as a 3pt spine and its kind as a sigil; prose in the reading face and
+tool traffic in the quiet monospaced tier; failed tool results kept and successful ones gone,
+because the call already implies the result and the failure is often what makes a conversation the
+one you were looking for.
+
+**Four things about a conversation arrive on the wire and none of them is decided here.**
+
+| the question | the field | why not in the client |
+| --- | --- | --- |
+| is this message drawn at all? | `drawn` | it was already worked out twice, in Rust and in the prototype's JavaScript |
+| which band is it? | `band` | `system` prose is the agent's side, and a call and its result are one stretch — two decisions that are easy to get wrong and impossible to notice wrong |
+| how does it fold? | `fold` | the fold is what makes a 900-message agent session legible; two clients folding differently is two different conversations |
+| may a match claim it ranked? | `mark_kind` | a `reasoning` hit carries no postings, so marking it like a prose hit states something false in the one place a reader went to check |
+
+The last one is drawn as a *form* rather than a hue — a filled `--hit-bg` ground for a match that
+ranked, an underline for one that could not — for the reason the TUI spends a text modifier on it.
+`--hit` and `--hit-bg` are one colour family, and a claim that consequential should not rest on
+which shade of amber it happens to be.
+
+The drawer opens on the first message that matched rather than at the top, anchored on the marks
+and not on `match_seqs`: that list counts positions in one order and the transcript arrives in
+another, so a position resolved against the wrong one lands on an unrelated message.
+
+Three departures from `poc/ui`'s drawer:
+
+- **The fold lives on the sigil, not on the text.** The prototype toggles by clicking the message
+  because a prototype has nothing to select. A transcript you cannot copy out of is one you cannot
+  quote, so the text stays selectable and the glyph is the affordance.
+- **The drawer sits outside the empty-results case.** Typing on with a conversation open is
+  ordinary — you have found it and are now looking for the next one — so a query that matches
+  nothing empties the list and leaves the reader alone.
+- **A collapsed message is truncated, not summarised.** `⚙ Bash ls -la` is a *form* core states,
+  and it is not on the wire yet, so a collapsed tool call reads as its raw argument. Honest, and
+  not pretty. `chat-search-me9.20`.
+
+Not built, and each for a reason rather than for time: **outline mode**, which needs the same
+collapsed forms (`chat-search-me9.20`), and the mockup's **fidelity chips, segment summaries and
+work summary**, which need facts — segments, topics, touched files — that nothing on the wire
+carries.
+
+### Seeing it
+
+```bash
+swift run -c release chat-search --shot --query "borrow checker" --out /tmp/reader.png
+```
+
+The third non-affordance flag, and the same argument as the other two: `--measure` answers with a
+number and `--verify-theme` with an exit code, but whether a 923-message conversation comes out as
+a readable column has no number in it. `cacheDisplay(in:to:)` renders the view hierarchy into a
+bitmap with no window server and no screen-recording grant, so it runs from a script and on a
+machine nobody is sitting at. It writes two frames — the second after typing on with the
+conversation still open, which is the state a list-driven selection closes without being asked to.
+
+The decoding half is checked where the rest of the contract is:
+
+```bash
+cd poc/swift && swift run -c release cs-spike contract
+```
+
+which now opens a transcript per phrase and holds every mark to landing on a character boundary
+**in both the expanded and the collapsed form**. That second half is the one that matters: 388 of
+the 563 drawn messages in a real agent session are collapsed, so a one-line form that shifted a
+single byte would highlight the wrong word in most of what a reader sees — silently, because a
+mark in the wrong place still looks like a mark.
 
 ## The four index states
 

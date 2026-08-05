@@ -176,12 +176,38 @@ solve the eight fenced tokens, write the rest into `directions.css`, and run `to
 that skips the solve will fail `--verify-theme`, which is the check doing its job rather than
 being in the way.
 
+**Which is a real cost, because the published palettes miss.** Solarized's kinds read
+2.79 / 3.43 / 4.75 / 5.61 against `base03` where the ramp asks for 2.20 / 4.00 / 7.20 / 13.00, and
+`base01` — the tier Solarized itself designates for secondary content — is 2.42:1 on `base02`,
+under half the AA floor. That is what those palettes *are*, not a mistake in porting them: every
+assignment of Solarized's sixteen published colours was measured and the most even ramp available
+is 1.46× 1.38× 2.18×, because nothing sits between `base1` at 5.61 and `base2` at 12.25. Gruvbox
+comes far closer — its dark side has an even ramp in `bg3 gray green fg0` at 1.77× 1.78× 1.82×,
+sitting ~1.11× above the targets — and its light side is 0.09 out.
+
+**So a theme belongs to one of two classes, and the class decides what a miss costs**
+(docs/DECISIONS.md ADR 25). A **direction** is compiled in and offered by the app: fenced, and one
+that misses does not ship. A **user theme** is one you load off your own disk: measured by the same
+code, and then drawn whatever the readings say, with the misses on stderr and the class beside the
+name. `--verify-theme` prints which it measured on its first line, and its last line says which of
+those two consequences applies.
+
+That leaves three routes for a named palette, and none of them pretends to be another: load it as
+a user theme exactly as published; ship it as `solarized-derived` / `gruvbox-derived` with its hues
+re-solved through `palette.py`, which moves Gruvbox by a few percent lightness and moves
+Solarized's brightest kind from `base1` (L 60%) to L 93%, past `base2`; or find a palette that
+holds as authored, which neither of these two is.
+
 Three things this seam does **not** do yet, each filed:
 
 - **One theme per binary.** `Tokens.swift` holds the direction in force; picking between several
-  at runtime needs them to coexist, plus a flag and a preference. `chat-search-me9.8.9`.
+  at runtime needs them to coexist, plus a flag and a preference. Every one of them is a direction,
+  so `--verify-theme` has to measure all of them and not only the one in force.
+  `chat-search-me9.8.9`.
 - **Nothing loads at runtime.** Dialling in type and spacing is edit, regenerate, rebuild, relaunch.
-  Reading a token set from a file would make it edit and relaunch. `chat-search-me9.8.10`.
+  Reading a token set from a file would make it edit and relaunch — and that file is the user-theme
+  class, so it is measured on load, drawn regardless, and a file that cannot be *read* falls back to
+  the shipped direction rather than being drawn unfenced. `chat-search-me9.8.10`.
 - **Padding is mostly still literal.** The row's rhythm is tokenised because a direction moves it
   and it trades against rows-per-screen. The search bar's, the banner's and the footer's are not —
   they are literal in `styles.css` too — so dialling those is still a view edit.

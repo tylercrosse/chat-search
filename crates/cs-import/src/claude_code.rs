@@ -611,7 +611,13 @@ mod tests {
                 (Kind::ToolResult, Role::Tool, "fn main() {}"),
             ]
         );
-        assert_eq!(c.model.as_deref(), Some("claude-opus-4"));
+        // The model lands on the three blocks the assistant event produced, and on nothing
+        // else: the user turn was typed and the tool result came back from a tool.
+        let opus = Some("claude-opus-4");
+        assert_eq!(
+            c.messages.iter().map(|m| m.model.as_deref()).collect::<Vec<_>>(),
+            vec![None, opus, opus, opus, None]
+        );
         assert_eq!(c.messages.iter().map(|m| m.seq).collect::<Vec<_>>(), vec![0, 1, 2, 3, 4]);
     }
 
@@ -976,7 +982,9 @@ mod tests {
                 "message":{"model":"claude-opus-4","content":[
                   {"type":"text","text":"ok"}]}}"#,
         ]);
-        assert_eq!(c.model.as_deref(), Some("claude-opus-4"));
+        // The error notice keeps its message and loses only the fake model name.
+        assert_eq!(c.messages[0].model, None);
+        assert_eq!(c.messages[1].model.as_deref(), Some("claude-opus-4"));
     }
 
     #[test]

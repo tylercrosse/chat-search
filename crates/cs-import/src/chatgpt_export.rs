@@ -548,7 +548,7 @@ mod tests {
         );
 
         assert!(c.messages.iter().all(|m| m.thread_key == "main" && !m.is_sidechain));
-        assert_eq!(c.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(c.declared_model.as_deref(), Some("gpt-4o"));
     }
 
     #[test]

@@ -3,6 +3,7 @@
     "conversations": [
       {
         "cwd": "/home/dev/example-project",
+        "declared_model": "gpt-5-codex",
         "forked_from_native_id": "conv-a1b2",
         "git_branch": "topic/widget-cache",
         "head_native_id": null,
@@ -11,6 +12,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
+            "model": null,
             "native_id": "rollout-2026-06-03T11-02-19-thread-fork:000000",
             "parent_native_id": null,
             "role": "user",
@@ -23,6 +25,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
+            "model": null,
             "native_id": "rollout-2026-06-03T11-02-19-thread-fork:000001",
             "parent_native_id": "rollout-2026-06-03T11-02-19-thread-fork:000000",
             "role": "assistant",
@@ -35,6 +38,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
+            "model": null,
             "native_id": "rollout-2026-06-03T11-02-19-thread-fork:000002",
             "parent_native_id": "rollout-2026-06-03T11-02-19-thread-fork:000001",
             "role": "user",
@@ -47,6 +51,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
+            "model": "gpt-5-codex",
             "native_id": "rollout-2026-06-03T11-02-19-thread-fork:000003",
             "parent_native_id": "rollout-2026-06-03T11-02-19-thread-fork:000002",
             "role": "assistant",
@@ -56,7 +61,6 @@
             "ts": 1780484578000
           }
         ],
-        "model": "gpt-5-codex",
         "native_id": "conv-e5f6",
         "source": "codex",
         "surface": "codex_desktop",

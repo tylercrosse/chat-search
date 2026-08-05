@@ -357,7 +357,7 @@ mod tests {
         let state = import("acct/org/local_abc.json", &jsonl(&[STATE])).unwrap();
         assert_eq!(state.titles.resolve(), Some("Madrid trip planning"));
         assert!(state.messages.is_empty(), "a state file must not invent a conversation");
-        assert_eq!(state.model.as_deref(), Some("claude-opus-4-8"));
+        assert_eq!(state.declared_model.as_deref(), Some("claude-opus-4-8"));
     }
 
     #[test]
@@ -482,7 +482,10 @@ mod tests {
         ]);
 
         let c = import("acct/org/local_abc/audit.jsonl", &audit).unwrap();
-        assert_eq!(c.model.as_deref(), Some("claude-sonnet-4-6"));
+        // Only a user turn followed, so there is no message to hang the name on and the
+        // fallback is the only thing keeping it.
+        assert_eq!(c.messages[0].model, None);
+        assert_eq!(c.declared_model.as_deref(), Some("claude-sonnet-4-6"));
     }
 
     #[test]

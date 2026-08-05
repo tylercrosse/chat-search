@@ -186,6 +186,7 @@ fn msg(seq: i64, role: Role, kind: Kind, ts: Option<i64>, text: &str) -> Message
         role,
         kind,
         ts,
+        model: None,
         text: text.into(),
     }
 }
@@ -197,7 +198,7 @@ fn conv(source: &str, native_id: &str, titles: Titles, messages: Vec<Message>) -
         titles,
         cwd: None,
         git_branch: None,
-        model: None,
+        declared_model: None,
         surface: None,
         forked_from_native_id: None,
         head_native_id: None,

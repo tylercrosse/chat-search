@@ -565,7 +565,7 @@ mod tests {
         assert_eq!(c.surface.as_deref(), Some("codex_vscode"));
         assert_eq!(c.cwd.as_deref(), Some("/w/proj"));
         assert_eq!(c.git_branch.as_deref(), Some("feature/x"));
-        assert_eq!(c.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(c.declared_model.as_deref(), Some("gpt-5-codex"));
         assert_eq!(c.forked_from_native_id, None);
         assert_eq!(c.head_native_id, None);
 
@@ -793,22 +793,33 @@ not json at all
     }
 
     #[test]
-    fn the_last_turn_context_names_the_model() {
+    fn a_turn_context_names_the_model_for_the_turns_that_follow_it() {
         let switched = r#"
 {"type":"session_meta","payload":{"id":"s","model_provider":"openai"}}
 {"type":"turn_context","payload":{"model":"gpt-5-codex"}}
 {"type":"event_msg","payload":{"type":"user_message","message":"hi"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"first"}}
 {"type":"turn_context","payload":{"model":"gpt-5.4"}}
-{"type":"event_msg","payload":{"type":"agent_message","message":"hello"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"again"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"second"}}
 "#;
+        let c = conv("rollout-model.jsonl", switched);
+        // Both models survive, each on the turn it actually ran. Collapsing to one here is
+        // what made "did the model change" unanswerable (chat-search-n58.25).
+        assert_eq!(
+            c.messages.iter().map(|m| m.model.as_deref()).collect::<Vec<_>>(),
+            vec![None, Some("gpt-5-codex"), None, Some("gpt-5.4")]
+        );
         // Never the provider, which is what `session_meta.model_provider` holds.
-        assert_eq!(conv("rollout-model.jsonl", switched).model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(c.declared_model.as_deref(), Some("gpt-5.4"));
 
         let none = r#"
 {"type":"session_meta","payload":{"id":"s","model_provider":"openai"}}
 {"type":"event_msg","payload":{"type":"user_message","message":"hi"}}
 "#;
-        assert_eq!(conv("rollout-nomodel.jsonl", none).model, None);
+        let c = conv("rollout-nomodel.jsonl", none);
+        assert_eq!(c.declared_model, None);
+        assert!(c.messages.iter().all(|m| m.model.is_none()));
     }
 
     #[test]

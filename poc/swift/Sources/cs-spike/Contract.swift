@@ -132,6 +132,10 @@ enum Contract {
         census.append(("ended_at null", rows.count { $0.endedAt == nil }))
         census.append(("ended_date null", rows.count { $0.endedDate == nil }))
         census.append(("cwd null", rows.count { $0.cwd == nil }))
+        census.append(("model null", rows.count { $0.model == nil }))
+        // Not nullable, and counted anyway: `thread_count` above 1 is 1% of the corpus, which is
+        // exactly the kind of state a hand test never reaches and a client draws a mark for.
+        census.append(("forked", rows.count { $0.forks != nil }))
         census.append(("destinations []", rows.count { $0.destinations.isEmpty }))
         census.append(("kind_runs []", rows.count { $0.kindRuns.isEmpty }))
         print("\n  browse: \(rows.count) conversations in \(fmt(r.timing.total)) ms "

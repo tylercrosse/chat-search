@@ -720,6 +720,8 @@ mod tests {
             user_turns: 3,
             msg_count: 10,
             prose_count: 6,
+            thread_count: 1,
+            model: None,
             score: -1.0,
             match_count: 1,
             match_seqs: vec![2],

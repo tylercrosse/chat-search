@@ -232,6 +232,14 @@ enum Display {
     /// inside the quotes it would read as something the conversation said.
     static let unlocated = "⟨no match⟩ "
 
+    /// The glyph in front of a fork count, U+2442 OCR FORK.
+    ///
+    /// The mockup's and `docs/TUI-DESIGN.md` §3's, spelled once here rather than typed into a
+    /// view: it is the one mark in the row that is not a word, and a second surface reaching for
+    /// a similar-looking glyph would make the same fact read as two different things. Never
+    /// drawn alone — `Conversation.forks` decides whether there is a fork at all.
+    static let forkMark = "⑂"
+
     /// What line 3 leads with: who or what produced the message the snippet came from.
     ///
     /// The mockup's `⚙ Bash(cargo test) ›` frame without the tool's name, which is not on the

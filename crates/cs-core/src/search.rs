@@ -984,12 +984,35 @@ pub(crate) struct Group {
     pub msg_count: i64,
     /// Prose messages only, which is what a prose search could possibly have matched.
     pub prose_count: i64,
+    /// How many strands of the DAG the conversation's messages fall into (ADR 4).
+    ///
+    /// 1 on 4,379 of 4,426 conversations and above 1 on 45, so a client draws it as a mark
+    /// that appears rather than as a column that is usually the digit one. `0` on the two
+    /// conversations that hold no messages, which is a third state and not a fork count.
+    ///
+    /// The sitting's opener's, not the sitting's sum: an activity-log fold is one linear chat
+    /// read back out of N records, so adding their thread counts would report a record count as
+    /// a fork count on a Gemini conversation that never branched.
+    pub thread_count: i64,
     /// Working directory the conversation ran in, for sources that have one.
     ///
     /// `None` for every ChatGPT conversation, which is 2,011 of the corpus — a client must
     /// render that as "this source has no such thing" rather than as missing data
     /// (chat-search-6eb.26). Derived, so ADR 16 forbids it ever reaching an id.
     pub cwd: Option<String>,
+    /// The model of the *last message that named one*, resolved in the indexer's rollup.
+    ///
+    /// A summary of `message.model` rather than a fact about the conversation (ADR 24,
+    /// chat-search-n58.25): 166 conversations name more than one, and this is the one they
+    /// ended on. A client drawing it is drawing the last model used and should not imply more.
+    ///
+    /// `None` for 1,300 of 4,426 — every one of the 1,280 Google Takeout rows, whose export
+    /// records no model at all, plus 20 elsewhere: 12 that hold no assistant turn and 8 whose
+    /// assistant turns declared nothing.
+    ///
+    /// The opener's where a row is a sitting, for the same reason [`Group::thread_count`] is;
+    /// on this corpus that is always `None` either way.
+    pub model: Option<String>,
     pub score: f64,
     /// Total matching messages, including any not shown.
     pub match_count: usize,
@@ -1135,7 +1158,12 @@ pub(crate) fn recent(
     let ended = crate::sittings::total("ended_at");
     let sql = format!(
         "SELECT c.id, c.source, c.title, {ended}, {turns}, c.native_id,
-                c.deleted_upstream_at, {msgs}, {prose}, c.cwd
+                c.deleted_upstream_at, {msgs}, {prose}, c.cwd,
+                -- Not `sittings::total`: that rolls four columns up over a fold, and neither of
+                -- these rolls up. A string has nothing to add, and adding thread counts would
+                -- report a Gemini sitting's record count as a fork count. Both are the
+                -- opening record's.
+                c.thread_count, c.model
          FROM conversation c
          {join}
          WHERE {openers}{filters}
@@ -1160,7 +1188,9 @@ pub(crate) fn recent(
             user_turns: r.get(4)?,
             msg_count: r.get(7)?,
             prose_count: r.get(8)?,
+            thread_count: r.get(10)?,
             cwd: r.get(9)?,
+            model: r.get(11)?,
             score: 0.0,
             match_count: 0,
             // No query, so nothing matched and there is nowhere to put a mark.
@@ -1560,7 +1590,9 @@ fn hydrate(
     // mark in the first tenth of the strip.
     let mut meta = conn.prepare_cached(&format!(
         "SELECT c.source, c.title, c.native_id, c.deleted_upstream_at, {ended}, {turns},
-                {msgs}, {prose}, c.cwd
+                {msgs}, {prose}, c.cwd,
+                -- Unfolded, unlike everything above them: see the same pair in `recent`.
+                c.thread_count, c.model
          FROM conversation c {join} WHERE c.id = ?1",
         ended = crate::sittings::total("ended_at"),
         turns = crate::sittings::total("user_turns"),
@@ -1593,6 +1625,8 @@ fn hydrate(
                     r.get::<_, i64>(6)?,
                     r.get::<_, i64>(7)?,
                     r.get::<_, Option<String>>(8)?,
+                    r.get::<_, i64>(9)?,
+                    r.get::<_, Option<String>>(10)?,
                 ))
             })
             .ok();
@@ -1647,7 +1681,9 @@ fn hydrate(
             user_turns: m.as_ref().map(|m| m.5).unwrap_or(0),
             msg_count: m.as_ref().map(|m| m.6).unwrap_or(0),
             prose_count: m.as_ref().map(|m| m.7).unwrap_or(0),
+            thread_count: m.as_ref().map(|m| m.9).unwrap_or(0),
             cwd: m.as_ref().and_then(|m| m.8.clone()),
+            model: m.as_ref().and_then(|m| m.10.clone()),
             score,
             match_count,
             match_seqs: seqs,

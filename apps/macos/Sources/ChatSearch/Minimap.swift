@@ -65,34 +65,34 @@ struct MinimapLayout: Sendable {
     func top(_ index: Int) -> Double { offsets[index] }
     func bottom(_ index: Int) -> Double { offsets[index + 1] }
 
-    /// The stretch of the map these messages cover, or nil when none of them is on it.
+    /// A point *inside* message *i*'s band, as a fraction of the map.
     ///
-    /// Unknown ids are skipped rather than treated as position zero: the transcript is re-read on
-    /// every keystroke, and a row that reported itself on screen under the previous read has to be
-    /// able to say nothing rather than to say "the top".
-    func span(ofIds ids: Set<String>) -> ClosedRange<Double>? {
-        var lowest = Int.max
-        var highest = Int.min
-        for id in ids {
-            guard let position = positionOfId[id] else { continue }
-            lowest = Swift.min(lowest, position)
-            highest = Swift.max(highest, position)
-        }
-        guard lowest <= highest else { return nil }
-        return top(lowest)...bottom(highest)
+    /// The viewport box is two of these — the top and bottom edges of the visible rectangle, each
+    /// part-way through the message it cuts — which is what makes the box move by pixels rather
+    /// than by messages. `chat-search-me9.8.27`.
+    func fraction(at index: Int, within: Double) -> Double {
+        let clamped = Swift.min(Swift.max(within, 0), 1)
+        return top(index) + (bottom(index) - top(index)) * clamped
     }
 
-    /// The message a drag at this fraction of the map is pointing at, snapped to one the
-    /// transcript can actually scroll to.
+    /// Where a drag at this fraction of the map is pointing: a message the transcript can scroll
+    /// to, and how far into that message the pointer is.
     ///
-    /// **This is where route 1 pays**: `ScrollViewReader` scrolls to an id and not to a pixel, so
-    /// a drag lands on a message boundary rather than where the finger is. On the conversation
-    /// this was built against that is a quarter of a point of slop per message; on a conversation
-    /// with one expanded block taller than the drawer it is the whole block.
-    func drawnId(atFraction fraction: Double) -> String? {
+    /// The snap to a *drawn* message is not the boundary problem. It is that 952 of the longest
+    /// conversation's 2,431 messages are successful tool results the reader folds away, so they
+    /// are on the map — dim rather than dropped — and have no row for a scroll to land on. A
+    /// pointer over one of those is pointing at nothing the transcript can show, and the top of
+    /// the nearest drawn message is the only honest answer; `within` is zero there because a
+    /// fraction of a message the pointer is not over would be a fabricated one.
+    func target(atFraction fraction: Double) -> (id: String, within: Double)? {
         guard !drawnPositions.isEmpty else { return nil }
         let clamped = Swift.min(Swift.max(fraction, 0), 1)
-        return blocks[nearestDrawn(to: search(clamped))].id
+        let wanted = search(clamped)
+        let position = nearestDrawn(to: wanted)
+        guard position == wanted else { return (blocks[position].id, 0) }
+        let extent = bottom(position) - top(position)
+        guard extent > 0 else { return (blocks[position].id, 0) }
+        return (blocks[position].id, Swift.min(Swift.max((clamped - top(position)) / extent, 0), 1))
     }
 
     /// One drawn message either side of where the reader is — the arrow keys' unit.
@@ -108,13 +108,13 @@ struct MinimapLayout: Sendable {
         return blocks[drawnPositions[moved]].id
     }
 
-    /// Where a message sits in the conversation. The transcript's own rows are the only thing
-    /// that ever needs this; `--shot` reads it to say which stretch is on screen.
+    /// Where a message sits in the conversation. The reader resolves the rows it has measured
+    /// through this, and `--shot` reads it to say which stretch is on screen.
     func position(of id: String) -> Int? { positionOfId[id] }
 
-    /// The topmost of these messages, which is where the reader is.
-    func firstOnScreen(of ids: Set<String>) -> String? {
-        ids.compactMap { positionOfId[$0] }.min().map { blocks[$0].id }
+    /// The message at a position, for the reader stepping one row at a time.
+    func id(at position: Int) -> String? {
+        blocks.indices.contains(position) ? blocks[position].id : nil
     }
 
     /// Which message owns this fraction of the map. Binary search: the alternative is a linear
@@ -215,11 +215,12 @@ struct Minimap: View {
         }
     }
 
-    /// Where the transcript is, as `List` is able to say it: the stretch of the conversation whose
-    /// rows are on screen. See `ReaderModel.onScreen` for what that is and is not.
+    /// Where the transcript is: the visible rectangle, mapped through the messages it cuts. See
+    /// `ReaderModel.visible` — since `chat-search-me9.8.27` this is a measurement of what is on
+    /// screen rather than a report of which rows exist, so it moves by pixels.
     @ViewBuilder
     private func viewport(in height: CGFloat) -> some View {
-        if let span = layout.span(ofIds: reader.onScreen) {
+        if let span = reader.visible {
             let box = max(Self.minimumViewport, (span.upperBound - span.lowerBound) * height)
             RoundedRectangle(cornerRadius: 2)
                 .fill(theme.color(.sel).opacity(0.12))

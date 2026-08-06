@@ -105,20 +105,31 @@ struct ReaderView: View {
                 // `chat-search-me9.22` measured that recycles, and the longest conversation in
                 // this corpus is 2,553 messages.
                 ScrollViewReader { scroll in
-                    List(blocks) { block in
-                        BlockRow(
-                            block: block, fold: reader.fold(of: block),
-                            marks: transcript.markOffsets,
-                            toggle: { reader.toggle(block) }
-                        )
-                        .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
-                        .listRowBackground(theme.color(.panel))
-                        .listRowSeparator(.hidden)
+                    HStack(spacing: 0) {
+                        List(blocks) { block in
+                            BlockRow(
+                                block: block, fold: reader.fold(of: block),
+                                marks: transcript.markOffsets,
+                                toggle: { reader.toggle(block) }
+                            )
+                            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
+                            .listRowBackground(theme.color(.panel))
+                            .listRowSeparator(.hidden)
+                            // What the minimap knows about where you are. `List` publishes no scroll
+                            // offset, so the rows say it themselves — see `ReaderModel.onScreen` for
+                            // what that buys and what it costs.
+                            .onAppear { reader.rowAppeared(block.id) }
+                            .onDisappear { reader.rowDisappeared(block.id) }
+                        }
+                        .listStyle(.plain)
+                        .scrollContentBackground(.hidden)
+                        .background(theme.color(.panel))
+                        .contentMargins(.vertical, 10, for: .scrollContent)
+                        // Beside the transcript and inside the same `ScrollViewReader`, because
+                        // the two are one instrument: the map reports where the transcript is and
+                        // the transcript goes where the map is dragged.
+                        Minimap(layout: reader.minimap, reader: reader)
                     }
-                    .listStyle(.plain)
-                    .scrollContentBackground(.hidden)
-                    .background(theme.color(.panel))
-                    .contentMargins(.vertical, 10, for: .scrollContent)
                     // Opened at the first message that matched, not at the top. A conversation
                     // reached through a search is one you were sent to for a reason, and the
                     // reason is 183 messages down often enough that the top is the wrong place
@@ -132,6 +143,14 @@ struct ReaderView: View {
                     .onChange(of: transcript.convId, initial: true) {
                         guard let first = blocks.first(where: { !$0.marks.isEmpty }) else { return }
                         scroll.scrollTo(first.id, anchor: .top)
+                    }
+                    // The other half of the scroll relationship: the minimap resolves a drag to a
+                    // message and this is the only place holding the reader that can go there.
+                    // `ScrollViewReader` scrolls to an id and to nothing else, which is why the
+                    // request is a message rather than an offset.
+                    .onChange(of: reader.scrollRequest) {
+                        guard let request = reader.scrollRequest else { return }
+                        scroll.scrollTo(request.id, anchor: .top)
                     }
                 }
             }
@@ -250,20 +269,10 @@ struct BlockRow: View {
     /// The kind ramp, which was solved as an even luminance ramp against `--map-bg` so that four
     /// categories stay apart at the ~2px a strip draws them at. A spine is wider than that and
     /// reads more easily, which is a reason to reuse the ramp and not a reason to pick again.
-    private var spine: Color {
-        // Checked before the band, because a failed result is the one result that survives and
-        // it is the failure, not the tool, that earned the row.
-        if block.isError { return theme.color(.err) }
-        return switch block.band {
-        case .user: theme.color(.kUser)
-        case .agent: theme.color(.kAgent)
-        case .reasoning: theme.color(.kReason)
-        case .tool: theme.color(.kTool)
-        // A band that postdates this build. Drawn in the quiet tier rather than borrowed from
-        // one of the four, because a stripe is a claim about what a conversation is made of.
-        case .unrecognised: theme.color(.ink3)
-        }
-    }
+    ///
+    /// The choice itself is `Display.bandToken` and not here, because the minimap beside this
+    /// transcript draws the same message and has to reach the same colour.
+    private var spine: Color { theme.color(Display.bandToken(block)) }
 
     private var sigil: String {
         if block.isError { return "✕" }

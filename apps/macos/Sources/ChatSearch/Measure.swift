@@ -108,12 +108,20 @@ enum Measure {
     /// the same route for the same reason, and this is the drawer's version of it — the one part
     /// of the app whose correctness is a thing you have to look at.
     @MainActor
-    static func shot(model: SearchModel, window: NSWindow, query: String, to path: String) async {
+    static func shot(
+        model: SearchModel, window: NSWindow, query: String, to path: String,
+        longest: Bool = false, frames: FrameClock? = nil
+    ) async {
         print(drivenLine())
         model.query = query
         model.queryChanged()
         try? await Task.sleep(for: .seconds(2))
-        guard let conv = model.conversations.first else {
+        // `--longest` opens the biggest conversation the query returned rather than the best. The
+        // minimap's hard case is the corpus's longest conversation and no query puts it first, so
+        // without this the one thing that has to be looked at cannot be reached from a script.
+        let pick = longest
+            ? model.conversations.max { $0.msgCount < $1.msgCount } : model.conversations.first
+        guard let conv = pick else {
             print("nothing matched \"\(query)\" — nothing to open")
             return
         }
@@ -137,6 +145,8 @@ enum Measure {
         } else {
             print("  no transcript: \(model.reader.failure ?? "still reading")")
         }
+
+        await minimapPass(model: model, window: window, path: path, frames: frames)
 
         // After the first picture, because it changes the screen. Typing on with a conversation
         // open is an ordinary thing to do and the drawer is supposed to survive it — including
@@ -176,6 +186,124 @@ enum Measure {
         let library = path.replacingOccurrences(of: ".png", with: "-library.png")
         print("  library → \(capture(window, to: library)) \(library)")
         model.surface = .search
+    }
+
+    /// The scroll relationship, driven from both ends.
+    ///
+    /// The minimap is the one part of this app whose correctness is a *relationship* rather than a
+    /// drawing: the transcript's position has to reach the viewport box and a drag on the box has
+    /// to reach the transcript. Neither half has a number in the ordinary sense, but both have a
+    /// before and an after, so this drives each one and prints what moved. `chat-search-me9.8.18`
+    /// costed three containers for this and took the reversible one — these are the numbers that
+    /// say whether that holds.
+    @MainActor
+    private static func minimapPass(
+        model: SearchModel, window: NSWindow, path: String, frames: FrameClock?
+    ) async {
+        let reader = model.reader
+        guard !reader.minimap.isEmpty else { return }
+        print("  minimap: \(reader.minimap.blocks.count) bands, "
+            + "\(footprintMB()) MB in this process")
+        print("    at rest          \(where_(reader))")
+
+        // The transcript's own scroll view, and not the results list beside it: both are `List`s
+        // and therefore both are `NSScrollView`s, so they are told apart by where they are. The
+        // drawer is the right-hand pane, which makes it the rightmost of the two — a weaker test
+        // than asking SwiftUI, which does not answer.
+        guard let scroll = readerScrollView(window) else {
+            print("    (no scroll view found in the drawer — nothing to drive)")
+            return
+        }
+        let document = scroll.documentView?.frame.height ?? 0
+        let visible = scroll.contentView.bounds.height
+        print("    document         \(fmt(document)) pt over \(reader.minimap.blocks.count) "
+            + "messages, \(fmt(visible)) pt of it on screen")
+
+        // Half the document in 60 steps, which is a fling rather than a nudge: the box has to
+        // survive rows arriving and leaving faster than a person could ask for them.
+        frames?.reset()
+        let travel = max(0, document - visible) / 2
+        for step in 0...60 {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: travel * Double(step) / 60))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try? await Task.sleep(for: .milliseconds(8))
+        }
+        try? await Task.sleep(for: .milliseconds(400))
+        print("    after scrolling  \(where_(reader)) — \(MinimapBands.renders) canvas renders")
+        if let frames { print("    main-thread lag  \(line(frames.lag)), "
+            + "\(frames.missed) of \(frames.lag.count) vsyncs missed") }
+        let scrolled = path.replacingOccurrences(of: ".png", with: "-scrolled.png")
+        print("    \(scrolled) \(capture(window, to: scrolled))")
+
+        // And the other direction: a drag three quarters of the way down the map. The transcript
+        // has to be somewhere else afterwards, and the box has to have followed it there — which
+        // is both halves of the relationship in one gesture, since the box is drawn from the rows
+        // the scroll produced and not from the request that caused it.
+        frames?.reset()
+        reader.scrub(to: 0.75)
+        try? await Task.sleep(for: .milliseconds(700))
+        reader.endScrub()
+        print("    after a drag to 75%  \(where_(reader))")
+        if let frames { print("    main-thread lag  \(line(frames.lag)), "
+            + "\(frames.missed) of \(frames.lag.count) vsyncs missed") }
+        // The keyboard's half, which has no pointer to drive it. It shares everything below the
+        // gesture with the drag, so what this checks is narrow and is the only check there is:
+        // that a step resolves at all, and that it resolves to the next message the transcript has
+        // a row for rather than to the next message in the conversation — 952 of which have none.
+        for _ in 0..<3 {
+            reader.step(by: 1)
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        print("    after three steps down  \(where_(reader))")
+        print("    \(footprintMB()) MB in this process, with the conversation open and scrolled")
+        let scrubbed = path.replacingOccurrences(of: ".png", with: "-scrubbed.png")
+        print("    \(scrubbed) \(capture(window, to: scrubbed))")
+    }
+
+    /// Where the transcript is, in the only terms `List` can express it.
+    @MainActor
+    private static func where_(_ reader: ReaderModel) -> String {
+        let positions = reader.onScreen.compactMap { reader.minimap.position(of: $0) }.sorted()
+        guard let first = positions.first, let last = positions.last else {
+            return "no rows have reported themselves on screen"
+        }
+        // The request is printed beside the result because they are different facts: `List` keeps a
+        // row prepared past the edge of the viewport, so a step of one message can move the
+        // transcript without moving the top of the box at all.
+        let requested: String? = reader.scrollRequest?.id
+        let asked = requested.flatMap { reader.minimap.position(of: $0) }
+        return "messages \(first)–\(last) of \(reader.minimap.blocks.count) on screen "
+            + "(\(positions.count) rows), box at \(Int((reader.scrollFraction * 100).rounded()))%"
+            + (asked.map { ", last asked for \($0)" } ?? "")
+    }
+
+    /// The drawer's scroll view: the rightmost one in the window.
+    @MainActor
+    private static func readerScrollView(_ window: NSWindow) -> NSScrollView? {
+        var found: [NSScrollView] = []
+        func walk(_ view: NSView?) {
+            guard let view else { return }
+            if let scroll = view as? NSScrollView { found.append(scroll) }
+            for sub in view.subviews { walk(sub) }
+        }
+        walk(window.contentView)
+        return found.max { $0.convert($0.bounds, to: nil).minX < $1.convert($1.bounds, to: nil).minX }
+    }
+
+    /// Resident footprint, the same `phys_footprint` `poc/swift`'s `Metrics.swift` reports — the
+    /// number macOS bills this process for, so the figure is comparable with the 5.2 MB and 65.6 MB
+    /// `chat-search-me9.22` measured the three containers at.
+    private static func footprintMB() -> String {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(
+            MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return "?" }
+        return fmt(Double(info.phys_footprint) / 1024 / 1024)
     }
 
     /// The window's own view hierarchy as a PNG, with no window server in it.

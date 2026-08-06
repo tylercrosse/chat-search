@@ -24,6 +24,43 @@ final class ReaderModel {
     /// exactly why `cs_core::blocks` answers the default and refuses to model this.
     private var overrides: [String: Fold] = [:]
 
+    /// The conversation as a map, laid out once per transcript rather than once per redraw: it is
+    /// O(messages) to build and the view holding it is invalidated on every frame of a scroll.
+    private(set) var minimap = MinimapLayout()
+
+    /// The messages `List` currently has on screen, as its rows report themselves.
+    ///
+    /// **This is the whole of route 1**, and it is worth being exact about what it is. `List` is
+    /// the only container `chat-search-me9.22` measured that recycles, and it gives back neither
+    /// of the two numbers the prototype reads off the DOM — `scrollTop` and `scrollHeight`. What
+    /// it does give is `onAppear` and `onDisappear` per row, so the position of the transcript is
+    /// kept in the units this container actually speaks: which rows exist right now.
+    ///
+    /// The cost is that this is a *superset* of what a reader can see. `NSTableView` prepares rows
+    /// beyond the visible rectangle, so the box drawn from these is larger than the viewport and
+    /// larger at the ends of a fling than in the middle of one. It is a report of where you are
+    /// and not a measurement of what you can see; `apps/macos/README.md` records what that
+    /// measured, and route 2 is what to reach for if it ever stops being good enough.
+    private(set) var onScreen: Set<String> = []
+
+    /// Where the minimap has asked the transcript to go. Consumed by `ReaderView`, which is the
+    /// only place with a `ScrollViewReader` to ask.
+    ///
+    /// Carrying a serial rather than an id alone: dragging away and back lands on the same message
+    /// and has to scroll there again, and an `onChange` cannot see a value that did not change.
+    private(set) var scrollRequest: ScrollRequest?
+
+    struct ScrollRequest: Equatable {
+        let id: String
+        let serial: Int
+    }
+
+    /// The last message a drag asked for, so a drag that crosses fifty of them in one flick issues
+    /// one scroll per message rather than one per frame. Cleared when the drag ends, because
+    /// dragging back to a message you scrolled away from by hand is a real request.
+    private var lastScrubbed: String?
+    private var scrollSerial = 0
+
     let client: CsClient
     private var inFlight: Task<Void, Never>?
 
@@ -41,6 +78,13 @@ final class ReaderModel {
         transcript = nil
         failure = nil
         overrides.removeAll()
+        // The map and the position go with the conversation. Rows of the old one never report
+        // themselves gone — `List` is handed a new array rather than emptied — so a set that
+        // survived would draw a viewport box over a conversation those messages are not in.
+        minimap = MinimapLayout()
+        onScreen.removeAll()
+        scrollRequest = nil
+        lastScrubbed = nil
         load(query: query)
     }
 
@@ -66,6 +110,59 @@ final class ReaderModel {
 
     func toggle(_ block: Block) { overrides[block.id] = fold(of: block).toggled }
 
+    // MARK: - The scroll relationship
+
+    /// A row appeared or went away. Called from the transcript's rows and from nowhere else.
+    ///
+    /// Written straight through, which was not the first version. `onAppear` fires from inside
+    /// `NSTableView`'s row preparation and a fling changes twenty rows a frame, so this buffered
+    /// into an unobserved set and published once per turn of the run loop — and that turned out to
+    /// be a hand-rolled copy of what SwiftUI already does, since an observable write marks a view
+    /// dirty and the body runs at the next frame either way. Measured against each other on the
+    /// corpus's longest conversation, neither the frame tail nor the count of AppKit's reentrancy
+    /// warning could tell the two apart. The simpler one ships; `apps/macos/README.md` has both
+    /// sets of numbers.
+    func rowAppeared(_ id: String) { onScreen.insert(id) }
+
+    func rowDisappeared(_ id: String) { onScreen.remove(id) }
+
+    /// A drag on the minimap, as a fraction of its height.
+    func scrub(to fraction: Double) {
+        guard let id = minimap.drawnId(atFraction: fraction), id != lastScrubbed else { return }
+        request(id)
+    }
+
+    func endScrub() { lastScrubbed = nil }
+
+    /// One drawn message up or down — the minimap's adjustable action, and the only way to move
+    /// it without a pointer.
+    ///
+    /// Stepped from the message this last asked for, as long as that message is still on screen,
+    /// and from the top of the box otherwise. Anchoring on the box alone looks right and is not:
+    /// `onScreen` is a superset of what is visible, so a step of one message frequently does not
+    /// move its top edge, and the next step would then resolve to the same message again and the
+    /// keyboard would be stuck one message below where it started.
+    func step(by delta: Int) {
+        // Annotated, because `scrollRequest?.id.flatMap` reads as `String`'s and walks the id one
+        // character at a time.
+        let requested: String? = scrollRequest?.id
+        let anchor = requested.flatMap { onScreen.contains($0) ? $0 : nil }
+            ?? minimap.firstOnScreen(of: onScreen)
+        guard let id = minimap.drawnId(steppingFrom: anchor, by: delta) else { return }
+        request(id)
+    }
+
+    /// How far down the conversation the reader is, 0 to 1. What the map says out loud.
+    var scrollFraction: Double {
+        minimap.span(ofIds: onScreen)?.lowerBound ?? 0
+    }
+
+    private func request(_ id: String) {
+        lastScrubbed = id
+        scrollSerial += 1
+        scrollRequest = ScrollRequest(id: id, serial: scrollSerial)
+    }
+
     private func load(query: String) {
         inFlight?.cancel()
         guard let id = conv?.id else {
@@ -82,6 +179,7 @@ final class ReaderModel {
                 // would be an answer about whatever was open before.
                 guard !Task.isCancelled, self.conv?.id == id else { return }
                 self.transcript = transcript
+                self.minimap = MinimapLayout(transcript.messages)
                 self.failure = nil
             } catch is CancellationError {
                 return

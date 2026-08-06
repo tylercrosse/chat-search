@@ -49,7 +49,10 @@ struct Rail: View {
                         row(chip)
                     }
 
-                    if let dirs = rail.dirs, !dirs.values.isEmpty {
+                    // Keep the section visible when the index has no directories. `indexed == 0`
+                    // is a real first-run state, not the absence of a facet; hiding it makes a
+                    // configured rail look like the client never received one.
+                    if let dirs = rail.dirs {
                         head("Projects", dirs.keyword + " · " + drawn(dirs))
                         allRow(dirs.all, "anywhere")
                         ForEach(dirs.values) { chip in

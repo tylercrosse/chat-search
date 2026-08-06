@@ -53,6 +53,29 @@ enum Display {
         }
     }
 
+    /// The token a message is drawn in wherever its *band* is the thing being drawn: the spine
+    /// beside it in the transcript, and its band on the minimap next to that.
+    ///
+    /// One function rather than two switches, because those are the same conversation at two
+    /// resolutions. A message whose spine is `--err` and whose band a centimetre away is
+    /// `--k-tool` would be two answers to one question on one screen, which is the shape of the
+    /// local-date bug this repository already paid for once.
+    ///
+    /// The error test comes first for the reason the transcript gives: a failed result is the one
+    /// result that survives the fold, and it is the failure rather than the tool that earned it.
+    /// A band this build has no reading for takes the quiet tier rather than borrowing one of the
+    /// four, because a stripe is a claim about what a conversation is made of.
+    static func bandToken(_ block: Block) -> ColorToken {
+        if block.isError { return .err }
+        return switch block.band {
+        case .user: .kUser
+        case .agent: .kAgent
+        case .reasoning: .kReason
+        case .tool: .kTool
+        case .unrecognised: .ink3
+        }
+    }
+
     /// `$HOME` collapsed to `~`, and `—` for a conversation that has no working directory.
     ///
     /// Mirrors `cs_tui::text::display_dir`, including the trap in it: a plain prefix test turns

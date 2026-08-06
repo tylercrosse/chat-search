@@ -54,6 +54,11 @@ struct ReaderView: View {
             Text(meta)
                 .font(theme.font(.meta, .mono))
                 .foregroundStyle(theme.color(.ink3))
+            // The four knobs, under the facts and above the transcript they govern. In the header
+            // rather than beside the messages for the reason the prototype gives: they are a
+            // property of the whole reading, and a control that scrolled away with the text would
+            // be reachable only from the top of a 2,553-message conversation.
+            FidelityBar(reader: reader)
             if let sitting = reader.transcript?.sitting {
                 // Said rather than drawn. Those records were separate requests with no shared
                 // context on Google's side, so the fold is a reconstruction — and a reader who
@@ -94,32 +99,56 @@ struct ReaderView: View {
     @ViewBuilder
     private var content: some View {
         if let transcript = reader.transcript {
-            let blocks = transcript.drawnMessages
-            if blocks.isEmpty {
+            if transcript.drawnMessages.isEmpty {
                 // Not a failure. `cs show` exits nonzero for an id that does not exist, so
                 // reaching here means the conversation is real and every message on its head
                 // path is a successful tool result.
                 notice("nothing on the head path to draw")
+            } else if reader.rows.isEmpty {
+                // A different sentence, because it has a different fix. The conversation has
+                // messages and the four knobs have taken all of them off the screen, which is a
+                // thing the controls above make easy to do by accident and which the empty column
+                // beneath them would otherwise report as "there is nothing here".
+                notice("every kind is switched off — turn one back on above")
             } else {
                 // `List` for the reason the results pane uses one: it is the only container
                 // `chat-search-me9.22` measured that recycles, and the longest conversation in
                 // this corpus is 2,553 messages.
                 ScrollViewReader { scroll in
                     HStack(spacing: 0) {
-                        List(blocks) { block in
-                            BlockRow(
-                                block: block, fold: reader.fold(of: block),
-                                marked: reader.marked(block, in: transcript, theme: theme),
-                                toggle: { reader.toggle(block) }
-                            )
-                            .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
-                            .listRowBackground(theme.color(.panel))
-                            .listRowSeparator(.hidden)
-                            // What the minimap knows about where you are. `List` publishes no scroll
-                            // offset, so the rows say it themselves — see `ReaderModel.onScreen` for
-                            // what that buys and what it costs.
-                            .onAppear { reader.rowAppeared(block.id) }
-                            .onDisappear { reader.rowDisappeared(block.id) }
+                        // The rows come off the model rather than off the transcript, because what
+                        // the transcript draws is now a question with four knobs in it and a row
+                        // may be a statement about a run rather than a message — see
+                        // `ReaderModel.restack`.
+                        List(reader.rows) { row in
+                            switch row {
+                            case .message(let block):
+                                BlockRow(
+                                    block: block, fold: reader.fold(of: block),
+                                    marked: reader.marked(block, in: transcript, theme: theme),
+                                    toggle: { reader.toggle(block) }
+                                )
+                                .listRowInsets(
+                                    EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
+                                .listRowBackground(theme.color(.panel))
+                                .listRowSeparator(.hidden)
+                                // What the minimap knows about where you are. `List` publishes no
+                                // scroll offset, so the rows say it themselves — see
+                                // `ReaderModel.onScreen` for what that buys and what it costs. The
+                                // summary rows deliberately say nothing: the map is a map of
+                                // messages, and a row that is not one has no position on it.
+                                .onAppear { reader.rowAppeared(block.id) }
+                                .onDisappear { reader.rowDisappeared(block.id) }
+                            case .summary(let segment):
+                                SegmentRow(
+                                    segment: segment, open: reader.isOpen(segment),
+                                    toggle: { reader.toggle(segment) }
+                                )
+                                .listRowInsets(
+                                    EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
+                                .listRowBackground(theme.color(.panel))
+                                .listRowSeparator(.hidden)
+                            }
                         }
                         .listStyle(.plain)
                         .scrollContentBackground(.hidden)
@@ -140,9 +169,13 @@ struct ReaderView: View {
                     // arrives in another, so a position resolved against the wrong one lands on
                     // an unrelated message. The marks are per message and came from the matcher
                     // that did the ranking, so they cannot be misaligned.
+                    //
+                    // A summary row counts as a match, because in segment mode the message that
+                    // matched may be inside a run that is shut — and a scroll to a row `List` does
+                    // not have is a scroll that silently does not happen.
                     .onChange(of: transcript.convId, initial: true) {
-                        guard let first = blocks.first(where: { !$0.marks.isEmpty }) else { return }
-                        scroll.scrollTo(first.id, anchor: .top)
+                        guard let first = reader.firstMarkedRow else { return }
+                        scroll.scrollTo(first, anchor: .top)
                     }
                     // The other half of the scroll relationship: the minimap resolves a drag to a
                     // message and this is the only place holding the reader that can go there.
@@ -150,7 +183,7 @@ struct ReaderView: View {
                     // request is a message rather than an offset.
                     .onChange(of: reader.scrollRequest) {
                         guard let request = reader.scrollRequest else { return }
-                        scroll.scrollTo(request.id, anchor: .top)
+                        scroll.scrollTo(ReaderRow.id(ofMessage: request.id), anchor: .top)
                     }
                 }
             }

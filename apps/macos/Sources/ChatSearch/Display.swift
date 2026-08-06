@@ -67,7 +67,13 @@ enum Display {
     /// four, because a stripe is a claim about what a conversation is made of.
     static func bandToken(_ block: Block) -> ColorToken {
         if block.isError { return .err }
-        return switch block.band {
+        return bandToken(block.band)
+    }
+
+    /// The same answer for a band with no message under it — what the fidelity chip's dot is drawn
+    /// in, since a control over a band has to be the colour of the band it controls.
+    static func bandToken(_ band: Band) -> ColorToken {
+        switch band {
         case .user: .kUser
         case .agent: .kAgent
         case .reasoning: .kReason

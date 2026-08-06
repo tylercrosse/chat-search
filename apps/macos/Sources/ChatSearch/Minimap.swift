@@ -22,12 +22,19 @@ struct MinimapLayout: Sendable {
     /// The top of message *i*, with a final entry at 1 so the bottom of the last message needs no
     /// special case. `blocks.count + 1` long.
     private let offsets: [Double]
-    /// Positions in `blocks` of the messages the transcript actually renders — the only places a
-    /// scrub can land, because they are the only rows `List` has an id for.
-    private let drawnPositions: [Int]
+    /// Whether message *i* has a row in the transcript right now.
+    ///
+    /// **Right now**, and that is the whole of why this is passed in rather than read off
+    /// `Block.drawn`. Core's answer says whether a reader draws a message at all; this says whether
+    /// the four knobs and the open segments have left it standing (`ReaderModel.restack`). A scrub
+    /// resolves to a row `List` can be told to scroll to, and one it cannot is a drag that silently
+    /// does nothing.
+    private let shownFlags: [Bool]
+    /// Positions in `blocks` of those — the only places a scrub can land.
+    private let shownPositions: [Int]
     private let positionOfId: [String: Int]
 
-    init(_ blocks: [Block] = []) {
+    init(_ blocks: [Block] = [], shown: Set<String> = []) {
         self.blocks = blocks
         let weights = blocks.map(MinimapLayout.weight)
         let total = weights.reduce(0, +)
@@ -40,7 +47,9 @@ struct MinimapLayout: Sendable {
         }
         offsets.append(1)
         self.offsets = offsets
-        self.drawnPositions = blocks.indices.filter { blocks[$0].drawn }
+        let shownFlags = blocks.map { shown.contains($0.id) }
+        self.shownFlags = shownFlags
+        self.shownPositions = blocks.indices.filter { shownFlags[$0] }
         self.positionOfId = Dictionary(
             blocks.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { a, _ in a })
     }
@@ -82,6 +91,9 @@ struct MinimapLayout: Sendable {
         return top(lowest)...bottom(highest)
     }
 
+    /// Whether message *i* has a row in the transcript right now. What the bands are dimmed on.
+    func isShown(_ index: Int) -> Bool { shownFlags[index] }
+
     /// The message a drag at this fraction of the map is pointing at, snapped to one the
     /// transcript can actually scroll to.
     ///
@@ -89,23 +101,23 @@ struct MinimapLayout: Sendable {
     /// a drag lands on a message boundary rather than where the finger is. On the conversation
     /// this was built against that is a quarter of a point of slop per message; on a conversation
     /// with one expanded block taller than the drawer it is the whole block.
-    func drawnId(atFraction fraction: Double) -> String? {
-        guard !drawnPositions.isEmpty else { return nil }
+    func shownId(atFraction fraction: Double) -> String? {
+        guard !shownPositions.isEmpty else { return nil }
         let clamped = Swift.min(Swift.max(fraction, 0), 1)
-        return blocks[nearestDrawn(to: search(clamped))].id
+        return blocks[nearestShown(to: search(clamped))].id
     }
 
-    /// One drawn message either side of where the reader is — the arrow keys' unit.
+    /// One shown message either side of where the reader is — the arrow keys' unit.
     ///
     /// The prototype moves 48px because the DOM scrolls in pixels. This container moves in
     /// messages, so the step is a message: a unit expressed in the container's own terms is the
     /// one that cannot land between two of them.
-    func drawnId(steppingFrom id: String?, by delta: Int) -> String? {
-        guard !drawnPositions.isEmpty else { return nil }
-        let from = id.flatMap { positionOfId[$0] } ?? drawnPositions[0]
+    func shownId(steppingFrom id: String?, by delta: Int) -> String? {
+        guard !shownPositions.isEmpty else { return nil }
+        let from = id.flatMap { positionOfId[$0] } ?? shownPositions[0]
         let moved = Swift.min(
-            Swift.max(rank(atOrAfter: from) + delta, 0), drawnPositions.count - 1)
-        return blocks[drawnPositions[moved]].id
+            Swift.max(rank(atOrAfter: from) + delta, 0), shownPositions.count - 1)
+        return blocks[shownPositions[moved]].id
     }
 
     /// Where a message sits in the conversation. The transcript's own rows are the only thing
@@ -129,27 +141,27 @@ struct MinimapLayout: Sendable {
         return low
     }
 
-    /// The drawn message nearest a position, in either direction. A drag that lands on a
-    /// successful tool result — 952 of the 2,431 messages in the longest conversation — has to
-    /// resolve to something the transcript has a row for.
-    private func nearestDrawn(to position: Int) -> Int {
+    /// The shown message nearest a position, in either direction. A drag that lands on a
+    /// successful tool result — 952 of the 2,431 messages in the longest conversation — or on a
+    /// band the knobs have switched off has to resolve to something the transcript has a row for.
+    private func nearestShown(to position: Int) -> Int {
         let after = rank(atOrAfter: position)
-        if after == 0 { return drawnPositions[0] }
-        if after == drawnPositions.count { return drawnPositions[drawnPositions.count - 1] }
-        let below = drawnPositions[after - 1]
-        let above = drawnPositions[after]
+        if after == 0 { return shownPositions[0] }
+        if after == shownPositions.count { return shownPositions[shownPositions.count - 1] }
+        let below = shownPositions[after - 1]
+        let above = shownPositions[after]
         return position - below <= above - position ? below : above
     }
 
-    /// How many drawn messages come before this position. Binary search for the same reason
+    /// How many shown messages come before this position. Binary search for the same reason
     /// `search` is one: this is on the path of every frame of a drag, and `firstIndex(where:)`
-    /// over 1,479 drawn messages is not.
+    /// over 1,479 rows is not.
     private func rank(atOrAfter position: Int) -> Int {
         var low = 0
-        var high = drawnPositions.count
+        var high = shownPositions.count
         while low < high {
             let middle = (low + high) / 2
-            if drawnPositions[middle] < position { low = middle + 1 } else { high = middle }
+            if shownPositions[middle] < position { low = middle + 1 } else { high = middle }
         }
         return low
     }
@@ -289,7 +301,8 @@ struct MinimapBands: View {
                         width: block.band == .user ? Self.userWidth : Self.bandWidth,
                         height: max(Self.minimumBand, extent - Self.bandGap))
                     context.fill(
-                        Path(roundedRect: rect, cornerRadius: 1), with: .color(colour(of: block)))
+                        Path(roundedRect: rect, cornerRadius: 1),
+                        with: .color(colour(of: block, at: index)))
                 }
             }
             for (index, block) in layout.blocks.enumerated() where !block.marks.isEmpty {
@@ -308,15 +321,21 @@ struct MinimapBands: View {
         }
     }
 
-    private func colour(of block: Block) -> Color {
+    private func colour(of block: Block, at index: Int) -> Color {
         let base = theme.color(Display.bandToken(block))
         // `.mm-band.off` and `.mm-band.dim`. Dim rather than drop, and the two are different
         // numbers because they are different statements: `off` is a branch the conversation did
         // not take, `dim` is a message this reader is not being shown. Only the second happens
         // today — `cs show` returns the head path — and the first is written because the field is
         // on the wire and the toggle that uses it is a thing docs/TUI-DESIGN.md §8 describes.
+        //
+        // The second now has two causes rather than one: a successful tool result, which is never
+        // a row, and a band this reader has switched off. They dim identically because they say the
+        // same thing to somebody looking at the map — there is a message here and you are not being
+        // shown it — and the map is what keeps the scrollbar describing the whole conversation
+        // while a knob takes a third of it off the screen.
         if !block.onPath { return base.opacity(0.3) }
-        return block.drawn ? base : base.opacity(0.22)
+        return layout.isShown(index) ? base : base.opacity(0.22)
     }
 
     /// Paint order, and the one place this map departs from the prototype.

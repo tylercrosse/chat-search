@@ -150,6 +150,10 @@ enum Measure {
             print("  no transcript: \(model.reader.failure ?? "still reading")")
         }
 
+        // Before the minimap is driven, so every preset is photographed at the same place in the
+        // conversation and the pass that follows measures the scroll from where it always did.
+        await presetPass(model: model, window: window, path: path)
+
         await minimapPass(model: model, window: window, path: path, frames: frames)
 
         // After the first picture, because it changes the screen. Typing on with a conversation
@@ -249,6 +253,87 @@ enum Measure {
         print("  density at \(at): \(fmt(row)) pt per row, \(fmt(visible)) pt of list → "
             + "\(Int((visible / row).rounded(.down))) rows on screen, "
             + "\(drawn.length) counting the one the edge cuts")
+    }
+
+    /// Every preset, on one conversation, plus the three claims about the fidelity model that no
+    /// picture states (`chat-search-me9.8.36`).
+    ///
+    /// A frame each, because what a preset does to a transcript is exactly the kind of thing that
+    /// has no number: whether `segments` reads as a summary of a long agent session or as a wall of
+    /// `→ 1 message` is a question about a picture, and it is the question the prototype got wrong
+    /// twice. The counts go beside them for the half a picture cannot state — how many rows the
+    /// knobs left, how many of those are summaries rather than messages, and where the messages
+    /// that are gone went.
+    ///
+    /// Then the three things the pictures are silent about. That `read` is still the wire's own
+    /// answer, which is the one place this client spells a rule `cs_core::blocks::Density` also
+    /// spells and therefore the one place they can drift apart. That a fold set on one message
+    /// beats the band's knob and survives until it is cleared. And that opening another
+    /// conversation leaves the knobs alone — the prototype's `defaultZoomFor` is what this is
+    /// checking the absence of, and its absence is invisible in every frame.
+    @MainActor
+    private static func presetPass(
+        model: SearchModel, window: NSWindow, path: String
+    ) async {
+        let reader = model.reader
+        guard let opened = reader.conv, let transcript = reader.transcript else { return }
+        let drawn = transcript.drawnMessages
+        let query = model.query
+        print("  presets, over \(drawn.count) drawn messages of \(opened.convId):")
+
+        for preset in Fidelity.Preset.allCases {
+            reader.apply(preset)
+            try? await Task.sleep(for: .milliseconds(400))
+            let levels = drawn.reduce(into: [Level: Int]()) { $0[reader.level(of: $1), default: 0] += 1 }
+            let summaries = reader.rows.count {
+                if case .summary = $0 { return true } else { return false }
+            }
+            print("    \(preset.rawValue.padding(toLength: 11, withPad: " ", startingAt: 0))"
+                + "\(reader.rows.count) rows, \(summaries) of them run summaries · "
+                + "\(levels[.expanded] ?? 0) full, \(levels[.collapsed] ?? 0) brief, "
+                + "\(levels[.hidden] ?? 0) off")
+            let file = path.replacingOccurrences(of: ".png", with: "-preset-\(preset.rawValue).png")
+            print("    \(file) \(capture(window, to: file))")
+        }
+
+        // Back to what the drawer opens at, so everything after this pass sees the screen it
+        // always saw — and because the check below is a check about `read`.
+        reader.apply(.read)
+        try? await Task.sleep(for: .milliseconds(400))
+        let agree = drawn.count { Level($0.fold) == Fidelity.Preset.read.fidelity.level(of: $0.band) }
+        print("    read is `Density::Full` spelled in Swift, and agrees with the fold on the wire "
+            + "for \(agree) of \(drawn.count) drawn messages")
+
+        // A fold set by hand, against a preset that says the opposite. `outline` because it makes
+        // every band brief, so one message going full is unambiguous.
+        reader.apply(.outline)
+        if let first = drawn.first {
+            reader.toggle(first)
+            try? await Task.sleep(for: .milliseconds(200))
+            print("    one message opened by hand: it is \(reader.fold(of: first)) while its "
+                + "\(first.band) knob says \(reader.fidelity.level(of: first.band).word), "
+                + "\(reader.overrideCount) override in hand")
+            reader.clearOverrides()
+            try? await Task.sleep(for: .milliseconds(200))
+            print("    cleared: it is \(reader.fold(of: first)) again")
+        }
+
+        // And the absence of `defaultZoomFor`. Driven with a preset the wire does not answer, so a
+        // reader that re-derived the knobs from the transcript would land somewhere else and say so.
+        reader.apply(.segments)
+        let knobs = reader.fidelity
+        if let other = model.conversations.first(where: { $0.id != opened.id }) {
+            reader.open(other, query: query)
+            try? await Task.sleep(for: .seconds(2))
+            print("    opened \(other.convId) with segments in force: the knobs are "
+                + (reader.fidelity == knobs ? "where they were left" : "MOVED, which is a defect"))
+            reader.open(opened, query: query)
+            try? await Task.sleep(for: .seconds(2))
+        } else {
+            print("    only one conversation matched — nothing to open beside it")
+        }
+        reader.apply(.read)
+        try? await Task.sleep(for: .milliseconds(400))
     }
 
     /// The scrubber, driven from both ends — and the three claims about it that a PNG cannot make.

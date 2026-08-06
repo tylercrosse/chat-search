@@ -19,10 +19,12 @@ measured. This is the map above it.
 
 ## Built
 
-Eighteen beads closed between 2026-07-29 and 2026-08-06, in four groups. They are groups rather
-than sprints: the epic's one hard ordering rule is that **the shell lands before anything fans
-out**, because "five agents told to build the app produce five incompatible skeletons — window,
-client state, transport and error handling all invented independently."
+What closed between 2026-07-29 and 2026-08-06 falls into four groups. No count is kept in this
+sentence any more: it is the first thing here to go stale, it had gone stale twice by 2026-08-06,
+and `bd list --parent chat-search-me9.8` answers it exactly. They are groups rather than sprints:
+the epic's one hard ordering rule is that **the shell lands before anything fans out**, because
+"five agents told to build the app produce five incompatible skeletons — window, client state,
+transport and error handling all invented independently."
 
 **1 · The shell.** `me9.8.1` promoted the `me9.22` spike rather than starting from a blank page,
 which is where the transport's threading fix came from — readability handlers instead of
@@ -47,7 +49,9 @@ the binary at all.
 timeline and scrubber (`me9.8.20`), the main menu (`me9.8.24`), a `dir:` parsing bug (`me9.8.16`),
 and the drawer's key (`me9.8.26`) — which is the menu paying for itself: `me9.8.20` had closed
 saying a window with one focused view has no key to spare, and a menu bar is where that stops
-being true.
+being true. The axis followed it there (`me9.8.40`), which is the same rent paid a second time: the
+four chips were a click and nothing else, and `View ▸ Group` at ⌘1–⌘4 is what a four-state control
+looks like once there is a bar to put it on.
 
 ---
 
@@ -115,9 +119,8 @@ Kept out of the graph to keep it readable. Free-standing — nothing blocks them
 nothing: `me9.8.6` (prove the seam by swapping a whole theme), `me9.8.11` (is spacing outside the
 row a token), `me9.8.14` (carry `model` and `thread_count` on the wire), `me9.8.23` (a group head
 counts rows in hand and cannot say what the corpus holds), `me9.8.25` (`cs timeline` cannot
-describe a `--tools` search), `me9.8.40` (the grouping axis is four chips and a mouse, which is
-what the drawer was before `me9.8.26`). And one pair: `me9.8.13` (a hue for `google-takeout`, or a rule for sources the palette does not name)
-blocks `g6u` (the facet rail has no source colour).
+describe a `--tools` search). And one pair: `me9.8.13` (a hue for `google-takeout`, or a rule for
+sources the palette does not name) blocks `g6u` (the facet rail has no source colour).
 
 ### Why the edges are there
 

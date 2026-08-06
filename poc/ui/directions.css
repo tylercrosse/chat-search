@@ -43,13 +43,14 @@
 /* The incumbent, named so it can be argued with rather than assumed. It declares
    nothing: `.dir-terminal` *is* styles.css as it stands, which is the only way the
    control stays a control. Nudging it here to match palette.py's solve would move the
-   baseline the other three are measured against.
+   baseline every other block here is measured against.
 
    Worth recording that it barely needs nudging. palette.py solves this ramp from hue
    and target ratio alone and lands within one part in 255 of every value that was
    hand-solved months earlier — #2bb6b2 exactly for the user band, #415358 against
    #425258 for tools. The generator and the incumbent agree, which is the reason to
-   trust the generator on the three below. */
+   trust the generator on the five below, and on the two ports it is the only reason
+   there is: a port has no hand-solved value for it to agree with. */
 .dir-terminal.theme-dark { color-scheme: dark; }
 .dir-terminal.theme-light { color-scheme: light; }
 
@@ -440,6 +441,8 @@
   --err:     #fb4934;  /* bright red */
   --ok:      #b8bb26;  /* bright green */
 
+  /* The track, and the seven palette.py solved against it; `--ink-3` above is the
+     eighth. Every other value in this block is published or invented. */
   --map-bg:     #1d2021;  /* bg0_h */
   --k-tool:     #5c544c;
   --k-reason:   #c25d78;
@@ -481,6 +484,7 @@
   --err:     #9d0006;  /* faded red */
   --ok:      #79740e;  /* faded green */
 
+  /* The track, and the seven solved against it; `--ink-3` above is the eighth. */
   --map-bg:     #f2e5bc;  /* bg0_s */
   --k-tool:     #a6998e;
   --k-reason:   #ae4b8a;
@@ -543,6 +547,8 @@
   --err:     #dc322f;  /* red */
   --ok:      #859900;  /* green */
 
+  /* The invented track, and the seven palette.py solved against it; `--ink-3` above
+     is the eighth. */
   --map-bg:     #001e26;
   --k-tool:     #44555a;
   --k-reason:   #6d72c5;
@@ -584,6 +590,8 @@
   --err:     #dc322f;  /* red */
   --ok:      #859900;  /* green */
 
+  /* The invented track, and the seven solved against it; `--ink-3` above is the
+     eighth. */
   --map-bg:     #e8e0c8;
   --k-tool:     #849ba2;
   --k-reason:   #5e62bf;

@@ -64,7 +64,7 @@
       'its accents are published values; the eight tokens the ramp and the AA floor ' +
       'fence are its hues at lightnesses palette.py solved, because the published ' +
       'ones miss. A nudge rather than a rebuild — its dark ramp is already even at ' +
-      '1.77x 1.78x 1.82x, and no band moves more than 13 points of lightness.',
+      '1.77x 1.78x 1.82x, and no band moves more than 14 points of lightness.',
       'ported'],
     ['solarized-derived', 'Solarized, and this one is a rebuild. No assignment of its ' +
       'sixteen colours makes an even ramp at all, so its brightest kind leaves the ' +

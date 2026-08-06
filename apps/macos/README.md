@@ -34,7 +34,7 @@ moves the *default* rather than folding what is on screen at the time, so a grou
 later keystroke is folded too: an instrument that measured a list unfolding itself as it typed
 would not be measuring anything.
 
-The last four are the ones that are *not* instruments. They choose among the four directions
+The last four are the ones that are *not* instruments. They choose among the six directions
 compiled into the binary and which side of one you are looking at, and they stick, which is why
 they are the only flags here that change anything about the next launch. See
 [the theme seam](#the-theme-seam).
@@ -192,7 +192,7 @@ No view names a colour, a size or a face. Every one is a token read off the envi
 values for every direction the app carries live in exactly one generated file:
 
 ```bash
-python3 poc/ui/tokens.py terminal paper blueprint ink \
+python3 poc/ui/tokens.py terminal paper blueprint ink gruvbox-derived solarized-derived \
     -o apps/macos/Sources/CsTheme/Tokens.swift
 cd apps/macos && swift run -c release chat-search --verify-theme
 ```
@@ -203,7 +203,7 @@ so there is one authored copy of these palettes rather than two that agree until
 checked in because the app must build from a checkout with no Python in it, and it is provenance
 rather than a dependency: nothing in `apps/` reads `poc/` at build or at run time.
 
-### Four directions in one build, and `--theme` picks one
+### Six directions in one build, and `--theme` picks one
 
 The first name on that command line is what the app draws when nobody has chosen; the rest it
 carries and offers. **The list is generated as well as the values**, and that is the part worth
@@ -215,10 +215,10 @@ the gate measures, with no second list anywhere to disagree.
 Switching is not a rebuild, and was never a view change. The whole of it on the app's side is one
 `.environment(\.theme, theme)` at the root, because `Theme` is a plain value behind an environment
 key with a default — which is what the seam was put in before the views to buy. Demonstrated rather
-than asserted, four pictures out of one binary:
+than asserted, six pictures out of one binary:
 
 ```bash
-for d in terminal paper blueprint ink; do
+for d in terminal paper blueprint ink gruvbox-derived solarized-derived; do
   swift run -c release chat-search --shot --theme $d --out /tmp/theme-$d.png
 done
 ```
@@ -356,9 +356,9 @@ grounds it lands on. That last one is not pedantry: `--ink-3` was fixed once aga
 still at 4.23:1 on `--panel`, which is where most of that text actually is.
 
 Every direction and not just the default, because measuring only the default would fence the one
-palette least likely to be wrong — it is the one somebody is looking at — and leave the other three
+palette least likely to be wrong — it is the one somebody is looking at — and leave the other five
 offered and checked by nobody. One miss anywhere fails the run, and the verdict names which
-direction missed: "FAILED" over four palettes says nothing about which one to go and re-solve.
+direction missed: "FAILED" over six palettes says nothing about which one to go and re-solve.
 
 It exists for the reason `palette.py --verify` exists. Solving a colour and writing it down are
 two events, and generating adds a third — so what ships is now two steps from what was solved,
@@ -366,12 +366,10 @@ and neither step is checked by anything that reads Swift.
 
 ### Adding a theme — Solarized, Gruvbox, one of your own
 
-Not yet possible without editing this app, and here is the honest shape of it.
-
 A theme is not a list of hexes here. Half of one is *solved*: the four message kinds have to sit
 on an even luminance ramp against the ribbon track, because hue is the channel that degrades
 fastest at the ~2px those bands are drawn at, and the quiet tier has to clear 4.5:1 at 9–11px.
-So the path for Solarized is to add its hues to `DIRECTIONS` in `poc/ui/palette.py`, let that
+So the path for a palette is to add its hues to `DIRECTIONS` in `poc/ui/palette.py`, let that
 solve the eight fenced tokens, write the rest into `directions.css`, and name it on the `tokens.py`
 line above — at which point the app offers it to `--theme` and the gate measures it, both because
 it is in the generated list and for no other reason. A theme that skips the solve will fail
@@ -394,10 +392,48 @@ name. `--verify-theme` prints the class beside every name it measures, and its l
 of those two consequences applies.
 
 That leaves three routes for a named palette, and none of them pretends to be another: load it as
-a user theme exactly as published; ship it as `solarized-derived` / `gruvbox-derived` with its hues
-re-solved through `palette.py`, which moves Gruvbox by a few percent lightness and moves
-Solarized's brightest kind from `base1` (L 60%) to L 93%, past `base2`; or find a palette that
-holds as authored, which neither of these two is.
+a user theme exactly as published; ship it re-solved through `palette.py`, with `-derived` in the
+name; or find a palette that holds as authored, which neither of these two is.
+
+#### The two that took the middle route
+
+Both ship, both are fenced, and `chat-search-me9.8.17` is the port. Every hue in them is Gruvbox's
+or Solarized's; not one lightness is. What each cost, measured rather than estimated — the ramp is
+what `--verify-theme` reads back out of the build, and the move is how far the worst band travelled
+in HSL lightness against the value its palette publishes:
+
+| | ramp on the track, dark | ramp on the track, light | worst band moved | port cost |
+| --- | --- | --- | --- | ---: |
+| `gruvbox-derived` | 2.21 4.01 7.20 13.05 · 1.81 1.80 1.81× | 2.21 4.00 7.27 13.13 · 1.81 1.82 1.81× | −11.4 pt dark, −13.3 pt light | 102 CSS + 95 Swift |
+| `solarized-derived` | 2.22 4.01 7.25 13.00 · 1.81 1.81 1.79× | 2.21 4.01 7.27 13.10 · 1.81 1.82 1.80× | **+26.7 pt** dark, −21.6 pt light | 101 CSS + 95 Swift |
+
+The last column is the whole port as `git diff --shortstat` reports it, which is the claim the
+generated seam has been making all along: `3 files changed, 469 insertions(+), 5 deletions(-)`
+across `palette.py`, `directions.css` and `Tokens.swift`, and the 95 Swift lines a direction costs
+are the same 95 `terminal` costs, because nobody wrote them. No view, no list and no binding was
+touched.
+
+**Gruvbox is a nudge and Solarized is a rebuild, and the middle column is where that shows.** Every
+Gruvbox band lands within 14 points of the lightness Gruvbox publishes, and its three dark grounds —
+`bg0_s`, `bg0`, `bg0_h` — go in unaltered as the page, the drawer and the track. Solarized's
+brightest kind travels 27 points, from `base1` at L 60% to L 87%, which is brighter than any colour
+Solarized puts on a dark ground; its designated secondary tier travels 22 points the other way,
+because 2.42:1 is under half the floor; and its ribbon track had to be invented, since the darkest
+colour it publishes is the page itself.
+
+**Two-thirds of a theme is neither published nor solved, and that is where the work was.** A theme
+is 30 colour tokens per side against Gruvbox's 19 and Solarized's 16, so the panels, the rules, the
+selection and match grounds and five source hues are invented either way. They are invented from
+each palette's own greys and accents at that palette's hues — taking them from `terminal` is how a
+port ends up reading as the incumbent wearing a costume. `directions.css` names the published ones
+in a trailing comment and marks the solved eight, so what was taken, what was computed and what was
+made up are told apart in the file rather than in a commit message. The one place Solarized needed an extra invention is a
+middle foreground tier per side: it publishes two per ground where this interface reads three, and
+its comments tier solved to the floor comes back brighter than its own body text.
+
+Neither sets a type, radius or rhythm token. A colour port cannot move rows-per-screen, so the
+density argument every other direction has to make does not arise, and `--shot --theme
+gruvbox-derived` differs from `--shot --theme terminal` in colour and in nothing else.
 
 Three things this seam does **not** do yet, each filed:
 

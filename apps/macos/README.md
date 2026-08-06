@@ -113,13 +113,21 @@ directory beneath it, because `dir:` is a substring match. Every one of those ru
 `cs_core::query` with the grammar, so this side is three shapes and no rules
 (`chat-search-1ld`).
 
+**A section head is its label and nothing else.** `poc/ui` puts what the section is a facet of at
+the right margin of the head — `agent: · config ∪ index` beside `SOURCES` — and a browser column
+is not 232pt. Twelve points of padding either side leaves about 208, which holds roughly 28
+characters of the micro face at 1.4 tracking, and those two strings are 30: the meta wrapped under
+its own label and every populated section read as two competing lines rather than one head. It is
+on hover now, which is the trade the group key above the list already makes for the same reason
+(`chat-search-me9.8.35`).
+
 They are ordered by *coverage* rather than by how interesting the facet is, which is `poc/ui`'s
 ordering: `ended_at` answers for every conversation, a source for every conversation, a `cwd` for
 a quarter of them. The `dir:` section says both halves of that last number — it draws the busiest
-12 of 128 directories, and its final line is the 3,303 conversations that record none at all.
-Only the agent sources have a working directory, so `dir:` cannot reach a ChatGPT conversation,
-and a section that showed only the directories would read as a complete account of where the work
-happened. Its chips are paths rather than project names: deriving one collapsed seven unrelated
+12 of 128 directories, which its head says on hover, and its final line is the 3,303 conversations
+that record none at all. Only the agent sources have a working directory, so `dir:` cannot reach a
+ChatGPT conversation, and a section that showed only the directories would read as a complete
+account of where the work happened. Its chips are paths rather than project names: deriving one collapsed seven unrelated
 directories onto a single label, which is why `chat-search-6eb.26` was closed.
 
 A directory whose click cannot be written is not offered at all. No `dir:` token can carry a path
@@ -990,11 +998,16 @@ say.
 
 #### The container question, and what route 1 cost
 
-`List` gives back neither of the two numbers the prototype reads off the DOM — `scrollTop` and
-`scrollHeight` — and `ScrollViewReader` only goes the other way, and only to an id. That is the
-whole problem, and `chat-search-me9.8.18` costed three answers to it. What ships is the reversible
-one: **keep `List`, drive by id**. The rows report themselves through `onAppear`/`onDisappear`, and
-a drag resolves to a message rather than to an offset.
+Against macOS 14, `List` gave back neither of the two numbers the prototype reads off the DOM —
+`scrollTop` and `scrollHeight` — and `ScrollViewReader` only went the other way, and only to an id.
+That was the whole problem, and `chat-search-me9.8.18` costed three answers to it. What ships is
+the reversible one: **keep `List`, drive by id**. The rows report themselves, and a drag resolves
+to a message rather than to an offset.
+
+Raising the floor to macOS 15 (`chat-search-me9.8.27`) did not change that shape and did change
+what the rows are able to say. [What the floor bought](#what-the-floor-bought) is the current
+state; this section is the reasoning that got here and the numbers the container question was
+settled on, both of which still stand.
 
 So the reader did not leave `List` and `chat-search-me9.22`'s container numbers still stand. What
 needed measuring was what the *relationship* costs, which is a number about this app and not about
@@ -1015,39 +1028,95 @@ rather than an average that would look settled. Footprint is the same story: 115
 map against 106–118 MB without, measured at the same point with `phys_footprint`, ranges that
 overlap.
 
-Two costs are not noise and are worth saying plainly:
+Two costs were not noise, and `chat-search-me9.8.18` recorded both as permanent against that floor:
 
-- **The box is a report, not a measurement.** It is drawn from which rows `List` currently has,
-  and `NSTableView` prepares rows beyond the visible rectangle, so it says where you are and not
-  what you can see. `--shot` shows the size of that: after a drag to 75% the map asks for message
-  1812 and three keyboard steps later for 1818, and the box does not move for any of it, because
-  all six are inside the prepared rows. The transcript moved each time. A conversation with one
-  expanded block taller than the drawer is where "which messages exist" and "where am I" stop
-  agreeing altogether.
-- **A drag lands on a message boundary**, because `ScrollViewReader` scrolls to an id. On this
-  conversation that is a fifth of a point of slop; on a short one with tall blocks it is the block.
+| what it cost | why, against macOS 14 | now |
+| --- | --- | --- |
+| **The box was a report, not a measurement.** Drawn from which rows `List` had, and `NSTableView` prepares rows past the visible rectangle, so it said where you were and not what you could see. `--shot` sized it: after a drag to 75% the map asked for message 1812 and three keyboard steps later for 1818, and the box did not move for any of it. The transcript moved each time. | `List` published no scroll offset, so the rows self-reported through `onAppear`/`onDisappear` — which is a statement about *existence*, and changes only when a whole row crosses an edge. | **Fixed.** `onScrollGeometryChange` and per-row `onGeometryChange`, below. The same drag and the same three steps now move the box 74.93% → 75.16%. |
+| **A drag landed on a message boundary**, because `ScrollViewReader` scrolls to an id. On this conversation a fifth of a point of slop; on a short one with tall blocks, the block. | Nothing took a pixel. | **Fixed where it was worth anything**, by an anchor rather than by an offset — a message that fits on screen has no interior to land in. Below. |
 
-Both are what route 2 — `ScrollView` + `LazyVStack` with `GeometryReader`, or macOS 15's
-`onScrollGeometryChange` — would buy, at 65.6 MB against `List`'s 5.2 MB over the corpus and a
-deployment floor `Package.swift` currently puts at macOS 14. Neither has bitten yet.
+Both were listed as things route 2 — `ScrollView` + `LazyVStack` with `GeometryReader` — would
+buy, at 65.6 MB against `List`'s 5.2 MB over the corpus. That trade was never taken and does not
+need to be: the floor was the cheaper half of it.
 
-One optimisation was measured and *removed*. `onAppear` fires from inside `NSTableView`'s own row
-preparation, so the rows first buffered into an unobserved set and published once per turn of the
-run loop, which is the standard defence against re-entering an AppKit update. Against writing
-straight through it measured p95 16.8–18.4 ms versus 17.3–29.2 and produced the same two reentrancy
-warnings per run — the same two a build with no minimap produces. SwiftUI already defers a dirty
-view's body to the next frame, so it was a hand-rolled copy of the framework, and the simpler
-version is what is here.
-
-That superset is also why a keyboard step is anchored on the message the map last asked for rather
-than on the top of the box: a step that did not move the box would otherwise resolve to the same
-message again, and the arrows would be stuck one message below where they started.
+One optimisation was measured and *removed*, and the argument still holds for the geometry that
+replaced it. `onAppear` fires from inside `NSTableView`'s own row preparation, so the rows first
+buffered into an unobserved set and published once per turn of the run loop, which is the standard
+defence against re-entering an AppKit update. Against writing straight through it measured p95
+16.8–18.4 ms versus 17.3–29.2 and produced the same two reentrancy warnings per run — the same two
+a build with no minimap produces. SwiftUI already defers a dirty view's body to the next frame, so
+it was a hand-rolled copy of the framework, and the simpler version is what is here.
 
 The bands are a view of their own so that a scroll does not redraw them, and that one *is* worth
-keeping: `--shot` reports **2 canvas renders** over a fling that moves the viewport box sixty times.
-It prints the count for the reason `--verify-theme` exists — the day an innocent capture puts
-`reader` back inside that view, the number reads in the hundreds instead of the claim quietly
+keeping: `--shot` reports **1–2 canvas renders** over a fling that moves the viewport box sixty
+times. It prints the count for the reason `--verify-theme` exists — the day an innocent capture
+puts `reader` back inside that view, the number reads in the hundreds instead of the claim quietly
 becoming false.
+
+#### What the floor bought
+
+`Package.swift` declares macOS 15 (`chat-search-me9.8.27`), which is one release below what this
+machine runs and the last one before Liquid Glass. Two APIs are why, and once either is called,
+going back below the floor means `#available` guards:
+
+**`onScrollGeometryChange(for:of:action:)` publishes a `List`'s document height and scroll offset**,
+which is `scrollHeight` and `scrollTop` at last. `--shot` prints them beside AppKit's numbers for
+the same `NSScrollView` — 39191.0 pt of document and 335.0 pt of viewport, from both — because the
+box is drawn from the SwiftUI side and the fling is driven from the AppKit side, and a disagreement
+would mean the box is measuring some other view.
+
+**`onGeometryChange(for:of:action:)` per row** is the other half, and it is what actually moves the
+box. A row reports its rectangle rather than its existence, so the visible span is arithmetic: the
+messages whose rectangles overlap the list's own, plus the fraction of the first and last that the
+edges cut through. That last part is the whole difference. `--shot` says it two ways on the corpus's
+longest conversation:
+
+```
+box over the fling  0.00% → 10.98%, moved on 59 of 60 steps, largest single move 0.7056%
+box over 20 × 6 pt  10.98% → 10.99%, moved on 20 of 20 steps, largest single move 0.0002%
+```
+
+The second line is the one that means anything. The fling moves a third of a viewport per step and
+would move a box that could only sit on message boundaries too; twenty nudges of 6 pt are finer
+than any row in that conversation, and the box tracks every one of them, by two ten-thousandths of
+a percent at a time.
+
+**The coordinate space is the window's, and that is measured rather than preferred.** Both
+`.scrollView` and a `.coordinateSpace(.named:)` declared on the stack around the list put the top
+row of a 352 pt viewport at y=150 — the chrome above the drawer — so neither resolves inside a
+`List`'s rows, and under both, every row reports a positive `minY` and every fraction comes out
+zero. That is the old bug wearing a new API, and it survived a build and a screenshot — the second
+line above read `moved on 2 of 20 steps`, which is what gave it away, and is the reason that line
+is printed rather than inferred from the first. So the rows and the list are measured in the one
+space they agree on.
+
+**A drag carries an anchor.** `scrollTo(id:anchor:)` aligns a row's anchor point with the
+viewport's, so a row of height *h* in a viewport of height *H* lands at `rowTop + a(h - H)`, and
+putting fraction *f* of the row at the top wants `a = f·h / (h - H)`. That is inside `0...1`
+exactly when the message is taller than the viewport — which is the only case where a boundary is
+somewhere you can see the difference from, since a message that fits on screen is entirely on
+screen once its top is. `--shot` drags 60% into the longest drawn message of the conversation,
+16,342 pt against a 335 pt viewport, and lands at 2041.60 rather than at 2041's top, 16 thousand
+points away. When the drag names a message the list has not laid out, the height is not known yet
+and the request is re-issued once, the frame the row reports one.
+
+**`ScrollPosition` was the plan and does not work.** `chat-search-me9.8.27` was filed on the basis
+that macOS 15's `ScrollPosition` with `.scrollPosition()` scrolls a list to an offset, which would
+have made the drag a pixel gesture outright. Measured on macOS 26.5.2 with Swift 6.2.4, against a
+`List` in this window and against a bare 400-row `List` in a spike: `scrollTo(y:)`, `scrollTo(point:)`,
+`scrollTo(edge:)` and `scrollTo(id:)` all leave the content offset exactly where it was, while
+`ScrollViewReader.scrollTo(_:anchor:)` on the same list in the same run moves it. `position.viewID`
+reports the id it was asked for, so the binding takes the request and the list ignores it. The same
+spike drives a `ScrollView` + `LazyVStack` and `scrollTo(y: 1234)` lands on 1234.0, so it is `List`
+that is not wired up rather than the API being misused. `chat-search-me9.8.42` holds what is left
+of the pixel drag, and `chat-search-me9.8.33` — which was filed expecting `ScrollPosition` to be
+how an appended page keeps its place — needs another answer.
+
+A keyboard step is anchored on the first message whose *start* is on screen, which is not the top
+of the box. Scrolling to a message leaves 10 pt of the one above it showing — `contentMargins` —
+so the box's top edge is inside the previous message and a step anchored there resolves to the same
+message forever. `me9.8.18` worked around the same shape by anchoring on the message the map last
+asked for; a fact about the screen is the better anchor now that there is one.
 
 #### What the minimap cannot draw
 
@@ -1078,6 +1147,22 @@ machine nobody is sitting at.
 
 It writes fifteen frames, and one line before any of them: what a row costs and how many of them
 the window holds, read off the list while nothing is open — [the row](#the-row) is where that
+reading is explained. The first frame is the drawer as it opens; the next two are the minimap's
+relationship checks — the drawer is driven half a document, then the map is dragged to 75% — and
+the fourth is after typing on with the conversation still open, which is the state a list-driven
+selection closes without being asked to. The last seven are two per grouping axis, open and folded,
+plus Library. Each relationship frame prints where the transcript ended up and where the box went,
+to a fraction of a message; on the corpus's longest conversation that is 0.00–0.58 at rest,
+273.36–273.52 after the fling and 1812.00–1818.09 after the drag, run to run, plus the box's travel
+over the fling and over twenty 6 pt nudges and a drag into the longest message there is. The
+grouped frames print group and residue counts beside them,
+reading is explained. The first frame is the drawer as it opens; the next two are the minimap's
+relationship checks — the drawer is driven half a document, then the map is dragged to 75% — and
+the fourth is after typing on with the conversation still open, which is the state a list-driven
+selection closes without being asked to. The last seven are two per grouping axis, open and folded,
+plus Library. Each relationship frame prints where the transcript ended up and where the box went;
+on the corpus's longest conversation that is messages 0–8 at rest, 300–330 after the fling and
+1810–1818 after the drag, run to run. The grouped frames print group and residue counts beside them,
 reading is explained. The first frame is the drawer as it opens; the next four are one per
 [preset](#the-four-knobs); the two after those are the minimap's relationship checks — the drawer
 is driven half a document, then the map is dragged to 75% — and the eighth is after typing on with

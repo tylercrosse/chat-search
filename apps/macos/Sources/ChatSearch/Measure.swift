@@ -931,18 +931,42 @@ enum Measure {
         let visible = scroll.contentView.bounds.height
         print("    document         \(fmt(document)) pt over \(reader.minimap.blocks.count) "
             + "messages, \(fmt(visible)) pt of it on screen")
+        // The same two numbers as SwiftUI publishes them, which is the check on the seam this
+        // bead put in: the box is drawn from `onScrollGeometryChange` and the fling is driven
+        // through AppKit, so a disagreement here would mean the box is measuring another view.
+        print("    …as the list says  \(fmt(reader.viewport.document)) pt document, "
+            + "\(fmt(reader.viewport.height)) pt viewport, at \(fmt(reader.viewport.offset)) pt")
 
         // Half the document in 60 steps, which is a fling rather than a nudge: the box has to
         // survive rows arriving and leaving faster than a person could ask for them.
         frames?.reset()
         let travel = max(0, document - visible) / 2
+        var trace: [Double] = []
         for step in 0...60 {
             scroll.contentView.scroll(to: NSPoint(x: 0, y: travel * Double(step) / 60))
             scroll.reflectScrolledClipView(scroll.contentView)
             try? await Task.sleep(for: .milliseconds(8))
+            trace.append(reader.visible?.lowerBound ?? 0)
         }
         try? await Task.sleep(for: .milliseconds(400))
         print("    after scrolling  \(where_(reader)) — \(MinimapBands.renders) canvas renders")
+        print("    box over the fling  \(continuity(trace))")
+
+        // The acceptance criterion a PNG cannot carry, and the fling above is too coarse to make
+        // it: half a document in 60 steps moves a third of a viewport per step, which would move
+        // a box that could only sit on message boundaries too. So the same trace at a resolution
+        // finer than a message — twenty nudges of 6 pt, which is a fraction of every row in this
+        // conversation. A box drawn from which rows exist stands still for all twenty and then
+        // jumps; a box drawn from the viewport moves on every one.
+        let start = scroll.contentView.bounds.origin.y
+        var nudges: [Double] = [reader.visible?.lowerBound ?? 0]
+        for step in 1...20 {
+            scroll.contentView.scroll(to: NSPoint(x: 0, y: start + Double(step) * 6))
+            scroll.reflectScrolledClipView(scroll.contentView)
+            try? await Task.sleep(for: .milliseconds(24))
+            nudges.append(reader.visible?.lowerBound ?? 0)
+        }
+        print("    box over 20 × 6 pt  \(continuity(nudges))")
         print("    marked text      \(marked(reader)) since the drawer opened")
         if let frames { print("    main-thread lag  \(line(frames.lag)), "
             + "\(frames.missed) of \(frames.lag.count) vsyncs missed") }
@@ -971,8 +995,39 @@ enum Measure {
         print("    after three steps down  \(where_(reader))")
         print("    marked text      \(marked(reader)) by the end of the pass")
         print("    \(footprintMB()) MB in this process, with the conversation open and scrolled")
+        await tallBlockPass(reader: reader)
         let scrubbed = path.replacingOccurrences(of: ".png", with: "-scrubbed.png")
         print("    \(scrubbed) \(capture(window, to: scrubbed))")
+    }
+
+    /// The half of `chat-search-me9.8.18`'s second cost that could be paid, driven at the only
+    /// message where it is worth anything.
+    ///
+    /// "A drag lands on a message boundary" was stated as "on this conversation a fifth of a
+    /// point of slop; on a short one with tall blocks it is the block", and the second clause is
+    /// the whole complaint: a message that fits on screen is already entirely on screen once its
+    /// top is, so landing on its boundary loses nothing. So this drags 60% of the way into the
+    /// longest drawn message in the conversation and prints where that put the transcript. It is
+    /// also the only thing that exercises the two-step path — the anchor arithmetic needs the
+    /// message's height, a message the list has not laid out has none, and the request is
+    /// re-issued when the row finally reports one.
+    @MainActor
+    private static func tallBlockPass(reader: ReaderModel) async {
+        let blocks = reader.minimap.blocks
+        guard let biggest = blocks.indices.filter({ blocks[$0].drawn })
+            .max(by: { blocks[$0].text.utf8.count < blocks[$1].text.utf8.count })
+        else { return }
+        reader.scrub(to: reader.minimap.fraction(at: biggest, within: 0.6))
+        try? await Task.sleep(for: .milliseconds(900))
+        let height = reader.placed[blocks[biggest].id]?.height
+        let tall = height.map { $0 > reader.viewport.height } ?? false
+        print("    drag 60% into message \(biggest), the longest drawn at "
+            + "\(blocks[biggest].text.utf8.count) bytes → "
+            + (height.map { "\(fmt($0)) pt against a \(fmt(reader.viewport.height)) pt viewport, "
+                + (tall ? "so the anchor is the pointer's own fraction" : "so its top is its "
+                    + "whole extent and .top is the only place to land") } ?? "not laid out"))
+        print("      \(where_(reader)), \(footprintMB()) MB")
+        reader.endScrub()
     }
 
     /// What the drawer spent turning marks into `AttributedString`s, and what it did not.
@@ -987,22 +1042,54 @@ enum Measure {
             + "\(table.builds + table.reuses) evaluations answered from the table"
     }
 
-    /// Where the transcript is, in the only terms `List` can express it.
+    /// Where the transcript is, measured rather than reported.
+    ///
+    /// The messages are printed with the fraction of each that the viewport's edge cuts through,
+    /// because that is the whole of what `chat-search-me9.8.27` changed: under `onAppear` the box
+    /// was the *prepared* rows, which is a superset, and its edges could only ever land on a
+    /// message boundary. `.3` of message 1810 is a number the old path could not produce.
     @MainActor
     private static func where_(_ reader: ReaderModel) -> String {
-        let positions = reader.onScreen.compactMap { reader.minimap.position(of: $0) }.sorted()
-        guard let first = positions.first, let last = positions.last else {
-            return "no rows have reported themselves on screen"
+        guard let span = reader.visibleMessages else {
+            return "nothing has been laid out yet"
         }
-        // The request is printed beside the result because they are different facts: `List` keeps a
-        // row prepared past the edge of the viewport, so a step of one message can move the
-        // transcript without moving the top of the box at all.
+        // The request is printed beside the result because they are different facts: a drag names
+        // a message and an anchor, and where the list put it is the answer to that.
         let requested: String? = reader.scrollRequest?.id
         let asked = requested.flatMap { reader.minimap.position(of: $0) }
-        return "messages \(first)–\(last) of \(reader.minimap.blocks.count) on screen "
-            + "(\(positions.count) rows), box at \(Int((reader.scrollFraction * 100).rounded()))%"
-            + (asked.map { ", last asked for \($0)" } ?? "")
+        return "messages \(fmt2(Double(span.top) + span.topWithin))–"
+            + "\(fmt2(Double(span.bottom) + span.bottomWithin)) of "
+            + "\(reader.minimap.blocks.count) on screen (\(reader.placed.count) rows held), "
+            + "box \(pct(reader.visible?.lowerBound ?? 0))–\(pct(reader.visible?.upperBound ?? 0))"
+            + (asked.map { ", last asked for \($0) at anchor "
+                + "\(fmt2(Double(reader.scrollRequest?.anchor.y ?? 0)))" } ?? "")
     }
+
+    /// A fraction of the map as a percentage with a decimal, which is the resolution the claim
+    /// needs: a box that moves in message-sized jumps on this conversation moves by 0.04% at a
+    /// time, and a whole number would round every one of them away.
+    private static func pct(_ fraction: Double) -> String {
+        String(format: "%.2f%%", fraction * 100)
+    }
+
+    /// How the box moved over a fling: how many steps of it moved the box at all, and the largest
+    /// single move. Both are needed. A box that never stands still could still be jumping, and a
+    /// box with a small maximum could still be standing still for most of the scroll.
+    private static func continuity(_ trace: [Double]) -> String {
+        let steps = zip(trace, trace.dropFirst()).map { abs($1 - $0) }
+        guard !steps.isEmpty else { return "nothing to trace" }
+        let moved = steps.filter { $0 > 0 }.count
+        let largest = steps.max() ?? 0
+        // Four places on the largest move and two on the positions, because they are different
+        // sizes: the box sits at a percentage and it moves by thousandths of one. Rounding the
+        // second to the first's resolution prints 0.00% for a box that in fact tracked every
+        // nudge, which is the claim being made and would read as its opposite.
+        return "\(pct(trace.first ?? 0)) → \(pct(trace.last ?? 0)), moved on \(moved) of "
+            + "\(steps.count) steps, largest single move "
+            + String(format: "%.4f%%", largest * 100)
+    }
+
+    private static func fmt2(_ value: Double) -> String { String(format: "%.2f", value) }
 
     /// The rightmost scroll view in the window — which pane that is depends on when you ask.
     ///

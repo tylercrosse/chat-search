@@ -64,8 +64,11 @@ struct Rail: View {
                     // The state the mockup does not model. Not an error and not empty: the rail
                     // is one process behind the first search, which on a cold start is a few
                     // milliseconds and on a broken `cs` is forever — and the results pane beside
-                    // this is already saying which.
-                    head("Sources", "…")
+                    // this is already saying which. The mark takes a row of its own now that the
+                    // head has no second half to carry it: a lone label over nothing is what an
+                    // empty section looks like, and this section is not empty, it is early.
+                    head("Sources", "the rail is one process behind the query")
+                    note("…")
                 }
             }
             .padding(.vertical, 4)
@@ -75,19 +78,46 @@ struct Rail: View {
         .background(theme.color(.panel))
     }
 
-    /// `poc/ui`'s `.side-h`: the label, and on the right what the section is a facet of.
+    /// `poc/ui`'s `.side-h`, less the half of it that never fit: the label, and what the section
+    /// is a facet of on hover.
+    ///
+    /// The mockup puts the meta at the right margin, but a browser column is not 232pt. Twelve
+    /// points of padding either side leaves ~208, which holds about 28 characters of the micro
+    /// face at 1.4 tracking, and `SOURCES` plus `agent: · config ∪ index` is 30 — so the meta
+    /// wrapped under its own label and the head read as two competing lines
+    /// (`chat-search-me9.8.35`). `SearchView.groupKey` had the same column problem and made the
+    /// same trade: what the line has no room to say, it says on hover.
+    ///
+    /// The whole strip is the hover target rather than the eight characters of the label, because
+    /// a tooltip nobody finds is the same as one that is not there.
     private func head(_ label: String, _ meta: String) -> some View {
-        HStack(spacing: 6) {
-            Text(label.uppercased())
+        Text(label.uppercased())
+            .font(theme.font(.micro, .mono))
+            .tracking(1.4)
+            .foregroundStyle(theme.color(.ink3))
+            // A section label is three short words in every direction this build carries, so this
+            // is not what keeps it on one line — it is what stops a wider micro face from putting
+            // it back on two without anyone noticing.
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .padding(.top, 13)
+            .padding(.bottom, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+            .help(meta)
+    }
+
+    /// A line in the row rhythm that is not a button, because there is no query behind it.
+    private func note(_ text: String) -> some View {
+        HStack(spacing: 7) {
+            glyph("·")
+            Text(text)
             Spacer(minLength: 8)
-            Text(meta)
         }
-        .font(theme.font(.micro, .mono))
-        .tracking(1.4)
+        .font(theme.font(.meta))
         .foregroundStyle(theme.color(.ink3))
         .padding(.horizontal, 12)
-        .padding(.top, 13)
-        .padding(.bottom, 4)
+        .padding(.vertical, 4)
     }
 
     /// The All row. Selected means the query names nothing on that facet at all, which is the
@@ -160,16 +190,9 @@ struct Rail: View {
     /// only the directories would look like a complete account of where the work happened
     /// (`chat-search-6eb.26`). Not a button: there is no query that means "the ones with none".
     private func unreached(_ dirs: DirFacet) -> some View {
-        HStack(spacing: 7) {
-            glyph("·")
-            Text("\(dirs.undirected.formatted()) record none")
-            Spacer(minLength: 8)
-        }
-        .font(theme.font(.meta))
-        .foregroundStyle(theme.color(.ink3))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 4)
-        .help("only the agent sources record a working directory, so `dir:` cannot reach these")
+        note("\(dirs.undirected.formatted()) record none")
+            .help(
+                "only the agent sources record a working directory, so `dir:` cannot reach these")
     }
 
     /// The count at the right margin, in the one place all three sections agree about it.

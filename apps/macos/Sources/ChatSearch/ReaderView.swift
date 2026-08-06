@@ -132,13 +132,25 @@ struct ReaderView: View {
                                     EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
                                 .listRowBackground(theme.color(.panel))
                                 .listRowSeparator(.hidden)
-                                // What the minimap knows about where you are. `List` publishes no
-                                // scroll offset, so the rows say it themselves — see
-                                // `ReaderModel.onScreen` for what that buys and what it costs. The
-                                // summary rows deliberately say nothing: the map is a map of
-                                // messages, and a row that is not one has no position on it.
-                                .onAppear { reader.rowAppeared(block.id) }
-                                .onDisappear { reader.rowDisappeared(block.id) }
+                            // Half of what the minimap knows about where you are: where this row
+                            // is, on every frame of a scroll. A row half off the top of the list
+                            // reports it, which is what lets the box say "57% of the way into
+                            // message 384" instead of naming the message and stopping there.
+                            //
+                            // The window's coordinate space rather than the list's own, and this
+                            // is measured rather than preferred: both `.scrollView` and a
+                            // `.coordinateSpace(.named:)` declared on the enclosing stack put the
+                            // top row of a 352 pt viewport at y=150 — the chrome above the drawer
+                            // — so neither of them resolves inside a `List`'s rows, and a row
+                            // above the fold reports a positive `minY` under both. That is the
+                            // old bug wearing a new coordinate space: the fraction is always
+                            // zero, and the box goes back to moving a message at a time. So the
+                            // rows and the list are measured in the one space they agree on, and
+                            // the list's own edges come from the modifier below.
+                            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) }
+                                action: { reader.rowMoved(block.id, to: $0) }
+                            // A row the list has let go of has no position, and the rectangle it
+                            // last had is not one — see `ReaderModel.rowLeft`.
                             case .summary(let segment):
                                 SegmentRow(
                                     segment: segment, open: reader.isOpen(segment),
@@ -154,6 +166,18 @@ struct ReaderView: View {
                         .scrollContentBackground(.hidden)
                         .background(theme.color(.panel))
                         .contentMargins(.vertical, 10, for: .scrollContent)
+                        // Where the list is, in the same space its rows just reported themselves
+                        // in. This is the rectangle a row has to overlap to be on screen.
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) }
+                            action: { reader.viewportMoved(to: $0) }
+                        // And how long the document is and how far down it the list sits, which
+                        // is the reason the floor is macOS 15: before it a `List` published
+                        // neither. `--shot` prints these against AppKit's own numbers for the
+                        // same scroll view, which is the check that the box and the transcript
+                        // are the same instrument. `chat-search-me9.8.27`.
+                        .onScrollGeometryChange(for: ScrollGeometry.self) { $0 } action: {
+                            _, geometry in reader.scrolled(geometry)
+                        }
                         // Beside the transcript and inside the same `ScrollViewReader`, because
                         // the two are one instrument: the map reports where the transcript is and
                         // the transcript goes where the map is dragged.
@@ -179,11 +203,13 @@ struct ReaderView: View {
                     }
                     // The other half of the scroll relationship: the minimap resolves a drag to a
                     // message and this is the only place holding the reader that can go there.
-                    // `ScrollViewReader` scrolls to an id and to nothing else, which is why the
-                    // request is a message rather than an offset.
+                    // `ScrollViewReader` scrolls to an id and to nothing else — macOS 15's
+                    // `ScrollPosition` was measured and does not move a `List` at all — so the
+                    // request carries an anchor, which is how a drag reaches a point *inside* a
+                    // message. `ReaderModel.anchor(for:within:)` is where that is worked out.
                     .onChange(of: reader.scrollRequest) {
                         guard let request = reader.scrollRequest else { return }
-                        scroll.scrollTo(ReaderRow.id(ofMessage: request.id), anchor: .top)
+                        scroll.scrollTo(ReaderRow.id(ofMessage: request.id), anchor: request.anchor)
                     }
                 }
             }

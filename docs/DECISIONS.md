@@ -118,7 +118,7 @@ Against that: the index grows 317 → 400 MB (+26%), postings 41 → 123 MB (3x,
 
 Do not re-litigate this without first repricing the BM25 scoring, because that is where the time is. The harness both sets of numbers came from is in commit 015e661 of this branch, deleted after use.
 
-**Revisit when.** Corpus exceeds ~50 GB, or hybrid ranking needs something FTS5 can't do. The open question on ranking cost is no longer the prefix expansion but the candidate ceiling: `search_grouped` pulls `limit * 50` rows, and `ORDER BY bm25(...)` scores the whole match set to fill it (chat-search-6eb.29).
+**Revisit when.** Corpus exceeds ~50 GB, or hybrid ranking needs something FTS5 can't do. The open question on ranking cost is no longer the prefix expansion but the candidate ceiling: the ranking pass (`search::rank`) pulls `limit * 50` rows, and `ORDER BY bm25(...)` scores the whole match set to fill it (chat-search-6eb.29).
 
 ---
 
@@ -724,7 +724,7 @@ Three ways the log lies about itself, all of which would have survived into the 
 | a pick with `q = ""` | a grade-3 | the recent list, browsed |
 
 The first and third are decidable from the events. The second is not, and that is the whole
-difficulty: a query typed to measure `search_grouped` is ordinary text and goes unpicked, which
+difficulty: a query typed to measure the ranking is ordinary text and goes unpicked, which
 is exactly what an abandoned search — the signal 6eb.21 most wants to keep — also looks like.
 
 **Decision.** Two rules over the events, and one thing authored.
@@ -767,3 +767,263 @@ trigger; the honest figure is about a third of the way, and the trigger has not 
 **Revisit when.** A client appears that logs genuinely per keystroke — the TUI does not, it
 writes one event per session — since then the ladders arrive inside one process and a session
 id would be cheaper and more exact than a timing rule.
+
+---
+
+## 23. The reply to a search is a core-owned type, and clients adapt rather than assemble
+
+`accepted` · 2026-08-04
+
+**Context.** ADR 12 put the client seam at a JSON protocol and ADR 14 kept it a spawned CLI
+rather than a daemon. Neither said who *builds* the reply, and the answer turned out to be
+everybody. `cs/src/commands.rs` assembled the envelope inline at four sites; the flat and
+grouped key lists agreed only because `json_contract.rs` asserted it; `(ms*100).round()/100`
+appeared three times, one of them feeding the query log, so a logged need and a printed answer
+could round differently. Meanwhile `cs-tui` reached `search_grouped_counted` for a `Total` that
+no JSON client could ask for, so `cs search --json` could not report how many conversations
+matched — only how many it returned.
+
+Five public entry points (`search`, `search_grouped`, `search_grouped_counted`,
+`count_matching`, `recent`) exposed routing that was never a caller's decision. The reply had
+no author, so every client became one.
+
+**Decision.** `cs_core::answer` owns the reply. One entry point returns an `Answer`; a private
+receipt of the ask lets `settle` establish the total the first pass declined to pay for.
+Serializing it *is* the wire, the way `blocks::Transcript` already works for `cs show --json`.
+Clients adapt: the CLI serializes, the TUI renders, a Swift app decodes.
+
+Three wire rules follow, and all three are things a client can no longer get wrong:
+
+- **One shape per question.** `results` is always conversations; the polymorphic `results` and
+  its sometimes-present `grouped` flag are gone, and `--flat` has its own small envelope. A
+  decoder never branches to learn what type a key holds.
+- **Identity is stated once.** A match carries message fields only. Repeating `conv_id`,
+  `title`, `source` and the whole `destinations` array inside every nested hit was bytes and a
+  second place for two copies to disagree.
+- **`v`, and a policy for it.** Additions are silent; `v` bumps only when a field changes
+  meaning.
+
+**Two promises made early because they are free now and breaking later.** `score` is opaque
+ordering — clients never re-sort and never parse it — and `snippet_spans` may be empty. Both
+exist for ranking this project has already said it intends to grow into: the Indexer's
+definition in GLOSSARY.md says "and later vectors", and a semantic match need contain no
+lexical term to highlight. Documented today they cost one table row each; documented after a
+client ships they cost a `v` bump.
+
+**Why not a sectioned reply.** The alternative — sections requested à la carte, keyed by
+`conv_id`, with a total policy per ask — is genuinely better for three futures: retiring
+`kind_runs` by economics rather than by schema, adding facets, and settling a count over the
+wire without re-running the search. It was rejected because the cost lands daily and the
+benefit only if those futures arrive: every consumer would unwrap `Option`s it knows are
+`Some`, a Swift client would join matches to conversations by key instead of reading nesting,
+and "asked implies present" is a runtime law no type system checks. It also designs for the
+stdio transport ADR 14 deferred and `chat-search-me9.22` measured as unnecessary — one adapter
+is a hypothetical seam.
+
+**Revisit when.** A second thing in the reply becomes expensive and optional the way
+`kind_runs` already is. One knob is a knob; two are a sections model arriving one field at a
+time, and at that point the rejected design is the right one.
+---
+
+## 24. The model is a property of the message; the conversation label is a summary of it
+
+`accepted` · 2026-08-04
+
+**Context.** `conversation.model` was a single column, there was no per-message model anywhere,
+and each of the five importers that could read one collapsed it privately — in two different
+directions. `claude_code` and `chatgpt_export` kept the **first** model they saw; `claude_desktop`,
+`codex` and `gemini` kept the **last**. None of them said so where the other could see it, none
+had a test that fed two models, and `chatgpt_export` additionally let `default_model_slug`
+outrank every message in the file.
+
+The defect was found while asking whether a model switch was worth drawing in the interface
+prototype. The measurement taken then — "0 of 3,057 conversations use more than one model" —
+could not have said anything: it joined a single conversation column onto each message and
+counted distinct, which is 1 by construction (`poc/ui/NOTES.md` §3.23). The index could not
+answer the question at all.
+
+**What the archive actually says.** Measured 2026-08-04 by reading the raw archive rather than
+the index, because the index was the thing that could not answer:
+
+| source | conversations | naming >1 model | first ≠ last |
+| --- | --- | --- | --- |
+| chatgpt-export | 2,011 | 110 | 56 |
+| codex | 684 | 33 | 31 |
+| claude-code | 428 | 23 | 22 |
+| gemini-cli | 11 | 0 | 0 |
+
+**166 of the 3,134**, about 5%, and the pairs are not cosmetic: `claude-opus-4-8` → `claude-haiku-4-5`,
+`gpt-5.4` → `gpt-5.4-mini`, `o3-mini-high` → `gpt-4o`. A downgrade part-way through an agentic
+session is an epistemic boundary in the transcript, and the single label denied it existed.
+
+Two further things the same scan turned up. `default_model_slug` names something no message ever
+names in 154 conversations, **134 of them the literal `auto`** — the router setting that picks a
+model, recorded as though it were the model. And `<synthetic>`, which `claude_code` rejected as
+"not a model that ever ran", reaches `claude_desktop` too through the same claude-shaped audit
+log, where nothing rejected it.
+
+**Decision.** Three parts.
+
+(a) **`message.model`** holds the model that produced that message, as the source declares it,
+`NULL` on messages no model produced — user turns and tool results. Never inferred: a user turn
+is not backfilled with whatever was running, because that is a reading of the transcript rather
+than something it states. Codex is the one source whose declaration is not on the message —
+`turn_context` heads a turn and names what will run for it — so it is carried forward onto the
+assistant messages of the turns it governs.
+
+(b) **No importer collapses.** `Conversation::model` is renamed `declared_model` and holds only
+what the *conversation* says about itself: ChatGPT's `default_model_slug`, the Claude Desktop
+state file, a codex rollout whose `turn_context` records precede every message.
+
+(c) **The label is resolved once**, in the rollup at the bottom of `index::write_conversations_with`,
+as the model of the last message that named one, ordered by `ts`. `declared_model` is the
+`COALESCE` fallback beneath it.
+
+**Why last, and why in the rollup.** Last because it is what the conversation *ended on*, so the
+label predicts what resuming it would run — the reason `codex.rs` already gave for its own rule,
+now the only rule. In the rollup because the alternative was five importers agreeing by
+convention, and this codebase has already paid for that once: the local-date bug came from three
+clients each deriving the day. Ordering by `ts` rather than by insertion is also strictly more
+correct than any importer could be. A conversation is assembled from several files (ADR 7) and
+file order is path order, so for the 6 claude-code sessions whose files disagree, "first file
+wins" froze an arbitrary one; and ChatGPT's mapping is walked in id order, so "first seen" there
+was never even "first chronologically".
+
+**What it changed, measured over the full corpus.** 4,377 conversations in both the old and new
+index: **4,182 labels unchanged, 195 changed.** 134 stopped saying `auto` (128 now say `gpt-4o`,
+5 now say nothing, which is the honest answer when no message named a model); 45 stopped saying
+the router name and now say the variant the messages name, `gpt-5` → `gpt-5-thinking` and
+similar; 16 claude-code and codex conversations flipped end for end. Zero conversations are
+labelled `auto`. The index now answers the question it could not: **171 conversations name more
+than one model**, queryable as `count(distinct model) > 1` over `message`.
+
+**Cost.** One `TEXT` column over 196,450 messages, ~1% of a 345 MB index, and an `IMPORTER_VERSION`
+bump to 5 — the column is a pure function of (archive, importer version), so ADR 1 makes
+`rm index.db && cs index` the whole migration.
+
+**Not done.** Nothing reads `message.model` yet: it is not in the `cs search --json` envelope and
+the preview does not mark a switch. That is deliberate — this ADR is about the index being able
+to answer, and what to draw is a design question for whoever draws it (`chat-search-n58.26` is
+the adjacent case, compaction boundaries, which are also structurally invisible).
+
+**Revisit when.** A source appears whose model varies *within* a message, or one that reports a
+model for a user turn in a way that is a statement rather than an inference. Also when the first
+consumer lands, since drawing a switch may want the run boundaries precomputed rather than
+derived per query.
+
+---
+
+## 25. A theme the project ships is fenced; a theme a person loads is measured and drawn anyway
+
+`accepted` · 2026-08-05
+
+**Context.** The token seam (`chat-search-me9.8.8`) carries two measurements that a theme has to
+hold: the kind ramp at 2.2 / 4.0 / 7.2 / 13.0 against the ribbon track with even ~1.8× steps, and
+the 4.5:1 AA floor on every text tier, taken on the harder of the two grounds it lands on. Neither
+was assumed — `chat-search-4ar.11` raised `--ink-3` from 2.90 to 4.60 for the second, and
+`poc/ui/NOTES.md` §2 argues the first from the ~2px the ribbon draws a kind at, where hue is the
+channel that degrades first.
+
+Two follow-ups then arrived at the same question from opposite ends: several directions in one
+binary (`chat-search-me9.8.9`) and a token set loaded off disk (`chat-search-me9.8.10`). Both need
+to know whether a theme is allowed to miss. Tyler wants Solarized and Gruvbox, and the published
+values of both miss — on their own dark tracks:
+
+| | tool | reasoning | user | agent | steps |
+| --- | --- | --- | --- | --- | --- |
+| solarized on `base03` | 2.79 | 3.43 | 4.75 | 5.61 | 1.23× 1.39× 1.18× |
+| gruvbox on `bg0_h` | 2.52 | 5.98 | 7.79 | 11.95 | 2.37× 1.30× 1.53× |
+
+Their quiet tiers miss too, and Solarized's is the designated one: `base01`, which Solarized itself
+labels comments and secondary content, reads 2.79:1 on `base03` and 2.42:1 on `base02` — under half
+the floor. Low contrast is what these palettes *are*.
+
+**None of that is a porting mistake, and the search says so.** Every assignment of each palette's
+own published colours to (track, four kinds) was measured — 16 colours for Solarized, 19 for
+Gruvbox, both themes, every colour allowed to be the track:
+
+| | the best a published palette can do | steps | what it means |
+| --- | --- | --- | --- |
+| solarized | `base01 blue base1 base2` on `base03` — 2.79 4.08 5.61 12.25 | 1.46× 1.38× 2.18× | no assignment is even. Nothing sits between `base1` at 5.61 and `base2` at 12.25, and that gap is the palette |
+| gruvbox dark | `bg3 gray green fg0` on `bg0_h` — 2.52 4.47 7.94 14.45 | 1.77× 1.78× 1.82× | evenly spaced, the whole ramp ~1.11× above the targets |
+| gruvbox light | `bg4 green red fg0` on `bg0` — 2.45 4.29 7.60 12.99 | 1.75× 1.77× 1.71× | one step 0.09 out |
+
+**And the re-solve costs what the palette's own range costs.** Feeding each palette's hues through
+`poc/ui/palette.py`'s `solve` at the fenced targets, on the dark side:
+
+| | tool | reasoning | user | agent |
+| --- | --- | --- | --- | --- |
+| solarized | `#586e75` → `#4b5e63` | `#6c71c4` → `#797ec9` | `#2aa198` → `#34c8bc` | `#93a1a1` → `#edefef` |
+| | L 40% → 34% | 60% → 63% | 40% → 49% | **60% → 93%** |
+| gruvbox | `#665c54` → `#5d544c` | `#d3869b` → `#c45c78` | `#8ec07c` → `#83ba70` | `#ebdbb2` → `#f0e5c7` |
+| | L 36% → 33% | 68% → 56% | 62% → 58% | 81% → 86% |
+
+Gruvbox survives a nudge — every band lands within a few percent of where its author put it.
+Solarized's brightest kind has to leave the grey ramp it belongs to entirely, past `base2`. That is
+the difference between a direction that can carry a palette's name with *derived* after it and one
+that would be wearing the name.
+
+Worth saying once: fidelity was never on the table anyway. A theme here is 30 colour tokens per
+side. Solarized publishes 16 colours and Gruvbox 19, so a port invents at least half the set —
+panels, rules, selection grounds, match grounds, five source hues — before it reaches any fence.
+The question was never whether to invent, only which parts and whether to say so.
+
+**Decision.** Two classes of theme, and the class is **provenance, not content**.
+
+A **direction** is compiled into the binary. It is fenced: `--verify-theme` measures every
+direction present and a direction that misses does not ship. Everything the picker offers is one.
+
+A **user theme** is read at launch off a file the person wrote. It is measured by exactly the same
+code, and then drawn whatever the readings say.
+
+**What the app does about a user theme that misses**, so that `chat-search-me9.8.10` decides none
+of it:
+
+1. **It is always measured**, by `ThemeCheck` and not by a second copy of these rules. One rule,
+   one place — the local-date bug is what happens otherwise.
+2. **It is drawn as authored, entire.** Never partially merged with a direction to patch the
+   failing tokens: half a palette from each is a palette nobody designed and nobody can debug.
+3. **The misses are said out loud** — `Report.failures` on stderr at launch, and the class beside
+   the name wherever the app names a theme. No modal and no banner: the only person who can be
+   nagged here is the one who wrote the file, and they already know.
+4. **Unreadable is not unfenced.** A file that is malformed, or missing a token, is not a theme —
+   fall back to the shipped direction and say why. (`Palette`'s precondition treats an incomplete
+   set as a programmer error, which is right for a generated file and fatal for a typed one, so
+   the loader validates before it constructs.)
+
+**Why the class cannot be a field on the theme.** The alternative was letting a theme declare
+itself unfenced. That fails the first time it is used: the themes that fail the fence are exactly
+the themes that would declare the exemption, and a fence that only measures what already passes is
+decoration. Provenance cannot be asserted by the thing being measured, which is the whole reason to
+use it.
+
+**Why relaxing the fence was rejected, having been measured.** The obvious middle — keep "even
+steps and a visible foot", drop the absolute 2.2 / 4.0 / 7.2 / 13.0 — buys Gruvbox's dark side and
+nothing else. Its light side is still 0.09 out and Solarized is 0.42 out, so no *complete* palette
+is rescued by it, and `NOTES.md` §2 holds the ratios constant across directions on purpose: it is
+what makes directions that look nothing alike read identically at 2px. A relaxation that
+admits no new theme is a weaker check bought for nothing.
+
+**Why a person is allowed to break AA on their own screen.** The fence is a promise about what this
+project ships, not a restraint on what somebody may look at. Refusing would also be worse for the
+loop `chat-search-me9.8.10` exists to shorten: a refusal means the edit silently does nothing, and
+dialling a palette in means passing through dozens of failing intermediate states on the way to a
+good one. What it costs is bounded, because nothing in this client is encoded in colour alone
+(docs/TUI-DESIGN.md §7) — the reader draws a band as a 3pt spine *and* a sigil *and* a change of
+face. The ribbon is the exception and the honest cost: when `kind_runs` lands it is 2px of colour
+with no second channel available, so an unfenced theme makes that strip unreadable, and the reader
+still says everything the strip was summarising.
+
+**Where Solarized and Gruvbox land.** Three routes, none of which pretends to be another:
+
+- **as a user theme, exactly as published** — which is usually what "I want Solarized" means;
+- **as `solarized-derived` / `gruvbox-derived`**, hues through `palette.py`'s solve, shipped as
+  directions, with the table above as the record of how far each one had to move;
+- **as itself, if a palette is found that holds as authored.** Nothing here forbids that. Neither
+  of these two is it.
+
+**Revisit when.** A theme can be authored *inside* the app rather than in a file — a picker that
+edits is the app authoring a theme, and the argument above turns on the app not being the author.
+Also when the ribbon lands, because that is the first surface where the ramp is load-bearing on its
+own, and the answer may want to be "the ribbon draws in the shipped direction's ramp when the
+loaded one is unfenced" rather than "the ribbon is unreadable".

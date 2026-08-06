@@ -82,8 +82,10 @@ is a loop back:
   action time rather than read out of a column (`cs-core/src/destination.rs`). `cs tui` execs
   the agent in place so it inherits the terminal, and prints an `eval`-able line instead
   whenever stdout is not one.
-- **The query log flows back into the ranking, by hand.** `cs search`, `cs pick` and `cs tui`
-  append what was searched for and what was opened; `cs needs` folds it into one entry per
+- **The query log flows back into the ranking, by hand.** `cs search`, `cs pick`, `cs abandon`
+  and `cs tui` append what was searched for and what was opened — and, through the third of
+  those, what was searched for and *not* opened, which is the only thing the log ever learns
+  that is not a success; `cs needs` folds it into one entry per
   *need* — not per query string, which counted every keystroke of a slowly typed query as its
   own need (ADR 22). Nothing reads it automatically — converting it into an eval set is
   `6eb.21`, and until then the eval set in `evals/ranking.toml` is written by hand.
@@ -244,10 +246,23 @@ carries what would falsify it, so a doubtful reader settles it in about a second
 
 ### Built in part — the state neither a table nor the code admits to
 
-Four things read as finished from either end and are not. They are here because this is the
+Five things read as finished from either end and are not. They are here because this is the
 only place that can say so: the schema looks complete, the code compiles, and the gap is a
 missing edge rather than a missing file.
 
+- **A sitting opens, and nothing says it is one (chat-search-o1i.9).** `cs_core::sittings`
+  reads Google's activity log back as the chats it was, so a `cs search` row can stand for
+  eleven conversations and reports its counts that way — 1,271 activity records come back as
+  462 rows. Opening one used to render the two messages of the record that opened it while the
+  row above said twenty-two; `cs show` and `cs explain` now resolve their argument through
+  `sittings::resolve` and answer for the same unit the ranker grouped, from any member id
+  (chat-search-o1i.8). What is still missing is the *saying so*: no surface draws
+  `Group::sitting`, so an eleven-record row looks exactly like a conversation that had eleven
+  turns, and the reader is not told the grouping is a heuristic this project applied rather
+  than something Google recorded. `cs show` prints a line above the counts; the TUI row and the
+  preview pane print nothing. It fails in the safe direction — a reconstruction presented as a
+  conversation, which is what it almost always was — but a fold that can be wrong should look
+  like one.
 - **Tombstones have a reader and no writer (ADR 9).** `conversation.deleted_upstream_at` is in
   the schema, `search.rs` selects it in four places, and `cs search` renders a
   `deleted-upstream` flag from it in both its flat and grouped output. Nothing ever sets it.
@@ -264,11 +279,22 @@ missing edge rather than a missing file.
   list. An export is not written by anything — it is mailed, downloaded and unpacked wherever
   you happen to put it — so `chatgpt-export` cannot be detected and is not in the list
   (`grep -n chatgpt crates/cs-archive/src/config.rs` returns nothing). The importer, the source
-  id and its permanence (ADR 16) are all real; the `[[sources]]` block is hand-written, which
-  means `cs init` on a second machine writes a config silently missing 69% of this corpus.
-  `google-takeout` (chat-search-o1i) is the second source with this shape and inherits the same
-  gap — the recommended `[[sources]]` block is in the module doc of
-  `crates/cs-import/src/google_takeout.rs` so it is at least recoverable from the code.
+  id and its permanence (ADR 16) are all real; the `[[sources]]` block stays hand-written, and
+  `google-takeout` (chat-search-o1i) is the second source of that shape. What used to follow —
+  `cs init` on a second machine writing a config **silently** missing 69% of this corpus — no
+  longer does. `cs_archive::unreachable::SERVER_SIDE` states the three surfaces no detection can
+  reach, `cs init` names them as it writes the config, and `cs archive` says it again once a day,
+  with the recommended `[[sources]]` blocks, until each one is configured (chat-search-a7k.22).
+  The gap is still a gap: it is a stated list rather than a discovered one, so a fourth surface
+  is invisible until somebody adds it, and `claude-ai` is named without a block because no export
+  of that shape has been seen here. What changed is that the omission announces itself.
+  **This paragraph is load-bearing.** `cs-archive`'s staleness nag (chat-search-a7k.10) derives
+  "export-shaped" from exactly this — absence from the candidate list — so adding an export id
+  to `candidate_sources()` would silently switch its nag off rather than fail, and would also
+  make the same id both a candidate and an unreachable surface.
+  `staleness::the_real_candidate_list_classifies_the_two_export_sources_it_ships_with` and
+  `unreachable::no_server_side_surface_is_also_a_detectable_candidate` are the two tests that
+  turn that from a silence into a failure.
 - **Compressed Codex rollouts are captured and cannot be read.** The `codex` source globs
   `**/rollout-*.jsonl.zst` as well as `.jsonl`, because Codex zstd-compresses rollouts older
   than about a week and everything older would otherwise stop being captured. Capture stores

@@ -30,8 +30,9 @@ cites §5 and §7 as binding on itself and that reading is correct.
 ```
 cs-tui   depends on cs-core only.
          Entry: run(db_path: PathBuf, log: &mut dyn FnMut(querylog::Event), opts) -> Result<Exit>
-cs       depends on cs-archive already.  Resolves cfg.default_db() and the queries.jsonl
-         path, passes both in, and exposes the TUI as a `cs tui` subcommand.
+cs       depends on cs-archive already.  Resolves cfg.default_db(), the queries.jsonl
+         path and the watched source set, passes all three in, and exposes the TUI
+         as a `cs tui` subcommand.
 ```
 
 **The TUI takes a log sink, not a log path.** `querylog::append` writes to
@@ -51,6 +52,16 @@ path as a parameter costs nothing and keeps the edge clean.
 This resolves the contradiction in `me9.12`'s acceptance criteria, which permits `default_db()`
 living in `cs-archive` in one clause and asks that a second Rust client get it from `cs-core` in
 another. It gets it from its caller.
+
+**The TUI takes the watched source set, not the config** (`a7k.29`). The facet bar needs
+something the index cannot answer: whether a source holding zero conversations is configured
+and broken or simply not a tool this machine runs. Both halves of that live in `cs-archive` —
+`Config::sources` and `drift::detect` — so the third option was the one taken. `cs` passes a
+`Vec<cs_core::Watched>`, the id and two booleans, and `cs_core::inventory` joins it against the
+index counts. The join is a rule, so it lives in exactly one place rather than in each client;
+`cs-core` still reads no config, because it is handed facts rather than a path to read them
+from. Empty is a usable value: the bar then lists what the index holds, which is what it did
+before any of this existed.
 
 **Ships as `cs tui`, not a separate binary.** `build_info` records `IMPORTER_VERSION` so a stale
 index is detectable rather than silently wrong (`schema.rs:66-68`). A separately-installed TUI
@@ -83,16 +94,16 @@ the same screen — and "keep typing" and "you have seen everything" are opposit
 drawn from the same rows. `50 of 50 matched` states the complete case rather than going quiet,
 because a form that appears only sometimes makes the reader infer meaning from an absence.
 
-**A keystroke never pays for it.** `search_grouped_counted` reads the total off the ranking
-pass, which already visits every matching message unless it stops at its own `limit * 50` scan
+**A keystroke never pays for it.** `cs_core::answer` reads the total off the ranking pass,
+which already visits every matching message unless it stops at its own `limit * 50` scan
 ceiling — so every query narrow enough to finish typing is answered for free. The rest come
-back `Total::AtLeast`, and the header draws `50 of … matched` rather than the floor that
+back `settled: false`, and the header draws `50 of … matched` rather than the floor the answer
 carries: the floor is an artifact of where the scan stopped, about half the truth on this
 corpus, and a number that lands, is read, and then doubles is worse than one that never
 claimed to be ready.
 
-**`count_matching` settles it 250 ms after the last keystroke**, from the event loop, gated on
-there being anything to settle (`App::needs_count`). That timing is the whole design rather
+**`Answer::settle` settles it 250 ms after the last keystroke**, from the event loop, gated on
+there being anything to settle (`App::unsettled`). That timing is the whole design rather
 than a detail. Settling costs 5–36 ms against this corpus and only ever on a broad prefix —
 which is exactly a query on its way somewhere, whose total nobody is reading yet. Charging it
 per keystroke spent the milliseconds at the one moment they bought nothing; charging it to the
@@ -322,7 +333,8 @@ are the strongest recognition cues, "stronger than anything in the text."
 CLI and the TUI filter through one parser and one set of SQL clauses. `agent:` and `dir:` take
 comma lists; both negation spellings work and mean the same thing; repeated tokens of one facet
 union, and repeated `date:` tokens intersect so two bounds make a range. `date:` takes
-`today`, `yesterday`, `week`, `month`, `<Nu` and `>Nu` with units `m|h|d|w|mo|y`, and its
+`today`, `yesterday`, `week`, `month`, `<Nu` and `>Nu` with units `m|h|d|w|mo|y`, and an
+absolute half-open span, `date:2026-07-28..2026-08-02` (`me9.18`, below). Its
 day/week/month/year arithmetic is civil rather than fixed-width — a day across a DST boundary
 is 23 or 25 hours, pinned in `cs_core::time`'s tests at 82,800 s and 90,000 s. A value nothing
 can select on (`date:nope`, a half-typed `agent:`) neither errors nor filters: it is reported
@@ -351,6 +363,124 @@ flag. The cost is six reconciliation methods (`active_agent_filter`, `active_age
 `effective_agent_filter`, `count_agent_filter`, `all_agent_filter_active`,
 `clear_explicit_filter_if_query_has_agent`). **Desugar CLI flags into the query string at
 startup and keep exactly one state.**
+
+**A second client, 2026-08-05 (`me9.8.5`).** The macOS app has the same bar and the same one
+state, and reaches it the only way a process outside this workspace can: `cs facets --json`
+projects the rail here and hands each chip the query text clicking it produces. Nothing on the
+Swift side assembles an `agent:` token, which is what keeps this section's rule true across the
+language boundary rather than only inside it. The shape is in docs/JSON-CONTRACT.md.
+
+**The other two facets, 2026-08-05 (`1ld`).** `agent:` reached a rail on one verb because its
+values are enum members that union. The other two are not, and the differences are decisions
+about the grammar, so they live in `cs_core::query` with it rather than in either client:
+
+- **A second `date:` chip replaces the first.** Date tokens *intersect* — that is what lets two
+  bounds describe a range — so a rail that widened would hand back `date:today date:>1mo`, whose
+  overlap is empty. `Facet::tokens_intersect` is the rule, one line beside the keyword, so
+  `Query::toggling` stays one verb and no client learns that the facets differ.
+- **A `date:` chip is lit by the window, not by the text.** `date:week` and `date:<7d` are one
+  selection written two ways. `Query::selection` answers for `date:` now — it read only
+  `FilterKind::Names` before, so a date chip could never light and toggling one always added.
+- **One `dir:` token lights every directory beneath it**, because `dir:` is a substring in the
+  SQL. Comparison for every rail goes through `Facet::selects`, which states each facet's own
+  comparison once; clicking a lit directory off removes whatever was lighting it.
+- **A directory whose click cannot be written is not offered.** The click is reparsed and dropped
+  if the round trip does not name it. The chips are `cwd`s and not project names: `6eb.26` was
+  closed by its own measurements, and what it leaves is the column `dir:` already selects on.
+
+The `dir:` rail is the busiest twelve of 128 directories, and carries both that number and the
+3,303 conversations recording none — `6eb.26`'s finding that a facet two thirds of the corpus
+cannot answer has to say so rather than look like missing data.
+
+**Quoting, 2026-08-05 (`me9.8.16`).** A `dir:` token can now carry a path with a space or a comma:
+`dir:"/Users/t/Mobile Documents"` is one token naming one directory. Without it whitespace ended
+the word and a comma ended the value, so that path parsed as the filter `dir:/users/t/mobile`
+*plus* the free term `documents` — it filtered, it did not say so, and it looked like it had
+worked. It is what this section already recorded fast-resume supporting, and it is why the rail
+above had a directory it could count and not offer.
+
+Three rules and no more: inside a quoted run whitespace and commas are ordinary characters; `""`
+inside one is a literal quote, which is the doubling `Query::match_expr` already does for FTS5
+rather than a second escaping scheme to learn; an unterminated run reaches the end of the text,
+because half-typed is the normal state of a typeahead and parsing may not fail. **Quoting is
+lexical, not semantic** — a quoted run of *free text* tokenises into exactly the terms it did
+unquoted, so this buys no phrase search and moves no ranking, and all 31 pinned expressions in
+`query.rs` are unchanged by it. That bound is what let a change to the word splitter be a bug fix.
+
+The rewriters quote on the way out only where the value would otherwise end early, because the box
+is the one place a filter is visible and `dir:"/x/y"` where `dir:/x/y` would do is the bar
+restyling text the user also types in. `facets::dirs` did not change: its round-trip check was
+written as the grammar's own reading rather than a list of forbidden characters, so the directory
+it used to drop now passes it, and what is left is a guard with no counterexample.
+
+**What quoting does not buy, and what it costs a client.** There is no phrase search: `"deep
+learn"` still ranks as two terms, and a future phrase operator would be a *semantic* reading of
+the same quotes rather than an extension of this one. The syntax highlighting this section
+specifies has a case it did not have — an open run, which is a value still being typed and not an
+error — and the ghost-text completion of a `dir:` value now has to quote what it inserts. Both are
+`cs_core::query`'s rules to state and neither is written yet.
+
+**An absolute window, 2026-08-06 (`me9.18`).** `date:` grew a half-open span with either end
+optional — `date:2026-07-28..2026-08-02`, `date:2026-07-28..`, `date:..2026-08-02` — and a lone
+`YYYY-MM-DD` for the day it names. The gap was the interface prototype's timeline scrubber
+(`me9.8.20`): it narrows the list by an arbitrary bounded window, and `DateSpec` was `{Day,
+Younger, Older}`, every one of which is measured back from now. A drag is a decision about the
+corpus rather than a statement about the present, so there was no way to type what it produced —
+and this section's whole rule is that a filter which cannot be typed is a second source of truth,
+invisible when copied out and unreplayable from a log.
+
+The separator, the reading and the accepted spellings are `cs pick --driven`'s, which has taken a
+half-open `2026-08-04..2026-08-05` span of the query log since it was written. One grammar for a
+span, not two: the local-date bug was three clients each deriving the day themselves.
+
+**It is the one `date:` form that says the same thing tomorrow**, which is why it is a variant
+rather than a spelling of `date:<Nd`. Its bounds are held as the wall clocks that were typed and
+resolved against a zone only when a window is asked for, so a query parsed on one machine does not
+carry that machine's zone, and a span across a DST boundary is still measured in civil days —
+`date:2026-03-07..2026-03-09` in Los Angeles is 47 hours.
+
+**Writing a drag down is `cs_core`'s job too** (`Window::value_in`). A rail can hand each chip the
+query text clicking it produces, which is what keeps the Swift side from ever assembling a token;
+a scrubber cannot be enumerated that way, so the alternative was a client rendering two instants
+into this grammar itself — a second, partial implementation of it in a language that cannot link
+this crate. Two lossy things it does, stated where it is defined: each edge rounds *outward* to a
+whole second, because a conversation dragged across and then filtered out is a bug nobody can see;
+and an edge on a midnight is written as the bare date, because `date:2026-07-28..2026-08-02` is a
+line someone can edit where `date:2026-07-28T00:00:00..` is one they retype. How a range reaches
+the macOS client, which spawns `cs` rather than linking it, is `me9.8.20`'s to answer — the rule
+now exists in one place for it to reach.
+
+**Answered, 2026-08-06 (`me9.8.20`), and the answer is a rail's trade made backwards.** A chip
+arrives carrying the query text clicking it produces because a rail can be *enumerated*; a drag is
+two instants out of a continuum and cannot be. So `cs timeline --drag FROM..UNTIL` takes the two
+instants in epoch millis, in whichever order the pointer visited them, and returns the finished
+query text under `drag.query`. The scrubber puts that string in the box the way a chip click does,
+and reads its own rectangle back out of the parsed query. One round trip per completed drag, which
+is a gesture that happens seconds apart, and it buys the property the whole of this section is
+about: there is nothing in the client that could narrow a list without appearing in the box.
+
+Two behaviours follow from the rewrite being `Query::toggling`, and both are the wanted ones.
+Dragging the window already in force takes it back off, which is what every chip does and is the
+only gesture that clears a selection without a control of its own. And a window that names no span
+— the ends meeting, which is what a drag narrower than one drawn bar produces once the client
+snaps to bar edges — clears the filter rather than writing an empty one. `poc/ui` spells that
+second rule as "a drag under 1% of the span clears the selection", a fraction kept in the drawing
+code; here it falls out of `DateSpec::between` refusing a span that ends where it starts, so there
+is no number to keep in step with a picture.
+
+**The rail is unchanged and says the honest thing already.** An absolute span is a `date:` value
+the four chips have no chip for, so it lights none of them and turns the All chip off: something
+is filtering, and it is not one of these. A second `date:` token still replaces rather than
+widens, so a drag lands on top of `date:week` the way a chip does.
+
+**The other half of the bead — the `topic:` chip — is not going into this grammar.** A seeded
+topic is already expressible as a collection: `matches(query)` ∪ pinned − excluded, which makes
+`topic:rust-and-cargo` a *named saved query* and puts it in `library.db` with the rest of the
+authored data (ADR 3) rather than in the parser. It also has no data source until `6eb.24` or
+`6eb.18` lands, so a facet built now would be a keyword over a taxonomy nobody has. The macOS app
+draws `topic` in the GROUP control, dashed and unclickable, which is a grouping axis it cannot
+offer rather than a filter it applies silently — that is the honest form and it stays until the
+saved-query question is answered (`me9.40`).
 
 **Done, 2026-08-01 (`me9.16`).** `App` has no source field: a chip click calls
 `Query::toggling`, which returns the query *text* with the `agent:` token added or taken back
@@ -635,7 +765,7 @@ Both are currently wrong in our own code — see `6eb.20`. Two rules for the pre
   and `highlight()` functions, so hand-rolling is forced; it must still tokenize and Porter-stem
   the way the index does, or a stemmed hit highlights nothing. `6eb.10` fuzzy-on-failure would
   make a substring highlighter useless outright.
-- **Anchor on the best hit, not the earliest.** `search_grouped` already ranks per message before
+- **Anchor on the best hit, not the earliest.** The ranking already scores per message before
   grouping, so the best-hit message id is known at hydrate time. Scroll there on selection.
 
 ### Off-path branches

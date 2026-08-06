@@ -1,9 +1,10 @@
 //! The native search surface.
 //!
 //! Depends on `cs-core` and nothing else in this workspace (docs/TUI-DESIGN.md §1). It is
-//! handed the index path and a query-log sink rather than resolving either, so it holds no
-//! filesystem policy: `cs` knows where the archive is, this does not, and a test can capture
-//! log events without touching disk.
+//! handed the index path, a query-log sink and the watched source set rather than resolving
+//! any of them, so it holds no filesystem or config policy: `cs` knows where the archive is
+//! and what this machine captures, this does not, and a test can capture log events without
+//! touching disk.
 
 use std::path::PathBuf;
 
@@ -46,6 +47,14 @@ pub struct Opts {
     pub source: Option<String>,
     /// Conversations per search. The header reports this against the corpus total.
     pub limit: i64,
+    /// Every source the machine is set up to capture, and every location detected here that
+    /// nothing claims — passed in for the same reason the index path and the log sink are.
+    /// This crate cannot see the config (§1), and the index alone cannot tell a source that
+    /// produced nothing from one nobody configured (`a7k.29`).
+    ///
+    /// Empty is a usable answer, not a broken one: the facet bar then lists exactly what the
+    /// index holds, which is what it did before any of this existed.
+    pub watched: Vec<cs_core::Watched>,
 }
 
 /// How the TUI came back. `cs` turns [`Exit::Open`] into the actual open action; the TUI
@@ -69,8 +78,8 @@ pub fn run(db_path: PathBuf, log: LogSink<'_>, opts: Opts) -> anyhow::Result<Exi
     // is an error nobody reads. Missing, half-built and stale are separate answers here
     // (`cs_core::IndexState`), which is what stops a first run being told its brand-new index
     // predates the schema.
-    let conn = cs_core::open_for_read(&db_path)?.conn;
-    let mut app = state::App::new(conn, &opts, theme::Theme::detect(theme::no_color_env()))?;
+    let reader = cs_core::open_for_read(&db_path)?;
+    let mut app = state::App::new(reader, &opts, theme::Theme::detect(theme::no_color_env()))?;
 
     // The guard owns the restore, so a `?` out of the loop below leaves a usable terminal
     // rather than a raw-mode shell with no echo.
@@ -157,7 +166,7 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
         // wake the process forever to redraw an unchanged screen, and a settle that fails
         // returns false so this falls through to the blocking read below rather than retrying
         // at 4 Hz against an index that is not going to answer.
-        if app.needs_count() && !event::poll(SETTLE).unwrap_or(false) && app.settle_count() {
+        if app.unsettled() && !event::poll(SETTLE).unwrap_or(false) && app.settle() {
             continue;
         }
 

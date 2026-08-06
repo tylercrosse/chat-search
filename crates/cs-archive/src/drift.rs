@@ -13,8 +13,8 @@
 //! is permanent once it enters the archive (ADR 16), so choosing one stays a config edit.
 
 use crate::config::{candidate_sources, Source};
-use crate::error::{IoContext, Result};
-use serde::{Deserialize, Serialize};
+use crate::error::Result;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -92,22 +92,6 @@ pub fn diff(candidates: &[Source], configured: &[Source], exists: impl Fn(&Path)
     }
 }
 
-/// How long an unchanged report stays quiet.
-///
-/// The archiver runs every 300 s under launchd, so a candidate left unadopted would print
-/// 288 identical lines a day. That is how a warning becomes wallpaper, and once quiet mode
-/// (chat-search-a7k.5) silences the "nothing changed" table this line would *be* the log.
-/// A day is short enough that the nag survives a skimmed log and long enough that it never
-/// competes with real output.
-pub const REPEAT_AFTER_MS: u64 = 24 * 60 * 60 * 1000;
-
-/// What was last printed, so the same thing is not printed 288 times a day.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Reported {
-    fingerprint: String,
-    at_ms: u64,
-}
-
 /// Beside `.machine.json` and dotted for the same reason: machine-local bookkeeping, not
 /// captured data, and never synced (ADR 11 syncs raw bytes only).
 fn state_path(machine_dir: &Path) -> PathBuf {
@@ -118,34 +102,11 @@ fn state_path(machine_dir: &Path) -> PathBuf {
 ///
 /// Any *change* to the set prints immediately — a candidate appearing, one being adopted, a
 /// source directory vanishing are all events. An unchanged set repeats once per
-/// [`REPEAT_AFTER_MS`]. An empty set clears the state, so a candidate that comes back after
-/// being resolved is an event again rather than waiting out a stale window.
+/// [`crate::throttle::REPEAT_AFTER_MS`]. An empty set clears the state, so a candidate that
+/// comes back after being resolved is an event again rather than waiting out a stale window.
 pub fn claim(machine_dir: &Path, drift: &Drift, now_ms: u64) -> Result<bool> {
-    let path = state_path(machine_dir);
-    if drift.is_empty() {
-        match std::fs::remove_file(&path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e).at(&path),
-            _ => return Ok(false),
-        }
-    }
-
-    // A throttle file that failed to parse must not fail an archive run, and must not
-    // suppress either: treat it as "never reported" and let the run rewrite it. The cost of
-    // being wrong is one extra line.
-    let last: Option<Reported> = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok());
-
-    let fingerprint = drift.fingerprint();
-    let due = last.is_none_or(|r| {
-        r.fingerprint != fingerprint || now_ms.saturating_sub(r.at_ms) >= REPEAT_AFTER_MS
-    });
-    if due {
-        let body = serde_json::to_vec(&Reported { fingerprint, at_ms: now_ms })
-            .map_err(|source| crate::error::Error::Json { path: path.clone(), source })?;
-        std::fs::write(&path, body).at(&path)?;
-    }
-    Ok(due)
+    let fingerprint = (!drift.is_empty()).then(|| drift.fingerprint());
+    crate::throttle::claim(&state_path(machine_dir), fingerprint.as_deref(), now_ms)
 }
 
 #[cfg(test)]
@@ -252,7 +213,7 @@ mod tests {
             assert!(!claim(&dir, &drift, i * 300_000).unwrap(), "run {i} printed again");
         }
         assert!(claim(&dir, &drift, 288 * 300_000).unwrap(), "a day on, say it again");
-        assert_eq!(288 * 300_000, REPEAT_AFTER_MS);
+        assert_eq!(288 * 300_000, crate::throttle::REPEAT_AFTER_MS);
         std::fs::remove_dir_all(&dir).ok();
     }
 

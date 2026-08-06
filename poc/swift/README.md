@@ -14,9 +14,52 @@ cargo build --release            # cs-spike finds ../../target/release/cs by its
 cd poc/swift && swift run -c release cs-spike
 ```
 
-Requires the Command Line Tools SDK and nothing else: no Xcode project, no bundle, no
-dependencies. Sits beside `poc/rust` and `poc/ts` for the same reason they do — an instrument for
-answering a question, not part of the product. `poc/` is outside the cargo workspace.
+Requires the Command Line Tools SDK and nothing else: no Xcode project, no bundle. Sits beside
+`poc/rust` and `poc/ts` for the same reason they do — an instrument for answering a question, not
+part of the product. `poc/` is outside the cargo workspace.
+
+## The one dependency, and which way it points
+
+The decoder and the transport are no longer here. They are `CsKit`, a library product of
+[`apps/macos`](../../apps/macos/README.md), and this package consumes it (`chat-search-me9.8.1`).
+
+That direction is the point. The decoder is written once — every field added to the contract
+after the first non-Rust reader ships would otherwise land twice — and the app cannot depend on
+an instrument, so the instrument depends on the product. What it buys is that the contract check
+below tests the decoder the app is actually built on, rather than a copy of it that has since
+drifted, which is the same class of failure the check exists to catch.
+
+What is still the spike's own: the benches, the metrics, and `SearchView.swift` — a view with a
+three-way container picker and a five-field footer in it, which is scaffolding for questions
+rather than a surface, and is deliberately not what the app renders.
+
+## The contract check
+
+```bash
+swift run -c release cs-spike contract --config /tmp/scratch-config.toml
+```
+
+Decodes both shapes of `cs search --json` out of a real index and **exits 1 if either stopped
+decoding**. Run it after anything that touches `cs_core::answer` or the CLI's serialization.
+
+This is here because being outside the cargo workspace has a price. `cargo test --workspace` was
+green for an entire release while this — the repo's only non-Rust decoder, and the thing that
+found the nullable `title` and the UTF-8 spans — could not read the first conversation of the
+first response, because `Group.hits` had become `Group.matches` (`chat-search-me9.36`,
+`chat-search-me9.8.7`). Nothing failed anywhere. A contract with one implementation is a struct.
+
+What it checks, against real output rather than a fixture: both envelopes decode, including the
+`--flat` one, which is a *separate shape* and not a flag on the other; `count` agrees with the
+array it counts and `total` is not below it; every `snippet_spans` entry lands on a character
+boundary in the units `mark_offsets` names — the encoding read off the wire rather than assumed,
+which is the whole point of `chat-search-me9.33`; and a census of the nullable and routinely-empty
+fields over the whole corpus, so a field the contract still tells clients to handle is one some
+row still exercises.
+
+**Give it a scratch `--config`.** Every named query it runs appends to the archive's
+`queries.jsonl`, which is authored data and cannot be reconstructed. `archive_root` pointed at a
+temp directory plus `log_queries = false` is enough; leave `--db` on the real index, which is what
+makes the check worth running at all.
 
 ## The benches
 

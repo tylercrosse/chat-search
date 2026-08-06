@@ -16,7 +16,7 @@
 //! a `messages` array, so there is no need to teach this module the archive's directory
 //! layout, and a file that moves still parses the same way.
 
-use cs_core::model::{Conversation, Kind, Message, Role, Titles};
+use cs_core::model::{model_name, Conversation, Kind, Message, Role, Titles};
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -36,7 +36,6 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
 
     let mut messages: Vec<Message> = Vec::new();
     let mut first_user: Option<String> = None;
-    let mut model: Option<String> = None;
     let mut prev_native_id: Option<String> = None;
     let mut used_ids: HashSet<String> = HashSet::new();
     let mut seq: i64 = 0;
@@ -62,11 +61,14 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
             _ => Role::System,
         };
 
-        // The model can change mid-conversation, so the last one wins and the conversation is
-        // labelled with what it ended on — the same rule codex.rs applies to `turn_context`.
-        if let Some(m) = text_field(record, "model").filter(|m| !m.is_empty()) {
-            model = Some(m);
-        }
+        // The record states which model answered, so it is carried on the message rather
+        // than collapsed here; the single conversation label is the indexer's (ADR 24). Only
+        // a `gemini` record names one, so a user turn is null either way.
+        let model = text_field(record, "model")
+            .as_deref()
+            .and_then(model_name)
+            .filter(|_| role == Role::Assistant)
+            .map(str::to_string);
 
         if role == Role::User && first_user.is_none() {
             first_user = Some(clamp_title(text));
@@ -88,6 +90,7 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
             // they are what the sibling `checkpoints/` files hold.
             kind: Kind::Prose,
             ts: text_field(record, "timestamp").as_deref().and_then(epoch_millis),
+            model,
             text: text.to_string(),
         });
         seq += 1;
@@ -107,7 +110,8 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         // nothing here a reader could act on. A hash in this field would look like a path.
         cwd: None,
         git_branch: None,
-        model,
+        // Nothing outside a `gemini` record names a model, so there is no fallback to give.
+        declared_model: None,
         surface: None,
         forked_from_native_id: None,
         // Deliberately absent rather than a `gemini --resume`-shaped guess: an invented
@@ -315,7 +319,12 @@ mod tests {
         assert_eq!(c.source, "gemini-cli");
         assert_eq!(c.native_id, "fb65e7fe-1954-4a96-b746-7d6c0a411e03");
         assert_eq!(c.id(), "gemini-cli:fb65e7fe-1954-4a96-b746-7d6c0a411e03");
-        assert_eq!(c.model.as_deref(), Some("gemini-2.5-pro"));
+        // Only the `gemini` turn names one; nothing at the conversation level ever does.
+        assert_eq!(
+            c.messages.iter().map(|m| m.model.as_deref()).collect::<Vec<_>>(),
+            vec![None, Some("gemini-2.5-pro"), None]
+        );
+        assert_eq!(c.declared_model, None);
         // `projectHash` is a hash, not a path, so it must not land in `cwd`.
         assert_eq!(c.cwd, None);
         assert_eq!(c.git_branch, None);
@@ -549,19 +558,22 @@ mod tests {
     }
 
     #[test]
-    fn the_last_model_named_labels_the_conversation() {
+    fn each_turn_keeps_the_model_that_answered_it() {
         let switched = r#"{"sessionId":"s","messages":[
           {"id":"a","type":"user","content":"hi"},
           {"id":"b","type":"gemini","content":"hello","model":"gemini-2.5-pro"},
           {"id":"c","type":"gemini","content":"still here","model":"gemini-3-flash-preview"}]}"#;
+        let c = conv("p/chats/model.json", switched);
         assert_eq!(
-            conv("p/chats/model.json", switched).model.as_deref(),
-            Some("gemini-3-flash-preview")
+            c.messages.iter().map(|m| m.model.as_deref()).collect::<Vec<_>>(),
+            vec![None, Some("gemini-2.5-pro"), Some("gemini-3-flash-preview")]
         );
 
         // User-only conversations name no model rather than an empty string.
         let none = r#"{"sessionId":"s","messages":[{"id":"a","type":"user","content":"hi"}]}"#;
-        assert_eq!(conv("p/chats/nomodel.json", none).model, None);
+        let c = conv("p/chats/nomodel.json", none);
+        assert_eq!(c.declared_model, None);
+        assert!(c.messages.iter().all(|m| m.model.is_none()));
     }
 
     #[test]

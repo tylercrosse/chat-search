@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 mod eval;
 mod commands;
+mod inventory;
 mod tui;
 
 #[derive(Parser)]
@@ -87,6 +88,16 @@ enum Command {
         /// What to search for, filters included: `agent:claude,codex`, `-agent:codex`,
         /// `dir:!web-app`, `date:<3h`, `date:today`.
         ///
+        /// `date:` also takes an absolute span, half-open and with either end optional:
+        /// `date:2026-07-28..2026-08-02` is the 28th through the 1st, `date:2026-07-28..` is
+        /// everything since, and `date:2026-07-28` is that day alone. A bound can carry a time
+        /// — `date:2026-07-28T09:30..` — and the span is the one form that does not move
+        /// overnight.
+        ///
+        /// A value holding a space or a comma goes in double quotes — `dir:"~/Mobile
+        /// Documents"` — since without them whitespace ends the word and a comma ends the
+        /// value. Quote the value, not the whole token, and mind your shell's quoting too.
+        ///
         /// A filter value that names nothing selectable is reported rather than applied, and
         /// a half-typed one is searched as text — never an error.
         // clap renders the doc comment above as `--help`, so the reason lives down here
@@ -124,6 +135,59 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// The facet rail for a query: every source, what the query says about it, and the query
+    /// text clicking it would produce.
+    ///
+    /// For a client that is not a Rust program. docs/TUI-DESIGN.md §5 requires a facet bar to
+    /// be a projection of the query text rather than a selection kept beside it, and the
+    /// rewriting rules that make that work live in `cs_core::query` with the grammar. A client
+    /// in another process cannot call them, so this hands over the projection instead.
+    Facets {
+        /// The query the rail is a projection of. Same syntax as `cs search`.
+        #[arg(allow_hyphen_values = true, default_value = "")]
+        query: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// The client contract. docs/JSON-CONTRACT.md says what it emits.
+        #[arg(long)]
+        json: bool,
+    },
+    /// When a query's answers happened: a bar per stretch of days, with the matches raised out
+    /// of them.
+    ///
+    /// The facet rail for the one axis a rail cannot enumerate. `cs facets` hands each chip the
+    /// query text clicking it produces; a scrubber's window is two instants out of a continuum,
+    /// so `--drag` is that trade made the other way round — hand over two instants, get back the
+    /// whole query text.
+    ///
+    /// It counts rather than lists, and it counts *here*, because a client holding a `--limit`
+    /// page holds a biased sample of this axis: ranking is not chronological.
+    Timeline {
+        /// The query the distribution is of. Same syntax as `cs search`.
+        // `allow_hyphen_values` for the reason `cs search` needs it: `-agent:codex` is one of
+        // the DSL's two negation spellings.
+        #[arg(allow_hyphen_values = true, default_value = "")]
+        query: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// How many bars to divide the axis into. A picture's resolution, so a surface that
+        /// knows how wide it is may say; the default is what a 900 pt window wants.
+        #[arg(long, default_value_t = cs_core::BUCKETS)]
+        buckets: usize,
+        /// Two epoch-millisecond instants, `FROM..UNTIL`, in whichever order the pointer
+        /// visited them. Answers "what does this drag write into the query line" and changes
+        /// nothing else about the reply.
+        #[arg(long, value_name = "FROM..UNTIL")]
+        drag: Option<String>,
+        /// Treat the last word as a prefix, for typeahead. Pass it when the search beside this
+        /// was asked that way: the two readings rank different sets, and a drawer under a list
+        /// has to be describing that list.
+        #[arg(long)]
+        prefix: bool,
+        /// The client contract. docs/JSON-CONTRACT.md says what it emits.
+        #[arg(long)]
+        json: bool,
+    },
     /// Record that a search ended in opening this conversation, and print its resume command.
     ///
     /// The selection is the ground truth an eval set cannot invent: the query says what was
@@ -131,7 +195,11 @@ enum Command {
     Pick {
         conv_id: String,
         /// The search that produced the result list this was chosen from.
-        #[arg(long, default_value = "")]
+        // `allow_hyphen_values` for the reason `cs search` needs it: `-agent:codex` is one of
+        // the DSL's two negation spellings, and without this clap reads it as a bundle of short
+        // flags and refuses. A client recording a pick has no say in what the user typed, so a
+        // query this cannot carry is a query whose pick is silently never recorded.
+        #[arg(long, default_value = "", allow_hyphen_values = true)]
         query: String,
         #[arg(long)]
         db: Option<PathBuf>,
@@ -150,6 +218,28 @@ enum Command {
         /// different one.
         #[arg(long = "in")]
         kind: Option<String>,
+    },
+    /// Record that a search ended in nothing being opened.
+    ///
+    /// The other half of `cs pick`, for a client whose search runs in another process. A
+    /// `Search` with no `Pick` after it is the abandonment signal — the ranking showed nothing
+    /// worth opening — and it is the only thing this log ever learns that is not a success
+    /// (docs/TUI-DESIGN.md §6). A typeahead client cannot get one out of `cs search`, which
+    /// logs on the non-`--prefix` path only.
+    Abandon {
+        /// The search that was given up on. Same syntax as `cs search`.
+        // `allow_hyphen_values` for the reason `cs pick --query` needs it: `-agent:codex` is
+        // one of the DSL's two negation spellings, and a query this cannot carry is a query
+        // whose abandonment is silently never recorded.
+        #[arg(allow_hyphen_values = true)]
+        query: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        source: Option<String>,
+        /// How deep the list that was given up on went.
+        #[arg(long, default_value = "200")]
+        limit: i64,
     },
     /// What you have searched for, and what answered it.
     ///
@@ -290,8 +380,15 @@ fn main() -> Result<()> {
         Command::Search { query: q, limit, db, source, tools, include_off_path, prefix, nested, flat, json } => {
             commands::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)
         }
+        Command::Facets { query: q, db, json } => facets(&config_path, db, &q, json),
+        Command::Timeline { query: q, db, buckets, drag, prefix, json } => {
+            commands::timeline(&config_path, db, &q, buckets, drag.as_deref(), prefix, json)
+        }
         Command::Pick { conv_id, query: q, db, source, limit, quiet, kind } => {
             commands::pick(&config_path, db, &conv_id, &q, source.as_deref(), limit, quiet, kind.as_deref())
+        }
+        Command::Abandon { query: q, db, source, limit } => {
+            commands::abandon(&config_path, db, &q, source.as_deref(), limit)
         }
         Command::Needs { limit, json, log, driven, why } => {
             commands::needs(&config_path, log, limit, json, driven.as_deref(), why.as_deref())
@@ -357,10 +454,10 @@ fn mb(bytes: u64) -> f64 {
 /// (chat-search-a7k.5). So the table is printed only when the run recorded something, and
 /// `--verbose` brings it back for debugging.
 ///
-/// Suppression stops at the table. Errors propagate to stderr as they always did, the
-/// source-drift report prints on its own throttle (chat-search-a7k.12), and the
-/// export-staleness nag will do the same (chat-search-a7k.10) — a warning quiet mode can
-/// swallow is worse than the noise quiet mode removes.
+/// Suppression stops at the table. Errors propagate to stderr as they always did, and the
+/// source-drift report (chat-search-a7k.12) and the export-staleness nag (chat-search-a7k.10)
+/// each print on their own throttle — a warning quiet mode can swallow is worse than the noise
+/// quiet mode removes.
 fn archive(
     config_path: &PathBuf,
     only: Option<&str>,
@@ -372,7 +469,9 @@ fn archive(
         .with_context(|| format!("reading {}", config_path.display()))?;
     let m = machine::load_or_create(&cfg.archive_root, cfg.machine_alias.as_deref())?;
     let machine_dir = m.dir(&cfg.archive_root);
-    let manifest = Manifest::load(&machine_dir).context("loading manifest")?;
+    // Mutable because this run's own events are folded back in below, before the staleness
+    // check reads it.
+    let mut manifest = Manifest::load(&machine_dir).context("loading manifest")?;
     let writer = (!dry_run)
         .then(|| ManifestWriter::new(&machine_dir))
         .transpose()
@@ -471,6 +570,15 @@ fn archive(
         if let Some(w) = &writer {
             w.append(&events).context("appending manifest events")?;
         }
+        // Fold this run's events into the in-memory manifest, so the staleness check below
+        // sees an export that landed moments ago as fresh. Without this, `cs archive` run by
+        // hand straight after unpacking one would nag about the very export it just captured
+        // — the worst possible moment to be wrong, because it is the moment the user did the
+        // right thing. On a dry run nothing is written but the files are on disk all the same,
+        // and it is their existence, not their capture, that closes the gap.
+        for e in events {
+            manifest.apply(e);
+        }
 
         tot_cloned += cloned;
         tot_copied += copied;
@@ -495,6 +603,34 @@ fn archive(
         }));
     }
 
+    // After the loop, so the manifest already carries what this run captured. Every source is
+    // asked, not just the one `--source` selected: an export left to rot is exactly as lost
+    // whether or not this invocation happened to be scanning it.
+    let stale = cs_archive::staleness::detect(
+        &cfg.sources,
+        |id| manifest.newest_mtime_ms(id),
+        cs_archive::manifest::now_ms(),
+    );
+    // Same split as the drift report: a dry run is somebody asking a question, so it answers
+    // unthrottled and records nothing, and scheduled runs go through the throttle.
+    let show_stale = if dry_run {
+        !stale.is_empty()
+    } else {
+        cs_archive::staleness::claim(&machine_dir, &stale, cs_archive::manifest::now_ms())
+            .context("recording the export-staleness nag")?
+    };
+
+    // Read off the config alone, because there is nothing else to read: these surfaces write no
+    // local file, so the scan above could not have found them and neither could `cs init`
+    // (chat-search-a7k.22). Same dry-run split as the two reports above it.
+    let unreachable = cs_archive::unreachable::pending(&cfg.sources);
+    let show_unreachable = if dry_run {
+        !unreachable.is_empty()
+    } else {
+        cs_archive::unreachable::claim(&machine_dir, &unreachable, cs_archive::manifest::now_ms())
+            .context("recording the unreachable-surfaces report")?
+    };
+
     if json {
         println!("{:#}", serde_json::json!({
             "dry_run": dry_run, "archive": machine_dir, "sources": reports,
@@ -503,6 +639,8 @@ fn archive(
             // that silently empties for 24 h after the first sighting.
             "unconfigured": drift.unconfigured,
             "missing": drift.missing,
+            "stale": stale,
+            "unreachable": unreachable,
             "cloned": tot_cloned, "copied": tot_copied,
             "bytes": tot.apparent,
             "apparent_bytes": tot.apparent,
@@ -538,19 +676,55 @@ fn archive(
             }
             println!("  archive: {}", machine_dir.display());
         }
+        // Each block separates itself from whatever printed above it, and prints nothing when
+        // it is first: on a quiet run one of these is the entire output and must not open with
+        // a stray newline. Tracking what has printed rather than testing `show_table` is what
+        // keeps that true now there are two of them — the nag has to be able to stand alone,
+        // below a table, or below a drift report it has never heard of.
+        //
+        // `--verbose` is deliberately not wired into either throttle: restoring the old table
+        // is all it claims to do, and `--dry-run` is already the unthrottled view of both.
+        let mut printed = show_table;
         if show_drift {
-            // The blank line separates the report from the table, so it belongs to the table
-            // and not to the report: on a quiet run the report is the entire output and must
-            // not open with a stray newline. `--verbose` is deliberately not wired into the
-            // drift throttle — restoring the old table is all it claims to do, and `--dry-run`
-            // is already the unthrottled view of drift.
-            if show_table {
+            if printed {
                 println!();
             }
             print_drift(&drift, config_path);
+            printed = true;
+        }
+        if show_stale {
+            if printed {
+                println!();
+            }
+            print_stale(&stale);
+            printed = true;
+        }
+        if show_unreachable {
+            if printed {
+                println!();
+            }
+            print_unreachable(&unreachable, config_path);
         }
     }
     Ok(())
+}
+
+/// Exports that have stopped happening (chat-search-a7k.10).
+///
+/// Exempt from quiet mode for the reason the drift report is: a staleness warning that quiet
+/// mode can suppress is a warning that vanishes exactly when you stop reading the logs, which
+/// is the same failure shape as the Claude Code 30-day prune — silent, and only noticed once
+/// the data is gone.
+fn print_stale(stale: &[cs_archive::Stale]) {
+    for s in stale {
+        println!("  stale         {:<14} {} days since its newest archived file", s.source, s.days);
+    }
+    // Restated every time, because the remedy is not obvious from the line and the cost of
+    // not knowing it is unrecoverable. The threshold is a week, so this prints at most once a
+    // day and only while something is actually rotting.
+    println!(
+        "\n  Nothing accrues in a manual export between runs, so each of those days is a gap no\n  later export can fill (ADR 21). Re-export and unpack into the watched directory."
+    );
 }
 
 /// The two ways a config stops describing the machine it runs on (chat-search-a7k.12).
@@ -583,6 +757,65 @@ fn print_drift(drift: &cs_archive::Drift, config_path: &Path) {
     }
     if !drift.missing.is_empty() {
         println!("\n  Configured but gone: uninstalled, moved, or an unmounted volume. What is already\n  archived is safe, but nothing new is arriving, and this run recorded every file under\n  it as vanished.");
+    }
+}
+
+/// Surfaces whose conversations never touch this disk (chat-search-a7k.22).
+///
+/// Exempt from quiet mode with the other two standing reports, and on a stronger argument than
+/// either of them. Drift and staleness describe something that changed, so a swallowed line is
+/// re-earned by the next change; this one describes a gap that has been there since `cs init`
+/// and that nothing on the machine will ever raise again. Suppressing it would not delay the
+/// news, it would end it.
+///
+/// Shared with `cs init`, which is the other moment a person is looking — and the moment the
+/// config that omits them is being written. One renderer, so the two cannot come to differ
+/// about what the remedy is.
+fn print_unreachable(pending: &[&cs_archive::Surface], config_path: &Path) {
+    for s in pending {
+        println!("  unreachable   {:<14} {} — {}", s.id, s.name, s.fetch);
+    }
+    // The share is restated on every printing for the reason the staleness remedy is: the lines
+    // above are a fact about plumbing, and this is the only thing that says why it is worth
+    // acting on. It is stated about the whole category rather than about whichever surfaces are
+    // still pending, because the measured one is usually the first to be configured — and the
+    // stakes of the two left do not shrink when it is.
+    println!(
+        "\n  These keep every conversation on a vendor's machine and write nothing here, so no\n  \
+         detection can find them and no improvement to detection ever will (ADR 21) — the\n  \
+         config is the only place they can be named. Not a rounding error either: the one\n  \
+         of them ever measured is the ChatGPT export, at {}\n  \
+         on the machine this was built for — and the others contributed nothing to that\n  \
+         count, so it is a floor and not a share. Once one is configured, the `stale` line\n  \
+         is what says it has stopped arriving.",
+        cs_archive::unreachable::measured_share(),
+    );
+
+    let toml = cs_archive::unreachable::adoption_toml(pending);
+    if !toml.is_empty() {
+        // `path` is the one field this cannot fill in: an export has no canonical home, which
+        // is the whole reason detection fails on these. Left unedited it points at a directory
+        // that does not exist, and the next run says so as `missing` — a half-finished paste
+        // reports itself rather than passing for configured.
+        println!("\n  Fetch one and unpack it anywhere. Point `path` at whichever directory you unpack\n  exports into — one serves all of them, and until it exists `cs archive` reports it\n  as `missing`. The id is permanent once bytes are captured (ADR 16). Append to\n  {}:\n", config_path.display());
+        for line in toml.lines() {
+            // The blank line between blocks stays blank; indenting it would leave trailing
+            // whitespace that a paste carries into the config.
+            println!("{}", if line.is_empty() { String::new() } else { format!("      {line}") });
+        }
+    }
+
+    let unknown: Vec<&str> =
+        pending.iter().filter(|s| s.include.is_empty()).map(|s| s.id).collect();
+    if !unknown.is_empty() {
+        // Named rather than quietly omitted. An id in the list above with no block beside it
+        // reads as an oversight, and the reason it is not one is worth the two lines: a guessed
+        // glob captures part of an export and says nothing about the rest, which is the failure
+        // that looks most like success.
+        println!(
+            "\n  No block for {}: no export of that shape has landed here yet, and a guessed\n  include glob captures part of one and stays silent about the rest.",
+            unknown.join(", ")
+        );
     }
 }
 
@@ -678,6 +911,16 @@ fn init(config_path: &PathBuf, machine_alias: Option<String>, force: bool) -> Re
     for s in &cfg.sources {
         println!("  {:<12} {:?}  {}", s.id, s.layout, s.path.display());
     }
+
+    // The list above is everything detection can offer, and on a fresh machine it is a minority
+    // of the corpus (chat-search-a7k.22). Said here as well as in `cs archive` because this is
+    // the moment the incomplete config is written, and a person who walks away from a finished
+    // `cs init` believing it found everything has no reason to look again.
+    let unreachable = cs_archive::unreachable::pending(&cfg.sources);
+    if !unreachable.is_empty() {
+        println!();
+        print_unreachable(&unreachable, config_path);
+    }
     Ok(())
 }
 
@@ -690,16 +933,24 @@ fn status(config_path: &PathBuf, json: bool) -> Result<()> {
     let db = cfg.default_db();
     let index_state = cs_core::IndexState::of(&db);
 
+    // One detection for the whole command: `watched` needs the presence of each directory and
+    // the table below needs the paths, and re-stat'ing every candidate for the second answer
+    // would be two derivations of one fact.
+    let drift = cs_archive::drift::detect(&cfg.sources);
+    let watched = inventory::watched(&cfg, &drift);
+    let inventoried = inventory::census(&db, &watched);
+
     if json {
-        let sources: Vec<_> = cfg
-            .sources
+        let sources: Vec<_> = inventoried
             .iter()
             .map(|s| {
+                let known = inventory::source_by_id(&cfg, &drift, &s.id);
                 serde_json::json!({
                     "id": s.id,
-                    "path": s.path,
-                    "layout": format!("{:?}", s.layout).to_lowercase(),
-                    "exists": s.path.is_dir(),
+                    "coverage": s.coverage.as_str(),
+                    "conversations": s.conversations,
+                    "path": known.map(|k| &k.path),
+                    "layout": known.map(|k| format!("{:?}", k.layout).to_lowercase()),
                 })
             })
             .collect();
@@ -720,11 +971,127 @@ fn status(config_path: &PathBuf, json: bool) -> Result<()> {
         println!("machine      {} ({})", m.alias, m.id);
         println!("machine dir  {}", m.dir(&cfg.archive_root).display());
         println!("index        {} ({})", db.display(), index_state.as_str());
+        // Every source the machine knows about, not just the configured ones: a location
+        // detected here and claimed by nothing is exactly what `cs status` should be able to
+        // show, and a configured source reading 0 is the broken-importer signal.
         println!("sources");
-        for s in &cfg.sources {
-            let mark = if s.path.is_dir() { "ok     " } else { "MISSING" };
-            println!("  {mark} {:<12} {:?}  {}", s.id, s.layout, s.path.display());
+        for s in &inventoried {
+            let known = inventory::source_by_id(&cfg, &drift, &s.id);
+            println!(
+                "  {:<12} {:<14} {:>7}  {:<7} {}",
+                s.coverage.as_str(),
+                s.id,
+                s.conversations,
+                known.map_or_else(|| "-".to_string(), |k| format!("{:?}", k.layout)),
+                known.map_or_else(String::new, |k| k.path.display().to_string()),
+            );
         }
     }
     Ok(())
 }
+
+/// The facet rail for one query.
+///
+/// **This never refuses.** `cs search` cannot answer without a readable index and says so with
+/// a nonzero exit, but the rail can: on a first run the true rail is every configured source
+/// at zero, which is the state a client most needs to draw and the one an error would hide.
+/// `index_state` beside the counts is what says whether they are provisional.
+///
+/// The projection itself is `cs_core::facets`, because it is made of the grammar's rewriting
+/// rules and this crate is not where the grammar lives. All that happens here is the half
+/// `cs-core` is not allowed to know: which sources the config names, and which of their
+/// directories are on this disk (docs/TUI-DESIGN.md §1).
+fn facets(config_path: &PathBuf, db_path: Option<PathBuf>, text: &str, json: bool) -> Result<()> {
+    let cfg = Config::load(config_path)
+        .with_context(|| format!("reading {} (run `cs init` first?)", config_path.display()))?;
+    let db = db_path.unwrap_or_else(|| cfg.default_db());
+    let watched = inventory::watched(&cfg, &cs_archive::drift::detect(&cfg.sources));
+    // Typeahead, because a rail is a typeahead affordance — and it makes no difference to
+    // anything below anyway. The two readings differ only in whether the final term expands,
+    // which reaches `match_expr` and nothing the projection touches.
+    let query = cs_core::Query::typeahead(text);
+    // One clock for the whole reply, so that no two spans can be counted either side of a
+    // midnight and no chip can be labelled from a different day than the one it counted.
+    let (sources, dirs, dates) =
+        inventory::rails(&db, &watched, DIR_CHIPS, cs_core::now_ms());
+    let source_rail = cs_core::facets::sources(&query, &sources);
+    let dir_rail = cs_core::facets::dirs(&query, &dirs);
+    let date_rail = cs_core::facets::dates(&query, &dates);
+
+    if json {
+        println!(
+            "{:#}",
+            serde_json::json!({
+                "v": 1,
+                // The query as parsed, so a client can tell which of several replies it holds
+                // — the same field, for the same reason, as the search envelope's.
+                "query": query.raw(),
+                "index_state": cs_core::IndexState::of(&db).as_str(),
+                "sources": source_rail,
+                "dirs": dir_rail,
+                "dates": date_rail,
+            })
+        );
+    } else {
+        // Drawn in the order a client draws them: recency first, because `ended_at` answers for
+        // every conversation and `cwd` for a third of them (`poc/ui`'s sidebar orders by coverage
+        // rather than by how interesting the facet is).
+        section("when", date_rail.keyword, &format!("{} spans", date_rail.values.len()));
+        row(chip_mark(date_rail.all.selected), "any time", "", &date_rail.all.query);
+        for c in &date_rail.values {
+            row(mark(c.state), c.label, &c.conversations.to_string(), &c.query);
+        }
+
+        section("sources", source_rail.keyword, "config ∪ index");
+        row(chip_mark(source_rail.all.selected), "all sources", "", &source_rail.all.query);
+        for c in &source_rail.values {
+            let count = format!("{} {}", c.conversations, c.coverage);
+            row(mark(c.state), &c.value, &count, &c.query);
+        }
+
+        section(
+            "directories",
+            dir_rail.keyword,
+            &format!("{} of {} indexed · {} record none", dir_rail.values.len(), dir_rail.indexed, dir_rail.undirected),
+        );
+        row(chip_mark(dir_rail.all.selected), "anywhere", "", &dir_rail.all.query);
+        for c in &dir_rail.values {
+            row(mark(c.state), &c.value, &c.conversations.to_string(), &c.query);
+        }
+    }
+    Ok(())
+}
+
+/// How many directories the rail carries.
+///
+/// A rail rather than a list. `chat-search-6eb.26` measured a large share of this corpus's
+/// directories to be per-conversation scratch dirs, so the tail is worth counting and not worth
+/// drawing — and `indexed` beside the chips says how much of it was left out.
+const DIR_CHIPS: usize = 12;
+
+fn section(label: &str, keyword: &str, meta: &str) {
+    println!("\n{label}  {keyword} · {meta}");
+}
+
+/// One chip. The click is last because a path can be wider than any column, and the column that
+/// then runs on is the one nobody is reading down.
+fn row(mark: &str, value: &str, count: &str, click: &str) {
+    println!("  {mark:<5} {value:<52} {count:>13}  {click:?}");
+}
+
+fn mark(state: cs_core::ChipState) -> &'static str {
+    match state {
+        cs_core::ChipState::Include => "[on]",
+        cs_core::ChipState::Exclude => "[not]",
+        cs_core::ChipState::Off => "",
+    }
+}
+
+fn chip_mark(selected: bool) -> &'static str {
+    if selected {
+        "[on]"
+    } else {
+        ""
+    }
+}
+

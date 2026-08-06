@@ -1,12 +1,13 @@
 //! Flattening the result tree into a cursor (docs/TUI-DESIGN.md §3).
 //!
-//! `search_grouped` returns conversations with their hits nested beneath. A cursor is flat.
+//! An [`cs_core::Answer`] holds conversations with their matching messages nested beneath.
+//! A cursor is flat.
 //! Materialising the flat vector once per search — rather than computing offsets from the
 //! tree during render — is what keeps scrolling, `PageDown` and mouse hit-testing uniform.
 
 use std::collections::HashSet;
 
-use cs_core::search::Group;
+use cs_core::Group;
 
 /// One navigable line. Indices point into the `&[Group]` the vector was built from, so a row
 /// is meaningless without it; rebuild both together.
@@ -46,7 +47,7 @@ pub const MAX_HITS: usize = 3;
 /// - otherwise — one header per group, plus up to [`MAX_HITS`] hit rows for each group whose
 ///   `conv_id` is in `expanded`. A group with no hits contributes only its header.
 ///
-/// Order follows `groups`, and hits follow their header in `Group::hits` order.
+/// Order follows `groups`, and hits follow their header in `Group::matches` order.
 pub fn build(groups: &[Group], expanded: &HashSet<String>, blank_query: bool) -> Vec<Row> {
     // Headers alone are the common case — most conversations stay collapsed — so size for
     // that and let the expanded few grow the vector.
@@ -58,7 +59,7 @@ pub fn build(groups: &[Group], expanded: &HashSet<String>, blank_query: bool) ->
         if blank_query || !expanded.contains(&g.conv_id) {
             continue;
         }
-        rows.extend((0..g.hits.len().min(MAX_HITS)).map(|hit| Row::Hit { group, hit }));
+        rows.extend((0..g.matches.len().min(MAX_HITS)).map(|hit| Row::Hit { group, hit }));
     }
     rows
 }
@@ -99,31 +100,25 @@ pub fn toggle(expanded: &mut HashSet<String>, conv_id: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cs_core::search::Hit;
+    use cs_core::Match;
 
-    fn hit(conv_id: &str, i: usize) -> Hit {
-        Hit {
-            conv_id: conv_id.into(),
+    fn hit(conv_id: &str, i: usize) -> Match {
+        Match {
             msg_id: format!("{conv_id}:m{i}"),
-            source: "codex".into(),
-            title: None,
             role: "user".into(),
             kind: "prose".into(),
             ts: None,
             score: 0.0,
             snippet: String::new(),
             snippet_spans: Vec::new(),
-            native_id: "c0".into(),
-            destinations: Vec::new(),
             on_head_path: true,
             is_sidechain: false,
             thread_key: "main".into(),
-            deleted_upstream: false,
         }
     }
 
-    /// A group carrying `n` nested hits. Every other field is inert: flattening reads only
-    /// `conv_id` and `hits.len()`, and hard-coding the rest keeps the cases readable.
+    /// A group carrying `n` nested matches. Every other field is inert: flattening reads only
+    /// `conv_id` and `matches.len()`, and hard-coding the rest keeps the cases readable.
     fn group(conv_id: &str, n: usize) -> Group {
         Group {
             conv_id: conv_id.into(),
@@ -139,10 +134,11 @@ mod tests {
             match_count: n,
             match_seqs: Vec::new(),
             kind_runs: Vec::new(),
+            sitting: None,
             native_id: conv_id.into(),
             destinations: Vec::new(),
             deleted_upstream: false,
-            hits: (0..n).map(|i| hit(conv_id, i)).collect(),
+            matches: (0..n).map(|i| hit(conv_id, i)).collect(),
         }
     }
 
@@ -161,7 +157,8 @@ mod tests {
 
     #[test]
     fn a_group_with_no_hits_contributes_only_its_header() {
-        // `recent` returns groups with empty `hits`, and a hit-less group under a real query
+        // The recent list returns groups with no matches, and a match-less group under a real
+        // query
         // is reachable too — expansion must not invent a row to fill the space.
         let groups = [group("c:a", 0)];
         assert_eq!(build(&groups, &expanded(&["c:a"]), false), [Row::Header { group: 0 }]);
@@ -176,7 +173,7 @@ mod tests {
         assert_eq!(rows.len(), 1 + MAX_HITS);
         assert_eq!(rows[1], Row::Hit { group: 0, hit: 0 });
         assert_eq!(rows[MAX_HITS], Row::Hit { group: 0, hit: MAX_HITS - 1 });
-        // The cap truncates rather than sampling: hits arrive best-first from `search_grouped`.
+        // The cap truncates rather than sampling: matches arrive best-first from the ranking.
         assert!(rows.iter().all(|r| r.group() == 0));
     }
 

@@ -229,6 +229,62 @@ DIRECTIONS = {
                            'change': (162, 0.12)},
                   'quiet': (0, 0.00)},
     },
+    # The two ported palettes. `-derived` is load-bearing rather than modest: every hue
+    # below is Gruvbox's or Solarized's and not one lightness is, because neither
+    # palette's published values hold the ramp - chat-search-me9.8.12 searched every
+    # assignment of all 19 and all 16 of them and none does. Feeding the hue to solve()
+    # and throwing the published lightness away is the whole of the port
+    # (docs/DECISIONS.md ADR 25).
+    'gruvbox-derived': {
+        'note': "Gruvbox's hues re-solved - the grounds are its own, the lightnesses are not",
+        # bg0_s / bg0 / bg0_h, published and unaltered: Gruvbox's three dark grounds
+        # already fall in the order this interface wants, soft page over hard track.
+        'dark': {'bg': '#32302f', 'panel': '#282828',
+                 'map': '#1d2021',
+                 # tool and agent share the warm grey-to-cream axis every Gruvbox
+                 # neutral sits on - bg1 through fg0 are all hue 20-48 - and purple and
+                 # aqua are its bright accents.
+                 'kinds': {'tool': (28, 0.10), 'reason': (344, 0.45),
+                           'user': (104, 0.35), 'agent': (44, 0.55)},
+                 'acts': {'look': (28, 0.08), 'run': (28, 0.10),
+                          'change': (104, 0.28)},
+                 'quiet': (30, 0.12)},
+        # Gruvbox publishes faded accents for its light side rather than reusing the
+        # bright ones, so the hues differ from the dark side's here for the same reason
+        # the lightnesses do: this is two palettes, not one inverted.
+        'light': {'bg': '#f9f5d7', 'panel': '#fbf1c7',
+                  'map': '#f2e5bc',
+                  'kinds': {'tool': (28, 0.12), 'reason': (322, 0.40),
+                            'user': (143, 0.32), 'agent': (26, 0.14)},
+                  'acts': {'look': (28, 0.10), 'run': (28, 0.12),
+                           'change': (143, 0.30)},
+                  'quiet': (28, 0.11)},
+    },
+    'solarized-derived': {
+        'note': "Solarized's hues re-solved - the range it refuses to have, taken anyway",
+        # base03 page, base02 drawer: the one direction here whose panel is *lighter*
+        # than its background, because that is what Solarized's own "background
+        # highlights" tier is for. The track is the invention - base03's hue and
+        # saturation one step down - since the darkest colour Solarized publishes is the
+        # page itself, and a ribbon needs a ground its kinds can climb away from.
+        'dark': {'bg': '#002b36', 'panel': '#073642',
+                 'map': '#001e26',
+                 'kinds': {'tool': (194, 0.14), 'reason': (237, 0.43),
+                           'user': (175, 0.55), 'agent': (180, 0.07)},
+                 'acts': {'look': (194, 0.11), 'run': (194, 0.14),
+                          'change': (175, 0.45)},
+                 'quiet': (194, 0.14)},
+        # base3 page, base2 drawer, and the track a step below base2 on base2's own warm
+        # hue. Solarized's greys change temperature between its sides - 192 on the dark
+        # one, 45 on the light one - so the grounds do here too.
+        'light': {'bg': '#fdf6e3', 'panel': '#eee8d5',
+                  'map': '#e8e0c8',
+                  'kinds': {'tool': (194, 0.14), 'reason': (237, 0.43),
+                            'user': (175, 0.58), 'agent': (192, 0.85)},
+                  'acts': {'look': (194, 0.12), 'run': (194, 0.14),
+                           'change': (175, 0.50)},
+                  'quiet': (194, 0.14)},
+    },
 }
 
 
@@ -256,7 +312,9 @@ def report(names):
     print('/* ' + '-' * 70)
     print('   check: every direction against the two fenced measurements')
     print()
-    print(f'   {"direction":<11} {"theme":<6} ' +
+    # Wide enough for the longest name a direction has, so the table stays a table.
+    width = max(len('direction'), *(len(n) for n in names))
+    print(f'   {"direction":<{width}} {"theme":<6} ' +
           ' '.join(f'{k:>8}' for k in ('tool', 'reason', 'user', 'agent')) +
           '   ' + ' '.join(f'{s:>4}' for s in ('t>r', 'r>u', 'u>a')) + '  quiet')
     ok = True
@@ -270,7 +328,7 @@ def report(names):
             quiet = contrast(parse_hex(t['--ink-3']),
                              parse_hex(quiet_ground(spec)))
             ok &= quiet >= QUIET and all(abs(s - 1.8) < 0.06 for s in steps)
-            print(f'   {name:<11} {theme:<6} ' +
+            print(f'   {name:<{width}} {theme:<6} ' +
                   ' '.join(f'{r:>6.2f}:1' for r in ratios) +
                   '   ' + ' '.join(f'{s:.2f}' for s in steps) +
                   f'  {quiet:.2f}:1')
@@ -317,14 +375,29 @@ def resolve(direction, theme):
 
     Not a CSS engine — it only has to be right about single-class selectors carrying
     custom properties, which is all either file uses.
+
+    The tiers below are specificity, and they are tiers rather than document order
+    because the two disagree. `:root` appears twice in styles.css — once for the dark
+    colours at the top and once for the type scale and the geometry near the middle —
+    with `:root.light` sitting between them. Walking the file in order would let the
+    second `:root` overwrite the light theme, and would drop the type scale and the
+    geometry from the light theme entirely, since the light tier never included plain
+    `:root`. Nothing noticed while only colours were read back; `tokens.py` reads the
+    whole surface layer and would have emitted a light theme with no sizes in it.
     """
-    base_sel = ':root' if theme == 'dark' else ':root.light'
-    wanted = [base_sel, f'.theme-{theme}', f'.dir-{direction}',
-              f'.dir-{direction}.theme-{theme}']
-    tokens = {}
+    tiers = [
+        [':root'],
+        [':root.light', '.theme-light'] if theme == 'light' else ['.theme-dark'],
+        [f'.dir-{direction}'],
+        [f'.dir-{direction}.theme-{theme}'],
+    ]
+    blocks = []
     for path in ('styles.css', 'directions.css'):
-        for sel, decls in read_blocks(os.path.join(HERE, path)):
-            if sel in wanted:
+        blocks += read_blocks(os.path.join(HERE, path))
+    tokens = {}
+    for tier in tiers:
+        for sel, decls in blocks:
+            if sel in tier:
                 tokens.update(decls)
     return tokens
 

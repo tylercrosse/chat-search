@@ -1,4 +1,5 @@
 import AppKit
+import CsKit
 import Foundation
 import QuartzCore
 import SwiftUI
@@ -72,7 +73,7 @@ enum Bench {
             for phrase in phrases {
                 for n in 1...phrase.count {
                     let typed = String(phrase.prefix(n))
-                    let r: QueryResult
+                    let r: QueryResult<SearchResponse>
                     do {
                         r = try await client.search(typed, limit: limit, prefix: prefix)
                     } catch CsError.undecodable(let why, let data) {
@@ -278,8 +279,8 @@ enum Bench {
         print("\(model.conversations.count) rows for \"\(query)\" → \(path) (\(png.count) bytes)")
         for conv in model.conversations.prefix(3) {
             print("  \(conv.source) · \(conv.endedDate ?? "no date") · \(conv.title ?? "«null»")")
-            if let hit = conv.hits.first {
-                print("    \(hit.kind)/\(hit.role) \(hit.snippetSpans.count) marks: \(hit.snippet.prefix(90))")
+            if let m = conv.matches.first {
+                print("    \(m.kind)/\(m.role) \(m.snippetSpans.count) marks: \(m.snippet.prefix(90))")
             }
         }
     }
@@ -372,8 +373,11 @@ enum Bench {
     static func describe(_ h: IndexHealth) -> String {
         switch h {
         case .ready: "ready"
+        case .rebuilding: "ready, one build behind"
+        case .unrecognised(let s): "answered, index state \"\(s)\" unknown to this client"
         case .noIndex(let d): "NO INDEX — \(d)"
-        case .rebuilding(let d): "REBUILDING — \(d)"
+        case .building(let d): "BUILDING — \(d)"
+        case .stale(let d): "UNREADABLE — \(d)"
         case .noBinary(let d): "NO BINARY — \(d)"
         case .failed(let d): "UNCLASSIFIED — \(d)"
         }

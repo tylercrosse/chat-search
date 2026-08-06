@@ -59,9 +59,9 @@ pub fn local_day_start(ms: i64) -> Option<i64> {
 
 /// A wall clock a person typed, back to the instant it names.
 ///
-/// Accepts `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM` and `YYYY-MM-DDTHH:MM:SS`, with a space accepted
-/// wherever the `T` goes. A bare date is the midnight opening that day, so a half-open
-/// `2026-08-04 .. 2026-08-05` is the whole of the 4th and consecutive days tile.
+/// Accepts `YYYY-MM-DD`, `YYYY-MM-DDTHH:MM` and `YYYY-MM-DDTHH:MM:SS`, with a space or a
+/// lowercase `t` accepted wherever the `T` goes. A bare date is the midnight opening that day,
+/// so a half-open `2026-08-04 .. 2026-08-05` is the whole of the 4th and consecutive days tile.
 ///
 /// Local rather than UTC because what is being named is something that happened to the person
 /// typing it. "The morning I spent benchmarking" is a wall clock; nobody knows their own
@@ -72,16 +72,47 @@ pub fn local_instant(text: &str) -> Option<i64> {
 
 /// Zone-explicit form of [`local_instant`], for the same reason [`ymd_in`] has one.
 pub fn instant_in<Tz: TimeZone>(tz: &Tz, text: &str) -> Option<i64> {
+    wall_clock_in(tz, wall_clock(text)?)
+}
+
+/// What the text names, before any zone is applied — the reading half of [`instant_in`].
+///
+/// Separate because a `date:` bound is *held* between being read and being resolved:
+/// `Query::parse` has neither a clock nor a zone, and one that resolved eagerly against
+/// `Local` would bake the machine's own zone into every parsed query — the thing
+/// `DateSpec::window_in` takes a `Tz` to avoid. The accepted spellings are [`local_instant`]'s.
+pub fn wall_clock(text: &str) -> Option<NaiveDateTime> {
     let text = text.trim();
     // Longest form first: `%Y-%m-%dT%H:%M` would accept `…T10:00:30` and silently drop the
-    // seconds, which is the wrong direction for a bound.
-    let naive = ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M"]
-        .iter()
-        .find_map(|f| NaiveDateTime::parse_from_str(text, f).ok())
-        .or_else(|| {
-            NaiveDate::parse_from_str(text, "%Y-%m-%d").ok()?.and_hms_opt(0, 0, 0)
-        })?;
-    Some(resolve(tz, naive)?.timestamp_millis())
+    // seconds, which is the wrong direction for a bound. The lowercase `t` is not politeness:
+    // `Query::parse` folds case before anything looks at a value, so a `date:` bound reaches
+    // this with its separator already lowered and the uppercase-only reading would make an
+    // hour of the day unsayable in the one grammar that most wants to say it.
+    [
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dt%H:%M:%S",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y-%m-%dt%H:%M",
+        "%Y-%m-%d %H:%M",
+    ]
+    .iter()
+    .find_map(|f| NaiveDateTime::parse_from_str(text, f).ok())
+    .or_else(|| NaiveDate::parse_from_str(text, "%Y-%m-%d").ok()?.and_hms_opt(0, 0, 0))
+}
+
+/// A wall clock as the instant it names in `tz` — the resolving half of [`instant_in`], and
+/// where a reading no clock in that zone ever showed is dealt with.
+pub fn wall_clock_in<Tz: TimeZone>(tz: &Tz, clock: NaiveDateTime) -> Option<i64> {
+    Some(resolve(tz, clock)?.timestamp_millis())
+}
+
+/// The wall clock an instant showed in `tz` — [`wall_clock_in`] the other way about.
+///
+/// What a client holding a dragged timeline range has, and what it needs before it can write
+/// that range down as text somebody could have typed.
+pub fn clock_in<Tz: TimeZone>(tz: &Tz, ms: i64) -> Option<NaiveDateTime> {
+    tz.timestamp_millis_opt(ms).single().map(|dt| dt.naive_local())
 }
 
 /// `ms` moved by whole civil days, keeping its wall-clock time of day.
@@ -229,9 +260,18 @@ mod tests {
 
     #[test]
     fn a_typed_bound_means_the_same_wall_clock_however_much_of_it_was_written() {
-        // The four accepted spellings of one instant, plus the bare date that opens its day.
+        // Every accepted spelling of one instant, plus the bare date that opens its day. The
+        // lowercase `t` is there because `date:` values are case-folded before they are read,
+        // so it is the only form a bound inside a query can take.
         let at_ten = Los_Angeles.with_ymd_and_hms(2026, 8, 4, 10, 0, 0).unwrap().timestamp_millis();
-        for text in ["2026-08-04T10:00", "2026-08-04 10:00", "2026-08-04T10:00:00", "2026-08-04 10:00:00"] {
+        for text in [
+            "2026-08-04T10:00",
+            "2026-08-04t10:00",
+            "2026-08-04 10:00",
+            "2026-08-04T10:00:00",
+            "2026-08-04t10:00:00",
+            "2026-08-04 10:00:00",
+        ] {
             assert_eq!(instant_in(&Los_Angeles, text), Some(at_ten), "{text}");
         }
         let midnight = day_start_in(&Los_Angeles, at_ten).unwrap();

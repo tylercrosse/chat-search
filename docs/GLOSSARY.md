@@ -14,6 +14,8 @@ Terms are marked **[schema]** where they correspond to a table, column, or enum 
 
 **Thread** **[schema, planned]** A single linear stream of messages inside a conversation. Every conversation has one _main thread_; each subagent invocation adds another. This is the level that maps one-to-one with a transcript file for Codex and Claude Code, which is why "one file, one conversation" is wrong.
 
+A thread is _inside_ a conversation. A **sitting** (see [Search](#search)) runs the other way — several conversations read as one — and the two must not borrow each other's name.
+
 **Message** **[schema]** One immutable node. Never updated in place; corrections arrive as new messages. Carries `parent_id`, making the messages of a conversation a DAG rather than a list.
 
 **Kind** **[schema]** What a message _is_, as distinct from who sent it. Exactly one of:
@@ -88,6 +90,10 @@ This shared session id is why per-file message ordinals collide (7,637 messages,
 
 **Source** One upstream tool in one location — `codex`, `claude-code`, `opencode`, `gemini-cli`, `chatgpt-export`. Each has one importer.
 
+**Coverage** **[code: `cs_core::inventory`]** Where one source stands with the config and this disk, in four names: `live` (a `[[sources]]` entry names it and its directory is here), `missing` (configured, directory gone), `unconfigured` (directory here, nothing claims it — conversations accruing uncaptured), `retired` (neither, but the index still holds its rows). The conversation count is a separate fact and stays separate on purpose: a configured source holding zero conversations is a broken importer or an archive run that never happened, and folding that into the state would make it indistinguishable from a tool nobody uses — which is how it was invisible (chat-search-a7k.29).
+
+Joined once in `cs-core` from what the caller knows, never derived per client. `cs-core` reads no config; `cs` supplies the config and filesystem half from `Config::sources` and `drift::detect`.
+
 **Archiver** Copies raw transcript bytes from live source directories into the raw archive, append-only, and records what it saw in the manifest. **Deliberately dumb: it never parses content.** It knows paths, sizes, mtimes, hashes and per-source layout policy — nothing about conversations or messages. One per source _location_.
 
 If the archiver fails, data is lost permanently, which is why it is kept simple and why it can ship complete before any importer works.
@@ -120,6 +126,12 @@ Resolved from `(source, native_id)` at display time, never stored. Both parts ar
 
 Parsed exactly once, by `cs_core::query`. Everything downstream reads the parsed value; nothing re-reads the string. Before that rule existed the ranker and the highlighter each tokenized it themselves and disagreed twice — `agent:codex` reached FTS5 as two literal words, and a repeated final word lost its prefix star.
 
+**Answer** **[code: `cs_core::answer`, wire: the whole search reply]** The reply to one **Query** run under one set of search options: the envelope (`v`, `ms`, `index_state`, rejected filters), the conversations that came back, and how many matched in total. Serializing it _is_ the wire — the same arrangement `blocks::Transcript` has for `cs show --json` — so the CLI, the TUI and a native client read one shape instead of three clients each assembling their own (ADR 23).
+
+Distinct from the **Query** it answers and the search options it ran under, both of which it remembers privately so that settling the total counts the set that was ranked rather than whatever the caller passes second. That invariant used to live in a doc comment, and a second caller had already drifted from it.
+
+**Settled** **[wire: `settled`]** Whether `total` is the whole number or a floor. A search takes whatever count the ranking pass saw for free; establishing the exact one costs a second pass, which is worth paying when typing stops and not on every keystroke. `false` means "at least this many" and is to be shown as a range, never as the answer.
+
 **Term** One word the ranker matches on, after filter tokens have been lifted out. Held in the order typed and **not** deduplicated: the ranker ANDs a repeat, and `learn deep learn` must still put its prefix star on the final `learn`.
 
 **Marking terms** The same terms rendered for a highlighter rather than for FTS5 — deduplicated, since marking a word twice paints it twice. Both renderings come from one term list, which is what keeps "what ranked" and "what is highlighted" the same answer.
@@ -134,14 +146,21 @@ Repeated tokens of one facet **union** — `agent:codex agent:claude-code` selec
 
 **Active** vs **rejected** A filter is _active_ when it reaches the SQL and _rejected_ when its value names nothing that can be selected on — `date:nope`, a half-typed `agent:`. Every filter the parser accepts is now applied, so those are the only two states; before `chat-search-6eb.11` there was a third, "understood but not wired yet," and `rejected()` is what `unapplied()` narrowed to when it went away. Rejected filters are reported, never dropped: returning unfiltered results for a query that names a filter looks like it worked. The published `unapplied_filters` JSON key keeps its name (ADR 12).
 
+**Absolute span** A `date:` value naming instants rather than an age — `date:2026-07-28..2026-08-02`, half-open, with either end optional and a lone `YYYY-MM-DD` standing for the day it names. The one date form that does not move with the clock, which is why it is what a timeline drag produces and what `<Nu`/`>Nu` cannot say. Its bounds are held as the wall clocks that were typed and resolved against a zone only when a window is asked for, so a parsed query carries no machine's zone. Separator and reading are `cs pick --driven`'s, which has read a span of the query log the same way since it was written.
+
 **Date arithmetic** Civil, not fixed-width. `d`/`w`/`mo`/`y` are calendar steps and `m`/`h` are durations, because across a DST boundary a day really is 23 or 25 hours — a fixed 86,400,000 ms step makes yesterday's last hour vanish from a filter claiming to include it, twice a year. A wall clock that never happened resolves forward into its own day rather than failing.
 
 **Mode** Whether a query can be run — `Empty` (nothing searchable typed), `TooShort` (a lone term below the prefix floor), or `Searchable`. `cs-core` owns the fact, a client owns what to show for it. The distinction is a measured ranking cost rather than a matter of taste: `h*` is 2510 ms against `hov*` at 16 ms, because BM25 scores every matching row before it can sort.
 
+**Sitting** **[read-time, `cs_core::sittings`]** Several conversations read back as the one chat they were. Google Takeout exports an activity log with no conversation key at any nesting level, so a twenty-turn Gemini chat is twenty conversations in the index; records of one `(source, surface)` separated by less than 30 minutes of silence are one sitting, keyed on the conversation that opened it. 1,271 activity records fold to 462 rows.
+
+**Not a thread**, which is a linear stream _inside_ a conversation and runs the other way. Not a conversation either: it has no id, and it never gets one. A conversation id is permanent (ADR 16), so an id derived from a gap threshold would change the day the threshold did and duplicate the corpus — which is why this is computed at read time, in temp tables, where being wrong costs a rebuild of nothing. A **row** is what a result set returns: a conversation, or a sitting standing for several.
+
+Having no id does not make it unopenable. `cs show` and `cs explain` resolve any member's id to the whole sitting (`sittings::resolve`) and answer for it as one conversation, under the opening record's name — so the reader and the result set count the same thing, and a client copying an id out of `Sitting.members` has no wrong one to pick.
+
 **Need** **[`queries.jsonl`]** One thing somebody went looking for, which is what the query log folds down to — deliberately not one distinct query string. `l`, `la`, `lau` … `launchd` typed in under two seconds is one need; the same query run three times to take a median is one need searched once; a pick made with nothing typed is no need at all, because nothing was asked. The unit `chat-search-6eb.21` harvests an eval set in, and the reason its "20+ distinct queries" trigger cannot be read off a count of distinct strings (ADR 22).
 
 **Driven span** **[`queries.jsonl`]** An authored assertion that a stretch of the query log was machine-driven — a benchmark, a smoke test — rather than typed by somebody who wanted an answer. Authored rather than detected because nothing in a search event separates the two: a query typed to measure latency is ordinary text and goes unpicked, which is also exactly what an abandoned search looks like. Appended, never rewritten, and deletable if it was wrong.
-
 ---
 
 ## Vendor translation
@@ -175,4 +194,5 @@ Words to avoid, because they are ambiguous across sources:
 - **"Session"** unqualified — native tools use it for both the conversation and a single process run. Say _conversation_ or _thread_.
 - **"Chat"** — fine in UI copy, not in code or schema.
 - **"Branch"** unqualified — say _fork_, _subagent thread_, or _edit-branch_.
+- **"Thread"** for a group of _conversations_ — say _sitting_. A thread is inside a conversation; a sitting is made of several. `chat-search-o1i.5` is filed under the wrong one of these, which is how easily it happens.
 - **"Resume"** — Codex's subagent files were misread as resumes. If a genuine resume mechanism turns up, name it then, with evidence.

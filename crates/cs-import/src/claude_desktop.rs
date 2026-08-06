@@ -36,7 +36,7 @@
 //! still parses the same way.
 
 use crate::claude_code::{clamp_title, epoch_millis, field, flatten, lines, text, title_candidate};
-use cs_core::model::{Conversation, Kind, Message, Role, Titles};
+use cs_core::model::{model_name, Conversation, Kind, Message, Role, Titles};
 use serde_json::Value;
 use std::collections::HashSet;
 
@@ -111,7 +111,9 @@ fn state(native_id: &str, bytes: &[u8]) -> Option<Conversation> {
         // declines to put a project *hash* here.
         cwd: None,
         git_branch: None,
-        model: text(&root, "model").filter(|m| !m.is_empty()),
+        // The state file's own statement about the session. It has no messages, so this is
+        // the whole of what this half of the conversation knows about the model.
+        declared_model: text(&root, "model").as_deref().and_then(model_name).map(str::to_string),
         surface: None,
         forked_from_native_id: None,
         // No documented URL or command reopens one of these by id, and an invented one that
@@ -125,7 +127,9 @@ fn state(native_id: &str, bytes: &[u8]) -> Option<Conversation> {
 fn transcript(logical_path: &str, native_id: &str, bytes: &[u8]) -> Option<Conversation> {
     let mut messages: Vec<Message> = Vec::new();
     let mut first_user: Option<String> = None;
-    let mut model: Option<String> = None;
+    // The model in force from here on, not the conversation's label — see codex.rs, which
+    // reads its `turn_context` records the same way.
+    let mut current_model: Option<String> = None;
     let mut prev_native_id: Option<String> = None;
     let mut used_ids: HashSet<String> = HashSet::new();
     let mut seq: i64 = 0;
@@ -138,13 +142,13 @@ fn transcript(logical_path: &str, native_id: &str, bytes: &[u8]) -> Option<Conve
         let record_type = text(&record, "type").unwrap_or_default();
         saw_record = true;
 
-        // `system`/`subtype=init` is where the model is stated before any turn happens; the
-        // last one wins, so a conversation is labelled with what it ended on. Everything in
-        // this arm is harness bookkeeping — `result` totals, `rate_limit_event`,
+        // `system`/`subtype=init` is where the model is stated before any turn happens, so it
+        // sets what runs from here rather than labelling the file. Everything else in this
+        // arm is harness bookkeeping — `result` totals, `rate_limit_event`,
         // `tool_use_summary` — and none of it is a message.
         if record_type != "user" && record_type != "assistant" {
-            if let Some(m) = text(&record, "model").filter(|m| !m.is_empty()) {
-                model = Some(m);
+            if let Some(m) = text(&record, "model") {
+                current_model = model_name(&m).map(str::to_string).or(current_model);
             }
             continue;
         }
@@ -164,8 +168,11 @@ fn transcript(logical_path: &str, native_id: &str, bytes: &[u8]) -> Option<Conve
         }
 
         let message = field(&record, "message");
-        if let Some(m) = text(message, "model").filter(|m| !m.is_empty()) {
-            model = Some(m);
+        // The audit log is claude-code-shaped, so `<synthetic>` reaches here too — and until
+        // chat-search-n58.25 only claude_code.rs knew to reject it. `model_name` is now the
+        // one place that list lives.
+        if let Some(m) = text(message, "model") {
+            current_model = model_name(&m).map(str::to_string).or(current_model);
         }
 
         // Set on a subagent's turns to name the tool call that spawned them. Never populated
@@ -236,6 +243,8 @@ fn transcript(logical_path: &str, native_id: &str, bytes: &[u8]) -> Option<Conve
                 role,
                 kind,
                 ts,
+                // A `tool_result` rides on a `user` record and was authored by neither side.
+                model: current_model.clone().filter(|_| role == Role::Assistant),
                 text: body,
             });
             seq += 1;
@@ -257,7 +266,9 @@ fn transcript(logical_path: &str, native_id: &str, bytes: &[u8]) -> Option<Conve
         titles: Titles { custom: None, generated: None, first_user },
         cwd: None,
         git_branch: None,
-        model,
+        // An `init` record naming a model in a session that then produced no assistant turn
+        // is the case this keeps: the name is real, it just has no message to hang on.
+        declared_model: current_model,
         surface: None,
         forked_from_native_id: None,
         // Append-only, so the last message is the head.
@@ -346,7 +357,7 @@ mod tests {
         let state = import("acct/org/local_abc.json", &jsonl(&[STATE])).unwrap();
         assert_eq!(state.titles.resolve(), Some("Madrid trip planning"));
         assert!(state.messages.is_empty(), "a state file must not invent a conversation");
-        assert_eq!(state.model.as_deref(), Some("claude-opus-4-8"));
+        assert_eq!(state.declared_model.as_deref(), Some("claude-opus-4-8"));
     }
 
     #[test]
@@ -471,7 +482,10 @@ mod tests {
         ]);
 
         let c = import("acct/org/local_abc/audit.jsonl", &audit).unwrap();
-        assert_eq!(c.model.as_deref(), Some("claude-sonnet-4-6"));
+        // Only a user turn followed, so there is no message to hang the name on and the
+        // fallback is the only thing keeping it.
+        assert_eq!(c.messages[0].model, None);
+        assert_eq!(c.declared_model.as_deref(), Some("claude-sonnet-4-6"));
     }
 
     #[test]

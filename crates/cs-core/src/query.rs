@@ -77,6 +77,50 @@ impl Facet {
         }
     }
 
+    /// Whether a token's value selects a given column value — the comparison [`crate::search`]
+    /// makes in SQL, stated once so that a facet rail cannot light a chip the filter would miss,
+    /// nor leave one dark that it keeps.
+    ///
+    /// `value` is a token value as [`Query::parse`] left it, which is lowercased. `candidate` is
+    /// what a chip stands for: a source id, a directory the index holds, one of the spans a rail
+    /// offers. The three facets compare three different ways, which is the whole reason this is a
+    /// method rather than `==`:
+    ///
+    /// - **`agent:` is equality**, and case-sensitive equality at that, because `c.source IN (…)`
+    ///   is. A source id that is not already lowercase is one the filter would never match, so
+    ///   its chip draws off and stays off — which is visible, where a chip claiming to be on
+    ///   while nothing is filtered is not.
+    /// - **`dir:` is a case-insensitive substring**, because a path is not an enum and nobody
+    ///   types the whole of one. `dir:chat-search` selects every directory under it, so one token
+    ///   lights every one of their chips.
+    /// - **`date:` is equality of the span**, not of the text. `date:week` and `date:<7d` are one
+    ///   selection written two ways, and a rail that compared strings would leave the week chip
+    ///   dark under a query filtering to exactly it. Two spans are the same when they will still
+    ///   be the same tomorrow, which is why `date:today` and today's own date are *not* one
+    ///   selection: one of them moves at midnight and the other is a decision the reader made.
+    pub fn selects(self, value: &str, candidate: &str) -> bool {
+        match self {
+            Facet::Agent => value == candidate,
+            Facet::Dir => candidate.to_lowercase().contains(&value.to_lowercase()),
+            Facet::Date => {
+                DateSpec::parse(value).is_some_and(|want| DateSpec::parse(candidate) == Some(want))
+            }
+        }
+    }
+
+    /// Whether a second token of this facet *narrows* the answer rather than widening it.
+    ///
+    /// Repeated `agent:` and `dir:` tokens union, which is what lets a rail express "these two
+    /// sources". Repeated `date:` tokens intersect, so that two bounds can describe a range —
+    /// `date:>1d date:<7d` is the week before yesterday. The whole difference between the two
+    /// rails' click is this line; see [`Query::toggling`].
+    fn tokens_intersect(self) -> bool {
+        match self {
+            Facet::Agent | Facet::Dir => false,
+            Facet::Date => true,
+        }
+    }
+
     fn parse(word: &str) -> Option<(Self, &str)> {
         for facet in [Facet::Agent, Facet::Dir, Facet::Date] {
             if let Some(value) = word.strip_prefix(facet.keyword()) {
@@ -133,8 +177,10 @@ pub enum Age {
 
 /// What a `date:` value selects.
 ///
-/// Named days are whole civil days; everything else is an age measured back from now, so
-/// `date:week` and `date:<1w` are the same query written two ways.
+/// Named days are whole civil days and ages are measured back from now, so `date:week` and
+/// `date:<1w` are the same query written two ways. [`DateSpec::Between`] is the one form that
+/// does not move with the clock: it names instants, which is what a timeline drag produces and
+/// what neither of the other two can say (`chat-search-me9.18`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DateSpec {
     /// One whole civil day, `n` days back from today. `today` is 0, `yesterday` is 1.
@@ -143,7 +189,29 @@ pub enum DateSpec {
     Younger(Age),
     /// Older than this age — `date:>1w`.
     Older(Age),
+    /// An absolute half-open span, `date:2026-07-28..2026-08-02` — and with either end left
+    /// off, `date:2026-07-28..` or `date:..2026-08-02`.
+    ///
+    /// Held as the wall clocks that were typed rather than as instants, because a zone is
+    /// [`DateSpec::window_in`]'s to apply and a spec that resolved at parse time would carry
+    /// the machine it was parsed on. Half-open for the reason [`Window`] is, and with the
+    /// separator and the reading `cs pick --driven` already uses for a span of the query log:
+    /// `2026-08-04..2026-08-05` is the whole of the 4th, and consecutive days tile.
+    Between { from: Option<chrono::NaiveDateTime>, until: Option<chrono::NaiveDateTime> },
 }
+
+/// The spans a facet rail offers, as `(value, label)`, in the order they are drawn.
+///
+/// Newest first. The first three nest — today is inside this week is inside this month — and the
+/// last is the complement of the third, so the four tile the corpus without partitioning it.
+/// That is `poc/ui`'s `WHEN_ROWS`, and it is the arrangement a reader wants from a *recency*
+/// facet: the question is "how far back do I have to go", not "which bucket is it in".
+///
+/// The label is here and not in a client because it is a rendering of the grammar, not a
+/// decoration on it: `>1mo` reads as syntax, and two clients writing "Older" beside it twice is
+/// the shape of every rule this crate exists to hold once.
+pub const DATE_SPANS: [(&str, &str); 4] =
+    [("today", "Today"), ("week", "This week"), ("month", "This month"), (">1mo", "Older")];
 
 /// A resolved half-open window of epoch millis, `[from, until)`.
 ///
@@ -152,6 +220,57 @@ pub enum DateSpec {
 pub struct Window {
     pub from: Option<i64>,
     pub until: Option<i64>,
+}
+
+impl Window {
+    /// The `date:` value naming this window — [`DateSpec::window_in`] the other way about.
+    ///
+    /// This is the half of a timeline scrubber that is grammar rather than drawing. A drag has
+    /// two instants and needs the text they are typed as, and a client deriving that text itself
+    /// would be a second, partial renderer of this grammar in a language that cannot link this
+    /// crate — the shape of the local-date bug, one client further out. Feed the result to
+    /// [`Query::toggling`] and the filter lands in the box like any other.
+    ///
+    /// Two things it does to the window on the way, both stated because they are lossy:
+    ///
+    /// - **Each edge rounds outward to a whole second**, which is the finest bound this grammar
+    ///   spells. A window under a second wider than the drag is invisible; one narrower would
+    ///   drop a conversation the reader dragged across, and they would have no way to see why.
+    /// - **A bound that lands on a midnight is written as the bare date**, because that is what
+    ///   a reader would have typed and `date:2026-07-28..2026-08-02` is a filter someone can
+    ///   edit where `date:2026-07-28T00:00:00..` is a filter they retype from scratch.
+    ///
+    /// `None` for a window that names nothing — unbounded at both ends, empty, or an edge
+    /// outside chrono's range.
+    pub fn value_in<Tz: chrono::TimeZone>(&self, tz: &Tz) -> Option<String> {
+        const SECOND: i64 = 1000;
+        let from = self.from.map(|ms| ms.div_euclid(SECOND) * SECOND);
+        let until = match self.until {
+            None => None,
+            Some(ms) => Some(ms.checked_add(SECOND - 1)?.div_euclid(SECOND) * SECOND),
+        };
+        let clock = |ms: Option<i64>| match ms {
+            None => Some(None),
+            Some(ms) => Some(Some(crate::time::clock_in(tz, ms)?)),
+        };
+        let (from, until) = (clock(from)?, clock(until)?);
+        // Refused through the spec itself, so that the one window this cannot name is exactly
+        // the one the parser would not have taken back.
+        DateSpec::between(from, until)?;
+        let written = |clock: Option<chrono::NaiveDateTime>| match clock {
+            None => String::new(),
+            Some(clock) => match clock.time() == chrono::NaiveTime::MIN {
+                true => clock.format("%Y-%m-%d").to_string(),
+                false => clock.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            },
+        };
+        Some(format!("{}..{}", written(from), written(until)))
+    }
+
+    /// [`Window::value_in`] against the machine's own zone.
+    pub fn value(&self) -> Option<String> {
+        self.value_in(&chrono::Local)
+    }
 }
 
 impl DateSpec {
@@ -170,6 +289,16 @@ impl DateSpec {
             DateSpec::Older(age) => {
                 Some(Window { from: None, until: Some(age.before(tz, now_ms)?) })
             }
+            // `now_ms` does not appear: this is the one spec that says the same thing tomorrow.
+            // A bound that was typed and cannot be resolved drops the whole window rather than
+            // half of it — half a range is a filter twice the size of the one that was asked for.
+            DateSpec::Between { from, until } => {
+                let at = |clock: Option<chrono::NaiveDateTime>| match clock {
+                    None => Some(None),
+                    Some(clock) => Some(Some(crate::time::wall_clock_in(tz, clock)?)),
+                };
+                Some(Window { from: at(from)?, until: at(until)? })
+            }
         }
     }
 
@@ -178,7 +307,12 @@ impl DateSpec {
         self.window_in(&chrono::Local, now_ms)
     }
 
-    fn parse(value: &str) -> Option<Self> {
+    /// What a `date:` value means, or `None` for one that names no window.
+    ///
+    /// Public because a value and its window are two things a caller may hold separately: a rail
+    /// offers `week` as a chip and has to count what falls in it, and [`Facet::selects`] compares
+    /// two values by the window they resolve to rather than by their spelling.
+    pub fn parse(value: &str) -> Option<Self> {
         match value {
             "today" => return Some(DateSpec::Day(0)),
             "yesterday" => return Some(DateSpec::Day(1)),
@@ -186,12 +320,45 @@ impl DateSpec {
             "month" => return Some(DateSpec::Younger(Age::Months(1))),
             _ => {}
         }
+        // `..` before the relative forms, since an absolute bound can hold neither `<` nor `>`
+        // and the two grammars therefore cannot collide.
+        if let Some((from, until)) = value.split_once("..") {
+            let bound = |text: &str| match text {
+                "" => Some(None),
+                text => Some(Some(crate::time::wall_clock(text)?)),
+            };
+            return Self::between(bound(from)?, bound(until)?);
+        }
+        // A lone `YYYY-MM-DD` is the day it names — the spelling every reader tries first, and
+        // the only absolute one that is a window on its own. `2026-08-04T10:00` names an
+        // instant, which is an edge rather than a span, so it is a bound and nothing else.
+        if let Ok(day) = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+            return Self::between(day.and_hms_opt(0, 0, 0), day.succ_opt()?.and_hms_opt(0, 0, 0));
+        }
         let (rest, wrap): (&str, fn(Age) -> DateSpec) = match value.split_at_checked(1) {
             Some(("<", rest)) => (rest, DateSpec::Younger),
             Some((">", rest)) => (rest, DateSpec::Older),
             _ => return None,
         };
         Age::parse(rest).map(wrap)
+    }
+
+    /// A [`DateSpec::Between`] if the two bounds describe a span, and `None` if they do not.
+    ///
+    /// Two ways they do not, both of which read as a filter while selecting the whole corpus or
+    /// none of it. `date:..` bounds nothing at all, and `date:2026-08-05..2026-08-01` ends before
+    /// it starts — the second is what a drag would produce if a client handed its two edges over
+    /// in the order the mouse visited them, so it is refused here rather than passed to SQL that
+    /// would return nothing and look as though it had worked.
+    fn between(
+        from: Option<chrono::NaiveDateTime>,
+        until: Option<chrono::NaiveDateTime>,
+    ) -> Option<Self> {
+        match (from, until) {
+            (None, None) => None,
+            (Some(from), Some(until)) if until <= from => None,
+            _ => Some(DateSpec::Between { from, until }),
+        }
     }
 }
 
@@ -246,7 +413,10 @@ pub struct Filter {
 impl Filter {
     fn new(facet: Facet, value: &str, negated: bool, as_typed: String) -> Self {
         let kind = match facet {
-            Facet::Date => match DateSpec::parse(value) {
+            // Unquoted first, because quoting is lexical and applies to every facet's value even
+            // though only `dir:` has one that needs it. A `date:` value read one way here and
+            // another in `Query::selection` would be the two-readings bug this module is named for.
+            Facet::Date => match DateSpec::parse(&unquote(value)) {
                 Some(spec) => FilterKind::Date(spec, negated),
                 None => FilterKind::Rejected,
             },
@@ -283,20 +453,135 @@ impl Filter {
 /// state a typeahead is in for most of its life and not something to raise an error over.
 fn parse_selection(value: &str, prefix_negated: bool) -> Option<Selection> {
     let mut selection = Selection::default();
-    for piece in value.split(',') {
-        let (negated, name) = match piece.strip_prefix('!') {
-            Some(rest) => (!prefix_negated, rest),
-            None => (prefix_negated, piece),
-        };
+    for piece in split_values(value) {
+        let (flipped, name) = piece_value(piece);
         if name.is_empty() {
             continue;
         }
+        let negated = if flipped { !prefix_negated } else { prefix_negated };
         let bucket = if negated { &mut selection.exclude } else { &mut selection.include };
-        if !bucket.iter().any(|v| v == name) {
-            bucket.push(name.to_string());
+        if !bucket.iter().any(|v| *v == name) {
+            bucket.push(name);
         }
     }
     (!selection.is_empty()).then_some(selection)
+}
+
+// ---- quoting --------------------------------------------------------------------------------
+//
+// The grammar spends two characters on structure — whitespace ends a word, a comma ends a value —
+// and a `cwd` is free to contain either. So `dir:/Users/t/Mobile Documents` parsed as the filter
+// `dir:/users/t/mobile` plus the free term `documents`, and `dir:/a,b/c` as two directories, the
+// first of which is a substring of most paths on the machine. Both filtered, neither said so, and
+// both looked like they had worked (`chat-search-me9.8.16`).
+//
+// A double quote suspends both, the way a shell does and the way `docs/TUI-DESIGN.md` §5 records
+// fast-resume already doing: `dir:"/Users/t/Mobile Documents"` is one token naming one directory.
+// Three rules, and they are all of it:
+//
+//   - Inside a quoted run, whitespace and commas are ordinary characters.
+//   - `""` inside a quoted run is one literal quote — the same doubling `Query::match_expr`
+//     already does for FTS5, rather than a second escaping scheme to learn.
+//   - An unterminated run reaches the end of the text, because half-typed is the normal state of
+//     a typeahead and parsing may not fail (`chat-search-6eb.11`).
+//
+// **Quoting is lexical, not semantic.** A quoted run of *free text* still tokenises into exactly
+// the terms it did unquoted, so this buys no phrase search and changes no ranking: all 31 pinned
+// expressions below are unchanged by it. What it buys is a filter value that can hold a separator.
+
+/// The text split into words, with quoted runs held together.
+///
+/// Slices of the original, quotes included, because the rewriters below hand back tokens they did
+/// not mean to change verbatim — and because what a token *means* is [`unquote`]'s answer, not the
+/// splitter's.
+fn split_words(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut quoted = false;
+    for (i, c) in text.char_indices() {
+        if c == '"' {
+            // A doubled quote toggles twice and so protects the run it sits in, which is the
+            // reading `unquote` gives it: no special case is needed here for it.
+            quoted = !quoted;
+            start.get_or_insert(i);
+        } else if c.is_whitespace() && !quoted {
+            if let Some(from) = start.take() {
+                out.push(&text[from..i]);
+            }
+        } else {
+            start.get_or_insert(i);
+        }
+    }
+    out.extend(start.map(|from| &text[from..]));
+    out
+}
+
+/// One token's raw value split at the commas that separate values — the ones outside quotes.
+fn split_values(raw: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut quoted = false;
+    for (i, c) in raw.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                out.push(&raw[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    out.push(&raw[start..]);
+    out
+}
+
+/// One raw piece read as the parser reads it: whether an inline `!` negates it, and its value with
+/// the quoting taken off.
+///
+/// The `!` is stripped before unquoting and only off the front of the raw piece, so `dir:!"a b"`
+/// drops the directory `a b` while `dir:"!a b"` keeps one named `!a b`. One `!`, because that is
+/// what this has always stripped: to it `!!codex` is the value `!codex`, and a rewriter reading
+/// further would delete a token nothing selected.
+fn piece_value(piece: &str) -> (bool, String) {
+    match piece.strip_prefix('!') {
+        Some(rest) => (true, unquote(rest)),
+        None => (false, unquote(piece)),
+    }
+}
+
+/// A raw piece with its quoting taken off. The inverse of [`as_written`].
+fn unquote(piece: &str) -> String {
+    let mut out = String::with_capacity(piece.len());
+    let mut chars = piece.chars().peekable();
+    let mut quoted = false;
+    while let Some(c) = chars.next() {
+        match c {
+            // Doubling means a literal quote only inside a run, as it does in CSV and in FTS5:
+            // outside one there is nothing for the pair to be an escape within.
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                chars.next();
+                out.push('"');
+            }
+            '"' => quoted = !quoted,
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// A value written so that [`unquote`] gives back exactly it — quoted only when it has to be.
+///
+/// The restraint is the point. A path is something a reader recognises in their own input box, so
+/// handing back `dir:"/x/y"` where `dir:/x/y` would do is the rewriter changing text it was not
+/// asked about, in the one place the user can see what they wrote.
+fn as_written(value: &str) -> String {
+    let structural = |c: char| c.is_whitespace() || c == ',' || c == '"';
+    // A leading `!` is the inline negation mark, so a value that starts with one has to be quoted
+    // to mean itself — otherwise adding it to the selection would spell dropping it.
+    if !value.starts_with('!') && !value.contains(structural) {
+        return value.to_string();
+    }
+    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 // ---- rewriting the query text -------------------------------------------------------------
@@ -310,7 +595,7 @@ fn parse_selection(value: &str, prefix_negated: bool) -> Option<Selection> {
 // order, and tokens it does not understand.
 
 fn words(text: &str) -> Vec<String> {
-    text.split_whitespace().map(str::to_string).collect()
+    split_words(text).into_iter().map(str::to_string).collect()
 }
 
 /// Words back into text, deciding the one thing splitting on whitespace threw away: whether
@@ -328,7 +613,11 @@ fn join(words: Vec<String>, original: &str) -> String {
     let closed = original.chars().last().is_some_and(char::is_whitespace);
     let only_filters = words.iter().all(|w| is_filter(w));
     let mut text = words.join(" ");
-    if !text.is_empty() && (closed || only_filters) {
+    // Never inside a quoted run that is still open. There the space would land *in* the value
+    // being typed — the rewriter editing a filter it was not asked about — and it would be
+    // pointless besides: extending that value is exactly what the next character should do.
+    let open = text.matches('"').count() % 2 == 1;
+    if !text.is_empty() && !open && (closed || only_filters) {
         text.push(' ');
     }
     text
@@ -352,28 +641,44 @@ fn facet_token(word: &str, facet: Facet) -> Option<(bool, &str)> {
     head.eq_ignore_ascii_case(keyword).then(|| (negated, &bare[keyword.len()..]))
 }
 
-/// Every word, with `value` gone from each token of `facet` — from the include and the exclude
-/// side both. A token left with no values at all goes with it.
+/// Every word, with every token of `facet` gone. The All chip's rewrite, and the first half of
+/// a click on a facet whose tokens intersect.
+fn strip_facet(text: &str, facet: Facet) -> Vec<String> {
+    split_words(text)
+        .into_iter()
+        .filter(|w| facet_token(w, facet).is_none())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Every word, with everything that selects `value` gone from each token of `facet` — from the
+/// include and the exclude side both. A token left with no values at all goes with it.
+///
+/// What counts as "selects" is [`Facet::selects`], the same comparison the SQL makes, so a chip
+/// is turned off by removing whatever was turning it on. For `dir:` that is wider than equality:
+/// a single `dir:chat-search` lights every directory beneath it, and clicking one of them off
+/// has to take that token out rather than leave a filter the chip no longer reflects.
 ///
 /// Untouched tokens are returned verbatim rather than re-rendered, so a rewrite of one facet
 /// cannot quietly normalise the spelling of another.
 fn strip_value(text: &str, facet: Facet, value: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for word in text.split_whitespace() {
+    for word in split_words(text) {
         let Some((negated, raw)) = facet_token(word, facet) else {
             out.push(word.to_string());
             continue;
         };
-        // One `!`, because `parse_selection` strips one: to it `!!codex` is the value
-        // `!codex`, and a rewriter that read further would delete a token nothing selected.
-        let names = || raw.split(',').map(|p| p.strip_prefix('!').unwrap_or(p));
-        let kept: Vec<&str> = raw
-            .split(',')
-            .zip(names())
-            .filter(|(_, name)| !name.eq_ignore_ascii_case(value))
-            .map(|(piece, _)| piece)
+        let pieces = split_values(raw);
+        // Read exactly as `parse_selection` reads it — one `!` off the front, then the quoting —
+        // and lowercased, because that is the state `parse` hands every value to the SQL in:
+        // `Agent:Codex` filters, so the bar has to see the same token or it would add a second
+        // one beside it. Pieces that stay are re-emitted as they were typed, quotes included.
+        let kept: Vec<&str> = pieces
+            .iter()
+            .copied()
+            .filter(|piece| !facet.selects(&piece_value(piece).1.to_lowercase(), value))
             .collect();
-        if kept.len() == names().count() {
+        if kept.len() == pieces.len() {
             out.push(word.to_string());
         } else if kept.iter().any(|p| !p.is_empty()) {
             let dash = if negated { "-" } else { "" };
@@ -386,17 +691,21 @@ fn strip_value(text: &str, facet: Facet, value: &str) -> Vec<String> {
 /// Add `value` to the selection, widening an existing token where there is one to widen.
 ///
 /// A negated token is not a candidate — appending to `-agent:gemini` would exclude the value it
-/// was asked to include. A new token goes at the *front*, which is what makes the caret at the
-/// end of the text still sit at the end of the free text, so clicking a chip mid-query does not
-/// interrupt typing.
+/// was asked to include. Neither is one whose quoting is still open: the comma this appends would
+/// land *inside* the run and make one value out of two, and half-typed is the normal state of a
+/// typeahead. A new token goes at the *front*, which is what makes the caret at the end of the
+/// text still sit at the end of the free text, so clicking a chip mid-query does not interrupt
+/// typing.
 fn add_value(words: &mut Vec<String>, facet: Facet, value: &str) {
-    let widenable = words
-        .iter_mut()
-        .find(|w| matches!(facet_token(w, facet), Some((false, raw)) if !raw.is_empty()));
+    let value = as_written(value);
+    let widenable = words.iter_mut().find(|w| {
+        matches!(facet_token(w, facet), Some((false, raw))
+            if !raw.is_empty() && raw.matches('"').count() % 2 == 0)
+    });
     match widenable {
         Some(word) => {
             word.push(',');
-            word.push_str(value);
+            word.push_str(&value);
         }
         None => words.insert(0, format!("{}{value}", facet.keyword())),
     }
@@ -453,7 +762,7 @@ impl Query {
         let mut terms: Vec<String> = Vec::new();
         let mut filters: Vec<Filter> = Vec::new();
 
-        for word in lower.split_whitespace() {
+        for word in split_words(&lower) {
             let (negated, bare) = match word.strip_prefix('-') {
                 Some(rest) => (true, rest),
                 None => (false, word),
@@ -510,29 +819,50 @@ impl Query {
             return self;
         }
         let mut words = words(&self.raw);
-        words.insert(0, format!("{}{}", Facet::Agent.keyword(), source.to_lowercase()));
+        words.insert(
+            0,
+            format!("{}{}", Facet::Agent.keyword(), as_written(&source.to_lowercase())),
+        );
         Self::parse(&join(words, &self.raw), self.prefix)
     }
 
-    /// The query text with one value of a name-valued facet added, or removed if it is already
-    /// selected.
+    /// The query text with one value of a facet added, or removed if it is already selected.
     ///
     /// Returns *text*, because the text is the state. A facet bar that filtered by any other
     /// means would be the second source of truth `TUI-DESIGN.md` §5 costs out, and a filter the
     /// user cannot see in the box is one they cannot edit, copy or keep.
     ///
-    /// Toggling on merges into an existing token of that facet, so a second chip widens the
-    /// selection — `agent:codex` becomes `agent:codex,claude` — which is the reading
-    /// [`Query::selection`] already gives repeated tokens. Toggling either way first strips the
-    /// value from every token of the facet, including a negated one: a chip that is off is
-    /// neither included nor excluded, and `agent:codex -agent:codex` is a query that can match
-    /// nothing.
+    /// Toggling either way first takes out whatever was selecting the value, negated tokens
+    /// included: a chip that is off is neither included nor excluded, and `agent:codex
+    /// -agent:codex` is a query that can match nothing.
+    ///
+    /// **What a second click means is the facet's own rule** ([`Facet::tokens_intersect`]), which
+    /// is why one verb serves all three rails and no client has to learn the difference:
+    ///
+    /// - `agent:` and `dir:` **widen**. Toggling on merges into an existing token, so
+    ///   `agent:codex` becomes `agent:codex,claude` — the reading [`Query::selection`] already
+    ///   gives repeated tokens.
+    /// - `date:` **replaces**. Two date tokens intersect, so widening is not available to it at
+    ///   all: a second window clicked on top of the first would narrow to the overlap, and for
+    ///   the spans a rail offers that overlap is usually the smaller of the two and sometimes
+    ///   empty (`date:today` under `date:>1mo` matches nothing). So every `date:` token goes
+    ///   before the clicked one arrives, which is also what `poc/ui`'s `toggleDate` does.
+    ///
+    /// The value is written back **as it was handed in**, not as it was compared. Comparison is
+    /// case-folded because the parser folds case, but a directory is a path a reader recognises
+    /// and lowercasing it in the box would be the rewriter changing something it was not asked
+    /// about.
     pub fn toggling(&self, facet: Facet, value: &str) -> String {
-        let value = value.to_lowercase();
-        let selected = self.selection(facet).include.contains(&value);
-        let mut words = strip_value(&self.raw, facet, &value);
+        let folded = value.to_lowercase();
+        let selected =
+            self.selection(facet).include.iter().any(|v| facet.selects(v, &folded));
+        let mut words = if facet.tokens_intersect() {
+            strip_facet(&self.raw, facet)
+        } else {
+            strip_value(&self.raw, facet, &folded)
+        };
         if !selected {
-            add_value(&mut words, facet, &value);
+            add_value(&mut words, facet, value);
         }
         join(words, &self.raw)
     }
@@ -542,8 +872,22 @@ impl Query {
     /// Exclusions go too. "All agents" is a claim about the whole facet, so leaving a
     /// `-agent:` behind would light a chip that is still filtering.
     pub fn without(&self, facet: Facet) -> String {
-        let kept = words(&self.raw).into_iter().filter(|w| facet_token(w, facet).is_none());
-        join(kept.collect(), &self.raw)
+        join(strip_facet(&self.raw, facet), &self.raw)
+    }
+
+    /// [`Query::without`]'s answer as a query rather than as text.
+    ///
+    /// For the caller that has to ask the *same* question with one facet left out —
+    /// [`crate::timeline`] draws the distribution of everything surviving every filter but
+    /// `date:`, so that widening the window is visible in the picture the window sits on.
+    ///
+    /// Reparsed rather than edited, and reparsed **with this query's own reading of its last
+    /// word**. A timeline built by handing the stripped text to [`Query::typeahead`] would
+    /// expand a final term the search had ranked exactly, so the bars would describe a set the
+    /// list is not showing — one keystroke of difference, invisible, and only at the moment
+    /// somebody stops typing.
+    pub fn without_facet(&self, facet: Facet) -> Query {
+        Self::parse(&self.without(facet), self.prefix)
     }
 
     /// The text as typed, for redisplay. Not what gets searched — see [`Query::match_expr`].
@@ -614,17 +958,37 @@ impl Query {
         out
     }
 
-    /// Everything this query keeps and drops on one name-valued facet.
+    /// Everything this query keeps and drops on one facet, as values.
     ///
     /// Merged across tokens rather than last-one-wins, so `agent:codex agent:claude` selects
     /// both. That is the reading the facet bar needs: it filters by rewriting the query text
     /// (`TUI-DESIGN.md` §5), so clicking a second chip has to add to the first rather than
     /// replace it.
+    ///
+    /// `date:` answers here too, with its values as typed — `today`, `<3h` — rather than the
+    /// windows they resolve to. A chip is labelled with a value, and deciding whether two of them
+    /// are the same selection is [`Facet::selects`]'s job rather than this one's; the resolved
+    /// arithmetic the SQL wants is [`Query::date_windows`]. A value nothing can select on is in
+    /// neither list, which is what keeps `date:nope` out of a rail while [`Query::rejected`] is
+    /// still reporting it.
     pub fn selection(&self, facet: Facet) -> Selection {
         let mut out = Selection::default();
         for filter in self.filters.iter().filter(|f| f.facet == facet) {
-            if let FilterKind::Names(names) = &filter.kind {
-                out.merge(names);
+            match &filter.kind {
+                FilterKind::Names(names) => out.merge(names),
+                FilterKind::Date(_, negated) => {
+                    // Read back off the token rather than kept beside the parsed spec: the two
+                    // would be one fact stored twice, and only one of them can be wrong.
+                    if let Some((_, value)) = facet_token(&filter.as_typed, facet) {
+                        let value = unquote(value);
+                        let bucket =
+                            if *negated { &mut out.exclude } else { &mut out.include };
+                        if !bucket.iter().any(|v| *v == value) {
+                            bucket.push(value);
+                        }
+                    }
+                }
+                FilterKind::Rejected => {}
             }
         }
         out
@@ -852,7 +1216,15 @@ mod tests {
         // prefix of every filter anyone ever types. None of them may panic, and none may
         // silently become a filter that does something other than what the finished token
         // will do — `date:<3` must not filter as though it said `date:<3h`.
-        for finished in ["date:<3h", "date:>12mo", "agent:claude,codex", "dir:!web-app", "date:today"] {
+        for finished in [
+            "date:<3h",
+            "date:>12mo",
+            "agent:claude,codex",
+            "dir:!web-app",
+            "date:today",
+            "date:2026-07-28..2026-08-02",
+            "date:..2026-08-02t14:30",
+        ] {
             for end in 1..=finished.len() {
                 let Some(prefix) = finished.get(..end) else { continue };
                 let q = Query::typeahead(prefix);
@@ -867,12 +1239,42 @@ mod tests {
 
     #[test]
     fn a_date_value_that_cannot_be_a_date_is_rejected_rather_than_guessed_at() {
-        for text in ["date:nope", "date:", "date:<", "date:>", "date:<h", "date:3h", "date:<3z", "date:<-3h"] {
+        for text in [
+            "date:nope",
+            "date:",
+            "date:<",
+            "date:>",
+            "date:<h",
+            "date:3h",
+            "date:<3z",
+            "date:<-3h",
+            // The absolute forms fail the same way: a bound that is not a wall clock, a span
+            // bounded at neither end, and one whose ends are the wrong way round.
+            "date:..",
+            "date:2026-13-01",
+            "date:nope..2026-08-02",
+            "date:2026-07-28..nope",
+            "date:2026-08-05..2026-08-01",
+            "date:2026-08-05..2026-08-05",
+        ] {
             let q = Query::typeahead(text);
             assert_eq!(q.rejected(), [text], "{text} should be reported, not applied");
             assert!(q.date_windows(1_785_000_000_000).is_empty(), "{text} must not filter");
         }
-        for text in ["date:<3h", "date:>1w", "date:today", "date:yesterday", "date:week", "date:month", "date:<90mo"] {
+        for text in [
+            "date:<3h",
+            "date:>1w",
+            "date:today",
+            "date:yesterday",
+            "date:week",
+            "date:month",
+            "date:<90mo",
+            "date:2026-07-28",
+            "date:2026-07-28..2026-08-02",
+            "date:2026-07-28..",
+            "date:..2026-08-02",
+            "date:2026-07-28t09:30..2026-07-28t17:00",
+        ] {
             let q = Query::typeahead(text);
             assert!(q.rejected().is_empty(), "{text} should be understood");
             assert_eq!(q.date_windows(1_785_000_000_000).len(), 1, "{text} should resolve");
@@ -1086,13 +1488,16 @@ mod tests {
     #[test]
     fn a_rewrite_changes_the_filter_and_nothing_else_about_the_query() {
         // The structural invariant behind clicking a chip: the ranking of what was typed is
-        // not the facet bar's business, so no toggle may move it.
-        for text in ["", "borrow", "borrow ", "le", "deep learn", "dir:web date:today rust"] {
-            let before = Query::typeahead(text);
-            let after = Query::typeahead(&before.toggling(Facet::Agent, "codex"));
-            assert_eq!(after.match_expr(), before.match_expr(), "{text:?}");
-            assert_eq!(after.mode(), before.mode(), "{text:?}");
-            assert_eq!(after.terms(), before.terms(), "{text:?}");
+        // not the facet bar's business, so no toggle may move it. Every facet, because each
+        // rewrites the text differently and only this says they all leave the same thing alone.
+        for (facet, value) in RAILS {
+            for text in ["", "borrow", "borrow ", "le", "deep learn", "dir:web date:today rust"] {
+                let before = Query::typeahead(text);
+                let after = Query::typeahead(&before.toggling(facet, value));
+                assert_eq!(after.match_expr(), before.match_expr(), "{value} on {text:?}");
+                assert_eq!(after.mode(), before.mode(), "{value} on {text:?}");
+                assert_eq!(after.terms(), before.terms(), "{value} on {text:?}");
+            }
         }
     }
 
@@ -1135,5 +1540,453 @@ mod tests {
         // has to see the same token or the bar would add a duplicate beside it.
         assert_eq!(toggled("Agent:Codex borrow", "codex"), "borrow");
         assert_eq!(Query::typeahead("Agent:Codex borrow").without(Facet::Agent), "borrow");
+    }
+
+    // ---- chat-search-1ld: the two facets whose rules `agent:` did not need ----
+
+    /// One value per rail, in the shape a chip arrives in: a source id, a directory out of the
+    /// index, one of the spans a rail offers.
+    const RAILS: [(Facet, &str); 3] =
+        [(Facet::Agent, "codex"), (Facet::Dir, "/Users/t/dev/web-app"), (Facet::Date, "week")];
+
+    /// What a rail would draw: whether this query's includes select this value.
+    fn lit(text: &str, facet: Facet, value: &str) -> bool {
+        let folded = value.to_lowercase();
+        Query::typeahead(text).selection(facet).include.iter().any(|v| facet.selects(v, &folded))
+    }
+
+    #[test]
+    fn a_click_flips_the_chip_it_names_and_a_second_click_puts_it_back() {
+        // The affordance itself, for all three rails at once: a chip you can turn on and not off
+        // is a filter you can enter and not leave. Stated about the *chip* rather than the text
+        // because the text does not have to come back — clicking a directory off takes out the
+        // broad `dir:web` that was lighting it, and clicking on again writes the whole path.
+        for (facet, value) in RAILS {
+            for text in ["", "borrow", "agent:claude rust", "date:today dir:web rust"] {
+                let once = Query::typeahead(text).toggling(facet, value);
+                let twice = Query::typeahead(&once).toggling(facet, value);
+                let before = lit(text, facet, value);
+                assert_ne!(lit(&once, facet, value), before, "{value} on {text:?} did not flip");
+                assert_eq!(lit(&twice, facet, value), before, "{value} on {text:?} did not return");
+            }
+        }
+    }
+
+    #[test]
+    fn clicking_a_second_date_replaces_the_first_rather_than_widening_it() {
+        // The rule `agent:` did not need. Two `date:` tokens intersect (`date_windows` applies
+        // every one of them), so a second chip added beside the first would narrow to the
+        // overlap — usually the smaller span, and for `date:today` under `date:>1mo` nothing at
+        // all. A rail whose second click can empty the list is one nobody clicks twice.
+        let q = Query::typeahead("date:today rust");
+        assert_eq!(q.toggling(Facet::Date, "week"), "date:week rust");
+        assert_eq!(Query::typeahead("date:today").toggling(Facet::Date, ">1mo"), "date:>1mo ");
+        // And the replacement is the whole facet, negations included, so no bound survives to
+        // intersect with the new one.
+        assert_eq!(
+            Query::typeahead("date:>1d -date:today rust").toggling(Facet::Date, "week"),
+            "date:week rust"
+        );
+    }
+
+    #[test]
+    fn the_date_chip_that_is_on_is_the_chip_that_turns_it_off() {
+        assert_eq!(Query::typeahead("date:today rust").toggling(Facet::Date, "today"), "rust");
+        assert_eq!(Query::typeahead("date:week").toggling(Facet::Date, "week"), "");
+    }
+
+    #[test]
+    fn two_spellings_of_one_window_are_one_selection() {
+        // `date:week` and `date:<7d` resolve to the same `DateSpec`, so a rail that compared the
+        // text would draw the week chip dark under a query filtering to exactly it — and then
+        // add a second token when it was clicked. Comparison goes through `Facet::selects`,
+        // which compares windows.
+        assert!(lit("date:<7d", Facet::Date, "week"));
+        assert_eq!(Query::typeahead("date:<7d rust").toggling(Facet::Date, "week"), "rust");
+        // Not every value is another's synonym, which is what makes the above a real test.
+        assert!(!lit("date:<3h", Facet::Date, "week"));
+    }
+
+    #[test]
+    fn turning_a_date_on_clears_a_standing_negation_of_the_same_window() {
+        // `agent:`'s rule, holding for the facet that reaches it by another route: `-date:today`
+        // is not "today selected", so clicking today turns it on — and leaves nothing behind to
+        // intersect the new window down to nothing.
+        let after = Query::typeahead("-date:today rust").toggling(Facet::Date, "today");
+        let q = Query::typeahead(&after);
+        assert_eq!(q.selection(Facet::Date).include, ["today"]);
+        assert!(q.selection(Facet::Date).exclude.is_empty());
+        assert_eq!(q.date_windows(1_785_000_000_000).len(), 1, "one window, not two");
+    }
+
+    #[test]
+    fn every_span_a_rail_offers_is_a_value_this_grammar_parses() {
+        // The constant and its parser are two things, and a span nobody can parse would reach a
+        // client as a chip that filters nothing while counting something.
+        for (value, label) in DATE_SPANS {
+            assert!(DateSpec::parse(value).is_some(), "{value} ({label}) is not a date value");
+            assert!(Query::typeahead(&format!("date:{value}")).rejected().is_empty(), "{value}");
+        }
+        // And they are four different windows, or a rail would draw the same span twice.
+        for (i, (a, _)) in DATE_SPANS.iter().enumerate() {
+            for (b, _) in &DATE_SPANS[i + 1..] {
+                assert!(!Facet::Date.selects(a, b), "{a} and {b} are the same span");
+            }
+        }
+    }
+
+    #[test]
+    fn a_date_value_nothing_can_select_on_lights_no_chip() {
+        // `rejected` already reports it and the SQL already ignores it. What must not happen is
+        // a rail lighting a chip for it, which `selection` would do if it read the token text
+        // rather than the filter the parser made of it.
+        let q = Query::typeahead("date:nope rust");
+        assert!(q.selection(Facet::Date).is_empty());
+        assert_eq!(q.rejected(), ["date:nope"]);
+    }
+
+    #[test]
+    fn one_dir_token_lights_every_directory_it_selects() {
+        // `dir:` is a case-insensitive substring in the SQL, so `dir:web-app` filters to every
+        // directory beneath it. A rail comparing values for equality would draw all of them off
+        // while the list in front of the reader held nothing else — filtering they cannot see,
+        // which is the defect the three-state chip exists to remove.
+        assert!(lit("dir:web-app", Facet::Dir, "/Users/t/dev/web-app"));
+        assert!(lit("dir:web-app", Facet::Dir, "/Users/t/dev/web-app/crates/core"));
+        assert!(!lit("dir:web-app", Facet::Dir, "/Users/t/dev/api-server"));
+        // The other direction is not selection: a token naming something *below* a directory
+        // does not select the directory itself, and the chip stays off.
+        assert!(!lit("dir:web-app/crates", Facet::Dir, "/Users/t/dev/web-app"));
+    }
+
+    #[test]
+    fn clicking_a_lit_directory_off_takes_out_the_token_that_lit_it() {
+        // The corollary of the substring rule, and the reason `strip_value` compares through
+        // `Facet::selects`: leaving `dir:web-app` standing while drawing its chip off would be a
+        // bar that disagrees with the box, which is the one thing §5 forbids.
+        let q = Query::typeahead("dir:web-app rust");
+        assert_eq!(q.toggling(Facet::Dir, "/Users/t/dev/web-app"), "rust");
+        // A token that selects a *different* directory is not touched, and the new value joins
+        // it: `dir:` values union exactly as `agent:` values do, so two directories are two
+        // things to show rather than an intersection that is always empty.
+        let mixed = Query::typeahead("dir:api-server rust");
+        let both = mixed.toggling(Facet::Dir, "/Users/t/dev/web-app");
+        assert_eq!(both, "dir:api-server,/Users/t/dev/web-app rust");
+        assert!(lit(&both, Facet::Dir, "/Users/t/dev/web-app"));
+        assert!(lit(&both, Facet::Dir, "/Users/t/dev/api-server"));
+    }
+
+    // ---- chat-search-me9.8.16: a separator inside a value ----
+
+    #[test]
+    fn a_quoted_value_holds_the_separators_that_would_otherwise_end_it() {
+        // The bug, stated as the two readings it used to produce. `dir:/Users/t/Mobile Documents`
+        // parsed as the filter `dir:/users/t/mobile` *plus* the free term `documents`, and
+        // `dir:/a,b/c` as two directories, the first of which is a substring of most paths on the
+        // machine. Both filtered, neither said so.
+        let spaced = Query::typeahead(r#"dir:"/Users/t/Mobile Documents" rust"#);
+        assert_eq!(spaced.selection(Facet::Dir).include, ["/users/t/mobile documents"]);
+        assert_eq!(spaced.terms(), ["rust"], "and none of the path is a word to find");
+
+        let comma = Query::typeahead(r#"dir:"/Users/t/a,b/c""#);
+        assert_eq!(comma.selection(Facet::Dir).include, ["/users/t/a,b/c"], "one value, not two");
+
+        // Unquoted, both still parse the way they always did. Quoting is what a reader reaches
+        // for, not a rule applied behind them.
+        assert_eq!(
+            Query::typeahead("dir:/Users/t/Mobile Documents").selection(Facet::Dir).include,
+            ["/users/t/mobile"]
+        );
+    }
+
+    #[test]
+    fn a_directory_a_separator_cannot_be_typed_into_survives_toggling_both_ways() {
+        // The acceptance criterion of `chat-search-me9.8.16`, and what `facets::dirs` needs to
+        // stop dropping such a directory: the click writes a token, the token parses back to
+        // exactly the path that was handed in, and clicking again takes it out whole.
+        let names = |text: &str| Query::typeahead(text).selection(Facet::Dir).include;
+        for path in [
+            "/Users/t/Mobile Documents",
+            "/Users/t/dev/a,b",
+            "/Users/t/dev/say \"hi\"",
+            "/Users/t/!urgent",
+        ] {
+            let on = Query::typeahead("rust").toggling(Facet::Dir, path);
+            assert!(
+                names(&on).contains(&path.to_lowercase()),
+                "{path:?} came back as {on:?}, which is not a token for it"
+            );
+            assert_eq!(Query::typeahead(&on).terms(), ["rust"], "{path:?} leaked into the terms");
+            assert_eq!(
+                Query::typeahead(&on).toggling(Facet::Dir, path),
+                "rust",
+                "{path:?} did not come back out"
+            );
+        }
+    }
+
+    #[test]
+    fn a_value_is_quoted_only_when_it_has_to_be() {
+        // The box is the one place a filter is visible, so a rewriter that quoted everything
+        // would be restyling text the user also types in. Quotes appear exactly where the
+        // grammar would otherwise end the value early.
+        let click = |path: &str| Query::typeahead("rust").toggling(Facet::Dir, path);
+        assert_eq!(click("/Users/t/dev/web-app"), "dir:/Users/t/dev/web-app rust");
+        assert_eq!(click("/Users/t/Mobile Documents"), r#"dir:"/Users/t/Mobile Documents" rust"#);
+        // A `"` in a path is written doubled, the same escape `match_expr` already uses for FTS5
+        // rather than a second one to learn.
+        assert_eq!(click(r#"/Users/t/say "hi""#), r#"dir:"/Users/t/say ""hi""" rust"#);
+        // A `!` is only the inline negation mark at the *front* of a value, so it is quoted there
+        // and left alone anywhere else. Unquoted, adding such a value would spell dropping it.
+        assert_eq!(click("!urgent"), r#"dir:"!urgent" rust"#);
+        assert_eq!(click("/Users/t/!urgent"), "dir:/Users/t/!urgent rust");
+    }
+
+    #[test]
+    fn an_inline_bang_negates_from_outside_the_quotes_and_not_from_within() {
+        // Which is the difference between excluding the directory `a b` and selecting one called
+        // `!a b`. The mark is read off the raw piece before the quoting comes off, so the two are
+        // distinguishable rather than one of them being unsayable.
+        let excluded = Query::typeahead(r#"dir:!"/t/a b""#).selection(Facet::Dir);
+        assert_eq!(excluded.exclude, ["/t/a b"]);
+        assert!(excluded.include.is_empty());
+
+        let named = Query::typeahead(r#"dir:"!/t/a b""#).selection(Facet::Dir);
+        assert_eq!(named.include, ["!/t/a b"]);
+        assert!(named.exclude.is_empty());
+    }
+
+    #[test]
+    fn quoting_is_lexical_so_free_text_tokenises_exactly_as_it_did() {
+        // The blast radius of a change to the word splitter, bounded on purpose: a quoted run is
+        // held together for the *filter* grammar's sake and buys no phrase search, so the ranker
+        // sees the same terms in the same order it saw before. The 31 pinned expressions above
+        // are the wider version of this claim.
+        assert_eq!(Query::typeahead(r#"say "hi""#).terms(), ["say", "hi"]);
+        assert_eq!(Query::typeahead(r#"borrow "checker rust""#).terms(), ["borrow", "checker", "rust"]);
+        assert_eq!(Query::typeahead(r#""deep learn""#).match_expr(), "\"deep\" \"learn\"");
+    }
+
+    #[test]
+    fn an_unterminated_quote_reaches_the_end_of_the_text_rather_than_failing() {
+        // Half-typed is the normal state of a typeahead, so the open run is read as running to
+        // the end — the same reading a shell gives it, and the one that closes the moment the
+        // second quote is typed.
+        let open = Query::typeahead(r#"dir:"/Users/t/Mobile Doc"#);
+        assert_eq!(open.selection(Facet::Dir).include, ["/users/t/mobile doc"]);
+        assert!(open.terms().is_empty(), "nothing inside the run is a word to find");
+        // And every prefix of the finished token is safe, which is the invariant every keystroke
+        // in a typeahead relies on.
+        let finished = r#"dir:"/Users/t/Mobile Documents" rust"#;
+        for end in 1..=finished.len() {
+            let Some(prefix) = finished.get(..end) else { continue };
+            let q = Query::typeahead(prefix);
+            let _ = q.match_expr();
+            let _ = q.rejected();
+            let _ = q.selection(Facet::Dir);
+            let _ = q.toggling(Facet::Dir, "/Users/t/dev/web-app");
+        }
+    }
+
+    #[test]
+    fn widening_a_token_whose_quote_is_still_open_starts_a_new_one_instead() {
+        // The comma this would append lands *inside* the open run, making one value of two — so
+        // the half-typed token is left exactly as it was and the click gets a token of its own.
+        // What the reader sees is their own typing untouched beside the chip they pressed.
+        let after = Query::typeahead(r#"dir:"/Users/t/Mob"#).toggling(Facet::Dir, "/t/dev/api");
+        assert_eq!(after, r#"dir:/t/dev/api dir:"/Users/t/Mob"#);
+        let both = Query::typeahead(&after).selection(Facet::Dir);
+        assert_eq!(both.include, ["/t/dev/api", "/users/t/mob"], "and both are in force");
+    }
+
+    #[test]
+    fn a_quoted_value_still_widens_and_narrows_beside_unquoted_ones() {
+        // One token holding both kinds, because the comma between them is outside every run and
+        // `strip_value` re-emits the pieces it keeps as they were typed.
+        let one = Query::typeahead("rust").toggling(Facet::Dir, "/t/Mobile Documents");
+        let two = Query::typeahead(&one).toggling(Facet::Dir, "/t/dev/api");
+        assert_eq!(two, r#"dir:"/t/Mobile Documents",/t/dev/api rust"#);
+        assert_eq!(
+            Query::typeahead(&two).selection(Facet::Dir).include,
+            ["/t/mobile documents", "/t/dev/api"]
+        );
+        // Taking the unquoted one back out leaves the quoted one spelled as it was.
+        assert_eq!(
+            Query::typeahead(&two).toggling(Facet::Dir, "/t/dev/api"),
+            r#"dir:"/t/Mobile Documents" rust"#
+        );
+    }
+
+    #[test]
+    fn a_directory_is_written_back_in_the_case_it_arrived_in() {
+        // The parser folds case, so `dir:/Users/T` and `dir:/users/t` filter identically — but
+        // the box is the one place the filter is visible, and a path lowercased there reads as a
+        // path that is wrong. The rewriter gives back what it was handed and compares folded.
+        let after = Query::typeahead("rust").toggling(Facet::Dir, "/Users/T/dev/Web-App");
+        assert_eq!(after, "dir:/Users/T/dev/Web-App rust");
+        assert!(lit(&after, Facet::Dir, "/Users/T/dev/Web-App"), "and it comes back lit");
+        assert_eq!(
+            Query::typeahead(&after).toggling(Facet::Dir, "/Users/T/dev/Web-App"),
+            "rust",
+            "and back off"
+        );
+    }
+
+    // ---- chat-search-me9.18: the window a drag produces, said in the grammar ----
+
+    /// Named rather than `Local`, for the reason `time`'s tests are: a span that crosses a DST
+    /// boundary has to mean the same thing wherever this runs.
+    const LA: chrono_tz::Tz = chrono_tz::America::Los_Angeles;
+
+    /// A wall clock in Los Angeles during 2026, as the epoch millis the index stores.
+    fn at(month: u32, day: u32, hour: u32, minute: u32) -> i64 {
+        use chrono::TimeZone as _;
+        LA.with_ymd_and_hms(2026, month, day, hour, minute, 0).unwrap().timestamp_millis()
+    }
+
+    /// Midday on 2026-08-05, so that `today` and an absolute span are both askable.
+    fn now() -> i64 {
+        at(8, 5, 12, 0)
+    }
+
+    /// The one window a query's `date:` token resolves to.
+    fn window(text: &str) -> Window {
+        let windows = Query::typeahead(text).date_windows_in(&LA, now());
+        assert_eq!(windows.len(), 1, "{text} names one window");
+        windows[0].0
+    }
+
+    #[test]
+    fn an_absolute_span_is_the_half_open_pair_of_instants_it_names() {
+        // The gap this bead exists for: a scrubber hands over two edges, and until now the
+        // grammar could only say "younger than" and "older than" an age measured from now.
+        // Half-open and `..`-separated because `cs pick --driven` already reads a span of the
+        // query log that way, and two spellings of one idea is how the local-date bug started.
+        let w = window("date:2026-07-28..2026-08-02");
+        assert_eq!(w.from, Some(at(7, 28, 0, 0)));
+        assert_eq!(w.until, Some(at(8, 2, 0, 0)), "the 2nd opens the span it closes");
+    }
+
+    #[test]
+    fn a_lone_date_is_the_day_it_names_and_the_span_that_spells_it() {
+        // The form every reader tries first. It is the same selection as the two-day span, not
+        // merely one that resolves alike, so a chip lit by one is turned off by the other.
+        assert_eq!(window("date:2026-07-28"), window("date:2026-07-28..2026-07-29"));
+        assert!(lit("date:2026-07-28", Facet::Date, "2026-07-28..2026-07-29"));
+        assert_eq!(
+            Query::typeahead("date:2026-07-28 rust").toggling(Facet::Date, "2026-07-28..2026-07-29"),
+            "rust"
+        );
+        // An instant is not a span, so the finer spellings are bounds and nothing else: a lone
+        // one would have to guess whether the reader meant that second or that day.
+        assert_eq!(Query::typeahead("date:2026-07-28t09:30").rejected(), ["date:2026-07-28t09:30"]);
+    }
+
+    #[test]
+    fn an_open_ended_span_bounds_the_edge_it_names_and_leaves_the_other() {
+        // What a drag that reaches the end of the track produces, and the absolute counterpart
+        // of `date:<3h` — which cannot say "since the morning I started" at all.
+        assert_eq!(window("date:2026-07-28.."), Window { from: Some(at(7, 28, 0, 0)), until: None });
+        assert_eq!(window("date:..2026-08-02"), Window { from: None, until: Some(at(8, 2, 0, 0)) });
+    }
+
+    #[test]
+    fn an_absolute_span_says_the_same_thing_tomorrow() {
+        // Why this is a variant rather than a spelling of `date:<Nd`. A range the reader chose
+        // by looking at a timeline is a decision about the corpus, so it must not drift with the
+        // clock — and the relative forms must still drift, or `date:today` would be wrong by
+        // morning. Same query, two clocks a month apart.
+        let absolute = |now| Query::typeahead("date:2026-07-28..2026-08-02").date_windows_in(&LA, now);
+        assert_eq!(absolute(now()), absolute(now() + 30 * 86_400_000));
+        let relative = |now| Query::typeahead("date:today").date_windows_in(&LA, now);
+        assert_ne!(relative(now()), relative(now() + 30 * 86_400_000), "and a named day still moves");
+    }
+
+    #[test]
+    fn a_span_is_measured_in_civil_days_across_a_dst_boundary() {
+        // `time`'s rule, reaching the grammar: Los Angeles springs forward at 02:00 on
+        // 2026-03-08, so that day is 23 hours and the two days from the 7th are 47. A range
+        // resolved as two fixed-width offsets would put both edges an hour out for half a year.
+        let w = window("date:2026-03-07..2026-03-09");
+        assert_eq!(w.until.unwrap() - w.from.unwrap(), 47 * 3_600_000);
+    }
+
+    #[test]
+    fn a_dragged_window_comes_back_as_text_that_names_it() {
+        // The round trip a scrubber depends on, and the reason `Window::value_in` is here rather
+        // than in whichever client draws the timeline: the text is the filter state, so a client
+        // that could not write its drag down would be filtering by something the box never shows.
+        for (from, until) in [
+            (Some(at(7, 28, 0, 0)), Some(at(8, 2, 0, 0))),
+            (Some(at(7, 28, 9, 30)), Some(at(8, 2, 17, 0))),
+            (Some(at(7, 28, 9, 30)), None),
+            (None, Some(at(8, 2, 0, 0))),
+        ] {
+            let dragged = Window { from, until };
+            let value = dragged.value_in(&LA).expect("a bounded window can be written");
+            let spec = DateSpec::parse(&value).expect("and read back");
+            assert_eq!(spec.window_in(&LA, now()), Some(dragged), "{value}");
+
+            // And it survives the box, which is the half a `.parse()` test would miss: the query
+            // text is case-folded before it is read, so the `T` this writes arrives as a `t`.
+            let text = Query::typeahead("rust").toggling(Facet::Date, &value);
+            assert_eq!(Query::typeahead(&text).date_windows_in(&LA, now()), [(dragged, false)]);
+            assert_eq!(Query::typeahead(&text).terms(), ["rust"], "{value} leaked into the terms");
+        }
+    }
+
+    #[test]
+    fn an_edge_on_a_midnight_is_written_as_the_date_alone() {
+        // A filter is only editable if it is legible. `date:2026-07-28..2026-08-02` is a line
+        // someone can change one digit of; `date:2026-07-28T00:00:00..2026-08-02T00:00:00` is a
+        // line they select and retype.
+        let value = |from, until| Window { from, until }.value_in(&LA);
+        assert_eq!(
+            value(Some(at(7, 28, 0, 0)), Some(at(8, 2, 0, 0))).as_deref(),
+            Some("2026-07-28..2026-08-02")
+        );
+        assert_eq!(
+            value(Some(at(7, 28, 9, 30)), None).as_deref(),
+            Some("2026-07-28T09:30:00..")
+        );
+        assert_eq!(value(None, Some(at(8, 2, 0, 0))).as_deref(), Some("..2026-08-02"));
+        // A window naming nothing has no text: unbounded at both ends is not a filter, and one
+        // that ends before it starts is the drag whose edges arrived in mouse order.
+        assert_eq!(value(None, None), None);
+        assert_eq!(value(Some(at(8, 2, 0, 0)), Some(at(7, 28, 0, 0))), None);
+        assert_eq!(value(Some(at(8, 2, 0, 0)), Some(at(8, 2, 0, 0))), None);
+    }
+
+    #[test]
+    fn a_rounded_edge_widens_the_window_rather_than_narrowing_it() {
+        // The grammar's finest bound is the second and a drag lands on a millisecond, so the
+        // text names a window up to a second wider than the one drawn. Outward on purpose: a
+        // conversation dragged across and then filtered out is a bug nobody can see, where a
+        // millisecond of slack at each edge is one nobody can measure.
+        let dragged = Window { from: Some(at(7, 28, 9, 30) + 400), until: Some(at(8, 2, 0, 0) + 1) };
+        let value = dragged.value_in(&LA).unwrap();
+        assert_eq!(value, "2026-07-28T09:30:00..2026-08-02T00:00:01");
+        let back = DateSpec::parse(&value).unwrap().window_in(&LA, now()).unwrap();
+        assert!(back.from.unwrap() <= dragged.from.unwrap(), "the lower edge only ever drops");
+        assert!(back.until.unwrap() >= dragged.until.unwrap(), "and the upper edge only rises");
+    }
+
+    #[test]
+    fn a_dragged_range_replaces_a_standing_date_and_lights_none_of_the_rail() {
+        // A range is a `date:` token like any other, so `Facet::tokens_intersect` already says
+        // what a second one means: it replaces. What the rail does about it is the honest pair
+        // this grammar was already built for — no chip lit, and the All chip off, because
+        // something is filtering and it is not one of the four.
+        let text = Query::typeahead("date:today rust").toggling(Facet::Date, "2026-07-28..2026-08-02");
+        assert_eq!(text, "date:2026-07-28..2026-08-02 rust");
+        for (span, _) in DATE_SPANS {
+            assert!(!lit(&text, Facet::Date, span), "{span} should be dark under an absolute range");
+        }
+        assert!(!Query::typeahead(&text).selection(Facet::Date).is_empty(), "but something is on");
+        assert_eq!(
+            Query::typeahead(&text).toggling(Facet::Date, "2026-07-28..2026-08-02"),
+            "rust",
+            "and the range that is on is the one that turns it off"
+        );
     }
 }

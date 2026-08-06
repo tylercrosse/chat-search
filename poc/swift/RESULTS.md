@@ -13,6 +13,37 @@ one reports **min alongside p50 and p95**. Contention only ever adds time, so th
 closest available reading of the uncontended cost and the gap to p50 says how contaminated the
 rest of the row is. Where a conclusion depends on a p95, that is said out loud.
 
+**What has since changed, and what has not.** Nothing below is restated — these are measurements
+of a particular binary on a particular day and rewriting them would destroy the only thing they
+are good for. But four of the findings have been acted on since, and reading them as current
+would be reading them wrong (`chat-search-me9.8.7` and `chat-search-me9.8.1`, 2026-08-05):
+
+- **§1's headline is superseded, on two counts.** It is a number about this spike, whose window
+  carries a container picker and a bench footer the app does not; and it was taken against a
+  3,059-conversation index and a `cs` a day older. Re-measured on the promoted target the same
+  way, keystroke→frame p50 is **62–115 ms** rather than 29–70, and the spike run back to back
+  against the same index gives the same figures — so the shell is not the difference. The query
+  is: sqlite p50 at `--limit 60 --prefix` went 21.6 → 44.8 ms over the same window
+  (`chat-search-tpf`). The current numbers, and the method, are in
+  [`apps/macos/README.md`](../../apps/macos/README.md). What has not moved is main-thread lag:
+  p50 0.6 ms with 0–1 missed vsyncs, then and now.
+- **§4 is retired.** `chat-search-me9.28` made a rebuild assemble a sibling index and swap it in
+  whole, so no query is ever answered out of a half-built one, and the refusal is now JSON on
+  stdout carrying a `code` — `no_index`, `building`, `index_stale` — instead of one English
+  sentence on stderr. The client greps nothing: `IndexHealth.classify` reads the code. `cs` also
+  no longer creates an empty database at a `--db` path that does not exist. What survives is
+  smaller and stated honestly: a zero-byte file and 4 KB of the letter `A` still produce the same
+  message as a genuinely old schema, but all three are now `index_stale` rather than "no index",
+  which is the distinction a user needs and the one that was missing.
+- **§5's three contract defects are written down**, in `docs/JSON-CONTRACT.md`, which the Rust
+  suite now parses and enforces — and the span encoding travels on the wire as `mark_offsets`
+  (`chat-search-me9.33`) rather than in a paragraph, so this client reads it instead of assuming.
+- **The envelope moved.** `chat-search-me9.36` renamed `Group.hits` to `Group.matches` and made it
+  message fields only. Every number above predates that and none depends on it — but the spike
+  could not decode a single response for the release in between, and nothing noticed, because
+  `poc/` is outside the cargo workspace. `swift run -c release cs-spike contract` now exists so
+  that the next move is caught by something other than a person remembering.
+
 ---
 
 ## 1. Does typing feel fast when every keystroke spawns a process?

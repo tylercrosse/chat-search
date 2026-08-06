@@ -22,25 +22,19 @@
 //! exports are unpacked — so it is hand-added to `config.toml` rather than auto-detected by
 //! `candidate_sources`, which could only ever guess at a path.
 //!
-//! ```toml
-//! [[sources]]
-//! id = "google-takeout"
-//! path = "~/dev/sandbox/chat-history/data"   # the directory exports unpack *into*
-//! layout = "mirror"
-//! include = [
-//!   "**/My Activity/*/MyActivity.json",
-//!   "**/Conversation History/conversation_*.txt",
-//!   "**/Chat History/*.html",
-//! ]
-//! ```
+//! The block to paste lives in `cs_archive::unreachable::SERVER_SIDE`, and `cs init` and
+//! `cs archive` print it (chat-search-a7k.22). It used to live here, where nothing could print
+//! it — which is how a source that reaches the index by no other route stayed a footnote in an
+//! importer nobody reads before configuring one. This module keeps the reasoning; the register
+//! keeps the values, because two copies of a glob is one glob that quietly stops matching.
 //!
 //! Two things about those globs are deliberate. They lead with `**/` rather than naming the
 //! export directory, because Takeout unpacks to a bare `Takeout/` every time and the only way
 //! to keep two exports apart is to rename them — so the pattern cannot assume what they are
 //! called, and `Takeout*` would silently miss a directory renamed to lowercase. And they name
 //! conversation files rather than sweeping the tree, because 311 MB of the 330 MB reference
-//! export is NotebookLM source PDFs and `.wav` audio overviews. The globs above capture
-//! 9.5 MB of the 330 and leave the rest on disk.
+//! export is NotebookLM source PDFs and `.wav` audio overviews. They capture 9.5 MB of the 330
+//! and leave the rest on disk.
 //!
 //! # Why one source id and not four
 //!
@@ -63,8 +57,12 @@
 //! not do, because a conversation id must be permanent and an id derived from a heuristic
 //! changes the day the heuristic does. Every conversation in the corpus would get a new id
 //! the first time someone tuned the gap threshold, and the archive would gain a duplicate
-//! copy of all of it. Turning the log back into threads belongs at *read* time, where being
-//! wrong is free, and is filed as chat-search-o1i.5.
+//! copy of all of it.
+//!
+//! Turning the log back into chats happens at *read* time instead, where being wrong is free:
+//! [`cs_core::sittings`] folds records less than 30 minutes apart into one **sitting** and the
+//! search layer returns it as one row. Nothing it computes is stored, and nothing it computes
+//! is an id — which is the whole reason the two halves are separate (chat-search-o1i.5).
 //!
 //! `native_id` is therefore the record's own `time`. It is unique — 1,173 and 145 distinct
 //! within each file, and zero collisions across them, measured — it is a property of the
@@ -145,7 +143,8 @@ fn activity_record(logical_path: &str, record: &Value) -> Option<Conversation> {
         .and_then(Value::as_array)
         .map(|items| items.iter().filter_map(|i| text_field(i, "html")).collect())
         .unwrap_or_default();
-    let mut assistant_text = to_text(&response_html.join("\n"));
+    let response = to_text(&response_html.join("\n"));
+    let mut assistant_text = answer_only(&response).to_string();
 
     // `subtitles` is two things wearing one name: real web citations, and display names for
     // the local attachments above. Only the former is worth keeping — the latter is already
@@ -189,7 +188,7 @@ fn activity_record(logical_path: &str, record: &Value) -> Option<Conversation> {
         // No model is recorded anywhere in the export — not per record, not per file. Left
         // absent rather than filled with "gemini", which would assert a precision the data
         // does not have.
-        model: None,
+        declared_model: None,
         surface,
         forked_from_native_id: None,
         head_native_id: None,
@@ -233,6 +232,51 @@ fn spoken_text(title: &str) -> Option<String> {
         }
     }
     non_empty(title.to_string())
+}
+
+/// The answer, with AI Mode's echo of the question above it removed (chat-search-o1i.6).
+///
+/// Every AI Mode response opens by re-rendering the prompt — 129 of the 129 records that
+/// have one, against 0 of Gemini Apps' 1,070:
+///
+/// ```text
+/// Your prompt:
+/// do you tip the gas people in oregon
+/// Search's response:
+/// Tipping gas station attendants in Oregon is not expected…
+/// ```
+///
+/// The prompt is already the user message, so keeping the echo indexes every word the person
+/// typed twice, and bm25 reads that as a document where those exact terms are twice as
+/// frequent as they really are — inflating these 129 against the whole corpus for precisely
+/// the words most likely to be searched for.
+///
+/// Matched on structure rather than on the prompt text, because the echo is Google's own
+/// re-rendering and is not byte-identical to the title: the two records whose prompt runs to
+/// several lines keep `\r\n` in the title and arrive as separate paragraphs here. Scanning
+/// forward to the response marker instead of dropping a fixed two lines is what keeps those
+/// whole.
+///
+/// Only the *leading* echo goes. 49 of the 129 records hold a follow-up turn or more in the
+/// same blob, each with its own `Your prompt:` — but those prompts appear nowhere else, so
+/// they are counted once already, and the markers are the only trace left of where one turn
+/// ends and the next begins.
+fn answer_only(response: &str) -> &str {
+    // Anchored on the first line: a blind strip would eat the opening two lines of all 1,070
+    // Gemini Apps responses, which never carry a marker.
+    if response.lines().next() != Some("Your prompt:") {
+        return response;
+    }
+    let mut consumed = 0;
+    for line in response.split_inclusive('\n') {
+        consumed += line.len();
+        if line.trim_end() == "Search's response:" {
+            return &response[consumed..];
+        }
+    }
+    // An echo that opens and never closes: keep the response whole rather than guess where
+    // the answer starts. Indexing a prompt twice is the smaller loss.
+    response
 }
 
 /// Cited web sources, excluding the entries that are really attachment display names.
@@ -342,7 +386,7 @@ fn workspace(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         },
         cwd: None,
         git_branch: None,
-        model: None,
+        declared_model: None,
         surface: Some("gemini-workspace".to_string()),
         forked_from_native_id: None,
         head_native_id: None,
@@ -451,7 +495,7 @@ fn notebook_lm(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         },
         cwd: None,
         git_branch: None,
-        model: None,
+        declared_model: None,
         surface: Some("notebooklm".to_string()),
         forked_from_native_id: None,
         head_native_id: None,
@@ -513,6 +557,8 @@ fn message(
         role,
         kind: Kind::Prose,
         ts,
+        // Same silence as the conversation level: the export never names a model.
+        model: None,
         text,
     }
 }
@@ -633,6 +679,49 @@ mod tests {
         // "Searched for" is not a prompt verb, so the title is kept whole rather than
         // having a prefix guessed off it.
         assert_eq!(c[0].messages[0].text, "Searched for do you tip in oregon");
+    }
+
+    #[test]
+    fn an_ai_mode_answer_starts_at_the_answer_rather_than_repeating_the_prompt() {
+        // The two shapes Google writes the echo in — the answer sharing the marker's
+        // paragraph, and the answer opening one of its own — have to strip alike, since
+        // both render the marker onto a line by itself.
+        let c = import_all(
+            "Takeout-gemini/My Activity/AI Mode/MyActivity.json",
+            br#"[{"header":"AI Mode","title":"Searched for do you tip in oregon",
+                 "time":"2026-08-02T01:37:21.314Z",
+                 "safeHtmlItem":[{"html":"<p><strong>Your prompt:</strong><br>\ndo you tip in oregon</p>\n<p><strong>Search&#39;s response:</strong><br>\nTipping is <strong>not customary</strong> here.</p>"}]},
+                {"header":"AI Mode","title":"Searched for casting a podcast",
+                 "time":"2026-08-02T02:11:04.000Z",
+                 "safeHtmlItem":[{"html":"<p><strong>Your prompt:</strong><br>\ncasting a podcast</p>\n<p><strong>Search&#39;s response:</strong></p>\n<h2>Casting a podcast</h2>\n<p>Start with the host.</p>"}]}]"#,
+        );
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0].messages[0].text, "Searched for do you tip in oregon");
+        assert_eq!(c[0].messages[1].text, "Tipping is not customary here.");
+        assert_eq!(c[1].messages[1].text, "Casting a podcast\nStart with the host.");
+    }
+
+    #[test]
+    fn the_echoed_prompt_is_found_by_its_shape_rather_than_by_a_fixed_line_count() {
+        // A pasted stack trace or a LaTeX block is echoed over several paragraphs, so the
+        // strip runs to the response marker instead of dropping two lines and hoping.
+        assert_eq!(
+            answer_only("Your prompt:\nIn the attention calculation\n$$ QK^T $$\nWhy divide?\nSearch's response:\nIt keeps the products small.\nMore."),
+            "It keeps the products small.\nMore."
+        );
+        // 49 of the 129 records hold a follow-up turn in the same blob. That prompt is in no
+        // other message, so it is counted once already and the marker stays as its boundary.
+        assert_eq!(
+            answer_only("Your prompt:\nq\nSearch's response:\nA.\nYour prompt:\nfollow up\nSearch's response:\nB."),
+            "A.\nYour prompt:\nfollow up\nSearch's response:\nB."
+        );
+        // Gemini Apps opens on its first sentence, and losing two lines of 1,070 answers to
+        // a strip that fires on anything is the failure this guards against.
+        assert_eq!(answer_only("Yes.\nAlso no."), "Yes.\nAlso no.");
+        assert_eq!(answer_only("Your prompt is unusual.\nHere is why."), "Your prompt is unusual.\nHere is why.");
+        // Opened and never closed: keep the whole thing rather than guess where it starts.
+        assert_eq!(answer_only("Your prompt:\nq\nAn answer, unmarked."), "Your prompt:\nq\nAn answer, unmarked.");
+        assert_eq!(answer_only(""), "");
     }
 
     #[test]

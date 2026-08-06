@@ -239,23 +239,14 @@ impl Block {
     }
 }
 
-/// The transcript read, named so the test that pins its plan reads the statement [`load`] runs
-/// rather than a copy of it.
-///
-/// [`READING_ORDER`] is shared rather than repeated because the shape on a search row has to
-/// come out in the same order as this. Unlike the shape's query this one selects `text`, so it
-/// can never be index-only — what `idx_message_reading` buys here is the ordering, which is
-/// the temp b-tree it used to build over every message of the conversation before returning
-/// the first one.
-pub(crate) fn load_sql() -> String {
-    format!(
-        "SELECT id, role, kind, seq, on_head_path, text, is_sidechain, thread_key, is_error
-         FROM message WHERE conv_id = ?1 AND on_head_path = 1
-         {READING_ORDER}"
-    )
-}
-
 /// Read one conversation's messages, with `terms` located in each.
+///
+/// **The whole sitting when the id is part of one** (chat-search-o1i.8). Google Takeout shredded
+/// a chat into one record per turn, and a reader should not have to know which upstream tool
+/// happened to serialize a conversation in one piece — so the records come back concatenated,
+/// as the one transcript every other source already hands over. The seam is not erased: it is
+/// still `Sitting.members` on whatever answer carries this, and every block still names the
+/// record it came from in `msg_id`. What it is not is structural.
 ///
 /// Head path only. A message edited away is still searchable and still indexed, but returning it
 /// inline without saying so would present an abandoned branch as the conversation — see the
@@ -265,23 +256,11 @@ pub(crate) fn load_sql() -> String {
 /// caller marks exactly what the ranker matched, trailing prefix star included. An empty slice
 /// marks nothing, which is the honest state for a query that was never run.
 pub fn load(conn: &Connection, conv_id: &str, terms: &[String]) -> rusqlite::Result<Vec<Block>> {
-    let mut stmt = conn.prepare_cached(&load_sql())?;
-    let mut blocks = stmt
-        .query_map(rusqlite::params![conv_id], |r| {
-            Ok(Block {
-                msg_id: r.get(0)?,
-                role: r.get(1)?,
-                kind: r.get(2)?,
-                seq: r.get(3)?,
-                on_path: r.get::<_, i64>(4)? != 0,
-                text: r.get(5)?,
-                is_sidechain: r.get::<_, i64>(6)? != 0,
-                thread_key: r.get(7)?,
-                is_error: r.get::<_, i64>(8)? != 0,
-                marks: Vec::new(),
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    crate::sittings::ensure(conn)?;
+    let mut blocks = Vec::new();
+    for record in crate::sittings::resolve(conn, conv_id)? {
+        blocks.append(&mut read_record(conn, &record)?);
+    }
 
     // Only what is drawn: a successful `tool_result` is never rendered, so locating its matches
     // would buy nothing, and this corpus is a third such messages by count.
@@ -315,6 +294,62 @@ pub fn load(conn: &Connection, conv_id: &str, terms: &[String]) -> rusqlite::Res
     Ok(blocks)
 }
 
+/// The transcript read, named so the test that pins its plan reads the statement
+/// [`read_record`] runs rather than a copy of it.
+///
+/// Unlike the shape's query this one selects `text`, so it can never be index-only — what
+/// `idx_message_reading` buys here is the ordering, which is otherwise a temp b-tree over
+/// every message of the conversation before the first one comes back. The `LEFT JOIN` onto
+/// the sitting table arrived after that was measured and does not cost it: the join is on a
+/// temp table keyed by `conv_id` and the ordering still comes from the index, which is what
+/// the test in [`crate::schema`] is there to keep true.
+pub(crate) fn read_record_sql() -> String {
+    format!(
+        "SELECT m.id, m.role, m.kind, {position}, m.on_head_path, m.text, m.is_sidechain,
+                m.thread_key, m.is_error
+         FROM message m
+         {join}
+         WHERE m.conv_id = ?1 AND m.on_head_path = 1
+         {READING_ORDER}",
+        position = crate::sittings::POSITION,
+        join = crate::sittings::OF_MESSAGE,
+    )
+}
+
+/// One record's messages, unmarked, in [`READING_ORDER`].
+///
+/// Per record and concatenated by the caller rather than widened into one `IN (...)` query, for
+/// the reason [`crate::search`]'s `fill_shape` does the same with bands: the order messages are
+/// read in lives in `READING_ORDER`, and an `ORDER BY` that had to interleave the fold as well
+/// would be that rule written down twice. The concatenation order is the sitting's, which is
+/// what [`crate::sittings::resolve`] already returns.
+///
+/// `seq` is [`crate::sittings::POSITION`] — the message's place in the *row*, counting from the
+/// start of the sitting. Without it the second record's turns would land on 0 and 1 again, and a
+/// client lining `Group.match_seqs` up against this transcript would mark the wrong messages.
+/// The `LEFT JOIN` finds nothing for an ordinary conversation, so that expression is `seq + 0`
+/// and nothing outside the Takeout records moves.
+fn read_record(conn: &Connection, conv_id: &str) -> rusqlite::Result<Vec<Block>> {
+    let mut stmt = conn.prepare_cached(&read_record_sql())?;
+    let blocks = stmt
+        .query_map(rusqlite::params![conv_id], |r| {
+            Ok(Block {
+                msg_id: r.get(0)?,
+                role: r.get(1)?,
+                kind: r.get(2)?,
+                seq: r.get(3)?,
+                on_path: r.get::<_, i64>(4)? != 0,
+                text: r.get(5)?,
+                is_sidechain: r.get::<_, i64>(6)? != 0,
+                thread_key: r.get(7)?,
+                is_error: r.get::<_, i64>(8)? != 0,
+                marks: Vec::new(),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(blocks)
+}
+
 /// Distinct strands in this conversation.
 pub fn thread_count(blocks: &[Block]) -> usize {
     let mut keys: Vec<&str> = blocks.iter().map(|b| b.thread_key.as_str()).collect();
@@ -334,10 +369,24 @@ pub struct Transcript {
     /// cannot detect any other way — a rename breaks loudly and a new field is ignored, but a
     /// field that quietly starts meaning something else breaks silently.
     pub v: u32,
+    /// The conversation this is a transcript of — the record that *opened* it when `sitting` is
+    /// set, which is the same id `cs search` puts on the row.
+    ///
+    /// So it is not always the id that was asked for: `cs show` on any member of a sitting
+    /// answers for the whole sitting, and echoing the argument back would name one record of
+    /// the transcript as though it were all of it. A sitting acquires no id of its own (ADR 16)
+    /// and the opener's is real and permanent.
     pub conv_id: String,
     /// What the blocks were marked against, after the query grammar had its say. Emitted so a
     /// client can show *why* something is highlighted without re-parsing the query.
     pub terms: Vec<String>,
+    /// Set when these messages are several activity-log records read back as one chat.
+    ///
+    /// The seam kept as data rather than drawn: those records were separate HTTP requests with
+    /// no shared context on Google's side, so the boundary is real information, and a client
+    /// that wants to say "31 records, 30-minute gap" has it. A reader who does not care sees
+    /// one continuous conversation, which is the point of the fold.
+    pub sitting: Option<crate::sittings::Sitting>,
     /// Distinct strands (ADR 4). More than one means this conversation is a DAG and the
     /// messages arrive main-thread-first, each strand contiguous.
     pub threads: usize,
@@ -345,15 +394,18 @@ pub struct Transcript {
     pub count: usize,
     /// How many of those a reader draws. The difference is successful tool results.
     pub drawn: usize,
-    /// How to read `marks`. `"utf8-bytes"` today; a client indexing UTF-16 must convert.
-    /// Named on the wire rather than only in documentation because it is the one place the
-    /// reader's language leaks into the contract, and a silently wrong offset highlights the
-    /// wrong word rather than failing.
+    /// How to read `marks` — [`highlight::OFFSETS`], which is where the reasoning lives and
+    /// which `cs search --json` reads the same answer out of.
     pub mark_offsets: &'static str,
     pub messages: Vec<WireBlock>,
 }
 
-/// One block on the wire: everything stored, plus the two answers core owes a client.
+/// One block on the wire: everything stored, plus the four answers core owes a client.
+///
+/// The four are this module's opening paragraph read out as fields — which messages are drawn,
+/// which band each sits in, which fold by default, and which matches may claim to be the reason
+/// a conversation ranked. Each is a rule a client would otherwise restate, and each restatement
+/// is a chance for two surfaces to draw different conversations out of the same bytes.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct WireBlock {
     #[serde(flatten)]
@@ -364,23 +416,67 @@ pub struct WireBlock {
     pub drawn: bool,
     /// [`Block::mark_kind`], same reason.
     pub mark_kind: MarkKind,
+    /// [`Block::band`] — the same four names `cs search --json` already puts on a row's
+    /// `kind_runs`, said per message because a reader draws bands where a strip draws runs.
+    ///
+    /// A client cannot spell [`band`] for itself without also owning the decisions that make it
+    /// right: that `system` prose is the agent's side rather than a fifth stripe, and that a
+    /// call and its result are one stretch of traffic. Both were already re-derived once, in the
+    /// prototype's JavaScript.
+    pub band: Band,
+    /// How this block folds when the reader has not said otherwise —
+    /// [`Density::default_fold`] at [`Density::Full`], which is the density a reader opens at.
+    ///
+    /// A default and never a state: an explicit per-message fold beats it, and holding that
+    /// override is the client's job because it is session state rather than a property of the
+    /// conversation. [`Density::Outline`] is not answered here — an outline row needs the
+    /// collapsed *form* as well as the fold, and that is chat-search-me9.20.
+    pub fold: Fold,
 }
 
 impl Transcript {
-    pub fn of(conv_id: &str, terms: &[String], blocks: Vec<Block>) -> Self {
+    /// Everything `cs show --json` says about an id, read as one conversation.
+    ///
+    /// The entry point a client goes through, so that resolving the id, loading the messages and
+    /// naming what came back are one decision rather than three a caller has to sequence
+    /// correctly. `cs show` used to make the last of them itself, which is how the id it echoed
+    /// stayed right while the transcript under it was one record of thirty-one.
+    ///
+    /// Empty when there is no such conversation. Telling that from a conversation with nothing
+    /// on its head path is the caller's job — both are `count: 0` here, and only the caller
+    /// knows whether that deserves a nonzero exit.
+    pub fn read(conn: &Connection, conv_id: &str, terms: &[String]) -> rusqlite::Result<Self> {
+        let blocks = load(conn, conv_id, terms)?;
+        let sitting = crate::sittings::Sitting::of(conn, conv_id)?;
+        Ok(Transcript::of(conv_id, terms, blocks, sitting))
+    }
+
+    /// The same thing from parts already in hand, for a caller that read the blocks itself.
+    pub fn of(
+        conv_id: &str,
+        terms: &[String],
+        blocks: Vec<Block>,
+        sitting: Option<crate::sittings::Sitting>,
+    ) -> Self {
+        // Named by the opener rather than by whatever was asked for — see `conv_id`. `members`
+        // is never empty for a `Some`, because `Sitting::of` only builds one from two or more.
+        let conv_id = sitting.as_ref().map_or(conv_id, |s| s.members[0].as_str());
         Transcript {
             v: 1,
             conv_id: conv_id.to_string(),
             terms: terms.to_vec(),
+            sitting,
             threads: thread_count(&blocks),
             count: blocks.len(),
             drawn: blocks.iter().filter(|b| b.drawn()).count(),
-            mark_offsets: "utf8-bytes",
+            mark_offsets: highlight::OFFSETS,
             messages: blocks
                 .into_iter()
                 .map(|block| WireBlock {
                     drawn: block.drawn(),
                     mark_kind: block.mark_kind(),
+                    band: block.band(),
+                    fold: Density::Full.default_fold(&block.kind),
                     block,
                 })
                 .collect(),
@@ -558,6 +654,7 @@ mod tests {
             "claude-code:abc",
             &["borrow".to_string()],
             vec![block("prose", "user", "a", "the borrow checker"), ok, block("reasoning", "assistant", "b", "hm")],
+            None,
         );
         assert_eq!((t.count, t.drawn, t.threads, t.v), (3, 2, 1, 1));
         assert_eq!(t.mark_offsets, "utf8-bytes");
@@ -572,6 +669,38 @@ mod tests {
         // that exists only because Rust needed somewhere to put two computed fields.
         assert_eq!(msgs[0]["kind"], "prose");
         assert_eq!(msgs[0]["msg_id"], "a");
+    }
+
+    #[test]
+    fn the_wire_form_also_answers_band_and_fold_so_a_reader_derives_neither() {
+        // The other two rules a client would otherwise restate. `band` is what colours the
+        // gutter spine beside a message and `fold` is what makes a 900-message agent session
+        // legible; a client that worked either out for itself would be a second copy of §8,
+        // free to disagree with the TUI about what the same conversation looks like.
+        let mut failed = block("tool_result", "tool", "r", "error: no such file");
+        failed.is_error = true;
+        let t = Transcript::of(
+            "claude-code:abc",
+            &[],
+            vec![
+                block("prose", "user", "a", "why is this slow"),
+                block("prose", "assistant", "b", "let me look"),
+                block("tool_call", "assistant", "c", "Bash\n{\"command\":\"ls\"}"),
+                failed,
+                block("reasoning", "assistant", "e", "**Planning**"),
+            ],
+            None,
+        );
+        let v = serde_json::to_value(&t).expect("the transcript is plain data");
+        let msgs = v["messages"].as_array().expect("an array");
+        // The same four names `kind_runs` already uses, so a client colours a strip and a spine
+        // off one vocabulary rather than two that happen to agree today.
+        let bands: Vec<&str> = msgs.iter().map(|m| m["band"].as_str().unwrap()).collect();
+        assert_eq!(bands, ["user", "agent", "tool", "tool", "reasoning"]);
+        // Both sides of the prose expand: the fold is by kind, so neither role is demoted into a
+        // one-liner the other is spared.
+        let folds: Vec<&str> = msgs.iter().map(|m| m["fold"].as_str().unwrap()).collect();
+        assert_eq!(folds, ["expanded", "expanded", "collapsed", "collapsed", "collapsed"]);
     }
 
     #[test]

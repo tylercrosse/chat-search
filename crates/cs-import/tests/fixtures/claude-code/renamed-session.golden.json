@@ -3,6 +3,7 @@
     "conversations": [
       {
         "cwd": "/home/dev/example-project",
+        "declared_model": null,
         "forked_from_native_id": null,
         "git_branch": "topic/widget-cache",
         "head_native_id": null,
@@ -11,6 +12,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
+            "model": null,
             "native_id": "evt-0002",
             "parent_native_id": null,
             "role": "user",
@@ -23,6 +25,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
+            "model": "claude-opus-4",
             "native_id": "evt-0003",
             "parent_native_id": "evt-0002",
             "role": "assistant",
@@ -35,6 +38,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "tool_call",
+            "model": "claude-opus-4",
             "native_id": "evt-0003#1",
             "parent_native_id": "evt-0003",
             "role": "assistant",
@@ -47,6 +51,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "tool_result",
+            "model": null,
             "native_id": "evt-0004",
             "parent_native_id": "evt-0003",
             "role": "tool",
@@ -56,7 +61,6 @@
             "ts": 1780586412000
           }
         ],
-        "model": "claude-opus-4",
         "native_id": "sess-7f80",
         "source": "claude-code",
         "surface": "cli",

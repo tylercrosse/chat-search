@@ -9,7 +9,7 @@
 //! so the DAG this produces is a chain: each message's parent is the previous message *in
 //! the same file*.
 
-use cs_core::model::{Conversation, Kind, Message, Role, Titles};
+use cs_core::model::{model_name, Conversation, Kind, Message, Role, Titles};
 use serde_json::Value;
 
 const SOURCE: &str = "codex";
@@ -24,7 +24,9 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
     let thread_key = thread_key(logical_path);
 
     let mut meta: Option<Meta> = None;
-    let mut model: Option<String> = None;
+    // Whatever the most recent `turn_context` named — the model in force from here on, not
+    // the conversation's label.
+    let mut current_model: Option<String> = None;
     let mut messages: Vec<Message> = Vec::new();
     let mut first_user: Option<String> = None;
     let mut prev_native_id: Option<String> = None;
@@ -54,11 +56,13 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
             continue;
         }
         // `session_meta.model_provider` is the vendor ("openai"), not the model. The model
-        // name lives on turn_context and can change mid-conversation; the last one wins, so
-        // the conversation is labelled with what it ended on.
+        // name lives on `turn_context`, which is emitted at the head of each turn and names
+        // what will run for it — so it is not collapsed here but carried forward onto the
+        // assistant messages of the turns that follow, until the next one says otherwise.
+        // 33 of 684 rollouts here change it mid-file (ADR 24).
         if record_type == "turn_context" {
             if let Some(m) = text_field(payload, "model") {
-                model = Some(m);
+                current_model = model_name(&m).map(str::to_string).or(current_model);
             }
             continue;
         }
@@ -130,6 +134,9 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
             role,
             kind,
             ts: text_field(&record, "timestamp").as_deref().and_then(epoch_millis),
+            // A tool result is the sandbox reporting back and a user turn is typed, so
+            // neither was produced by the model that `turn_context` named.
+            model: current_model.clone().filter(|_| role == Role::Assistant),
             text: text.to_string(),
         });
         seq += 1;
@@ -151,7 +158,9 @@ pub fn import(logical_path: &str, bytes: &[u8]) -> Option<Conversation> {
         titles: Titles { custom: None, generated: None, first_user },
         cwd: meta.cwd,
         git_branch: meta.git_branch,
-        model,
+        // A rollout whose `turn_context` records all precede its first assistant message
+        // would otherwise lose the name entirely, so the last one stands as the fallback.
+        declared_model: current_model,
         surface: meta.surface,
         forked_from_native_id: meta.forked_from,
         // Codex only ever appends, so the last main-thread message is the head.
@@ -556,7 +565,7 @@ mod tests {
         assert_eq!(c.surface.as_deref(), Some("codex_vscode"));
         assert_eq!(c.cwd.as_deref(), Some("/w/proj"));
         assert_eq!(c.git_branch.as_deref(), Some("feature/x"));
-        assert_eq!(c.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(c.declared_model.as_deref(), Some("gpt-5-codex"));
         assert_eq!(c.forked_from_native_id, None);
         assert_eq!(c.head_native_id, None);
 
@@ -784,22 +793,33 @@ not json at all
     }
 
     #[test]
-    fn the_last_turn_context_names_the_model() {
+    fn a_turn_context_names_the_model_for_the_turns_that_follow_it() {
         let switched = r#"
 {"type":"session_meta","payload":{"id":"s","model_provider":"openai"}}
 {"type":"turn_context","payload":{"model":"gpt-5-codex"}}
 {"type":"event_msg","payload":{"type":"user_message","message":"hi"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"first"}}
 {"type":"turn_context","payload":{"model":"gpt-5.4"}}
-{"type":"event_msg","payload":{"type":"agent_message","message":"hello"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"again"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"second"}}
 "#;
+        let c = conv("rollout-model.jsonl", switched);
+        // Both models survive, each on the turn it actually ran. Collapsing to one here is
+        // what made "did the model change" unanswerable (chat-search-n58.25).
+        assert_eq!(
+            c.messages.iter().map(|m| m.model.as_deref()).collect::<Vec<_>>(),
+            vec![None, Some("gpt-5-codex"), None, Some("gpt-5.4")]
+        );
         // Never the provider, which is what `session_meta.model_provider` holds.
-        assert_eq!(conv("rollout-model.jsonl", switched).model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(c.declared_model.as_deref(), Some("gpt-5.4"));
 
         let none = r#"
 {"type":"session_meta","payload":{"id":"s","model_provider":"openai"}}
 {"type":"event_msg","payload":{"type":"user_message","message":"hi"}}
 "#;
-        assert_eq!(conv("rollout-nomodel.jsonl", none).model, None);
+        let c = conv("rollout-nomodel.jsonl", none);
+        assert_eq!(c.declared_model, None);
+        assert!(c.messages.iter().all(|m| m.model.is_none()));
     }
 
     #[test]

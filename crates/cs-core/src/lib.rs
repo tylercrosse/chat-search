@@ -12,36 +12,72 @@
 //! rule for naming the local day an instant fell on. `blocks` is the same idea one level up:
 //! which messages a reader draws and which matches may claim to have ranked the conversation,
 //! answered once for the TUI, `cs show --json`, and everything downstream of that JSON.
+//! `inventory` is the third: which sources exist and how much of each one is indexed, joined
+//! here rather than in each client, from facts the caller supplies because this crate reads
+//! no config. `facets` is what `inventory` and `query` make together — a facet rail already
+//! projected, so that a client in another process can draw one without owning a second copy
+//! of the grammar.
+//!
+//! `answer` is `blocks` for the other half of the interface: the reply to a search, owned here
+//! so that clients adapt to it rather than each assembling one (ADR 23). `search` ranks; the
+//! envelope, its totals and its routing are `answer`'s.
+//!
+//! `sittings` is the one thing here that is not a fact about the archive: Google Takeout
+//! exports an activity log with no conversation key at all, so what the index holds is one
+//! conversation per turn, and reading them back as the chats they were is a heuristic. It is
+//! computed at read time and joined into `search` precisely so that being wrong about it
+//! costs a rebuild of nothing.
+//!
+//! `timeline` is `facets` for the axis a facet rail cannot enumerate. A `date:` chip can be
+//! handed the query text clicking it produces; a scrubber's window cannot, because it is two
+//! instants out of a continuum — so the distribution is counted here and the drag is written
+//! here, and the client that spawns `cs` draws numbers rather than deriving them.
 
+pub mod answer;
 pub mod blocks;
 pub mod build;
 pub mod destination;
 pub mod eval;
+pub mod facets;
 pub mod highlight;
 pub mod index;
+pub mod inventory;
 pub mod model;
 pub mod query;
 pub mod querylog;
 pub mod schema;
 pub mod search;
+pub mod sittings;
 pub mod time;
+pub mod timeline;
 
+// `Group` at the root is the answer's, now that no client reads the ranked row directly. The two
+// are one `From` apart, and the name belongs to the one clients decode: `search::Group` is the
+// ranking's own row, on its way to becoming this one.
+pub use answer::{answer, Answer, FlatAnswer, Group, Match, Reason, Refusal};
 pub use blocks::{Block, Density, Fold, MarkKind, Transcript, WireBlock};
 pub use build::{open_for_read, IndexBuild, IndexState, Reader, Unreadable};
 pub use destination::{destinations, Destination};
 pub use eval::{Grade, Judged, QueryScore, Report};
+pub use facets::{
+    AllChip, ChipState, DateChip, DateFacet, DirChip, DirFacet, SourceChip, SourceFacet,
+};
 pub use index::{
     built_by, ensure_current, open, record_importer_version, reset, write_conversations,
     write_conversations_with, IndexOptions, IndexStats, TOOL_TEXT_MAX,
 };
-pub use model::{Conversation, Kind, Message, Role, Titles};
-pub use query::{Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection, Window};
+pub use inventory::{Coverage, DateCoverage, DirCensus, DirCoverage, SourceCoverage, Watched};
+pub use model::{model_name, Conversation, Kind, Message, Role, Titles};
+pub use query::{
+    Age, DateSpec, Facet, Filter, FilterKind, Mode, Query, Selection, Window, DATE_SPANS,
+};
 pub use schema::IMPORTER_VERSION;
 pub use search::{
-    count_matching, explain, match_density, recent, search, search_grouped, search_grouped_counted,
-    snippet_marked, Counted, Explain, Field, Group, Hit, SearchOptions, Total, DECAY,
+    explain, match_density, snippet_marked, Explain, Field, Hit, SearchOptions, DECAY,
     REPEAT_WEIGHT,
 };
+pub use sittings::Sitting;
+pub use timeline::{timeline, Bucket, Drag, Selected, Timeline, BUCKETS};
 pub use time::{
     day_start_in, local_day_start, local_ymd, now_ms, shift_days_in, shift_months_in, ymd_in,
 };

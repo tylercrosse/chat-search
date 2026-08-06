@@ -1,4 +1,5 @@
 import AppKit
+import CsKit
 import Foundation
 import QuartzCore
 import SwiftUI
@@ -49,6 +50,7 @@ func parse(_ argv: [String]) -> Options {
                 cs-spike [--db PATH] [--config PATH] [--bin PATH] [--limit N] <command>
 
                   ui          a search field and a result list (default)
+                  contract    headless: decode both envelopes out of a real index; exits 1 on a break
                   transport   headless: cost of one `cs search --json` per keystroke
                   states      headless: what a client can tell apart when there is no index
                   rebuild     headless: query a scratch index while `cs index` rewrites it
@@ -169,6 +171,12 @@ final class Host: NSObject, NSApplicationDelegate {
 // Top-level code is an async main-actor context, so the headless benches need no run loop and no
 // semaphore — they are just awaited. The windowed ones hand control to `NSApp.run()` instead.
 switch options.command {
+case "contract":
+    // The exit status is the point. Everything else here prints a table for a human to read;
+    // this one has to be runnable by something that only reads exit codes, because the defect it
+    // exists to catch is one no Rust test can see.
+    exit(await Contract.check(client: client, limit: options.limit) ? 0 : 1)
+
 case "transport":
     await Bench.transport(client: client, limit: options.limit)
 

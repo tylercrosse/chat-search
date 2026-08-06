@@ -3,6 +3,7 @@
     "conversations": [
       {
         "cwd": null,
+        "declared_model": "gpt-5",
         "forked_from_native_id": null,
         "git_branch": null,
         "head_native_id": "node-a2b",
@@ -11,6 +12,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
+            "model": null,
             "native_id": "node-u1",
             "parent_native_id": null,
             "role": "user",
@@ -23,6 +25,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
+            "model": "gpt-5",
             "native_id": "node-a1",
             "parent_native_id": "node-u1",
             "role": "assistant",
@@ -35,6 +38,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
+            "model": null,
             "native_id": "node-u2",
             "parent_native_id": "node-a1",
             "role": "user",
@@ -47,6 +51,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
+            "model": "gpt-5",
             "native_id": "node-a2",
             "parent_native_id": "node-u2",
             "role": "assistant",
@@ -59,6 +64,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
+            "model": null,
             "native_id": "node-u2b",
             "parent_native_id": "node-a1",
             "role": "user",
@@ -71,6 +77,7 @@
             "is_error": false,
             "is_sidechain": false,
             "kind": "prose",
+            "model": "gpt-5",
             "native_id": "node-a2b",
             "parent_native_id": "node-u2b",
             "role": "assistant",
@@ -80,7 +87,6 @@
             "ts": 1780000600000
           }
         ],
-        "model": "gpt-5",
         "native_id": "conv-chatgpt-0001",
         "source": "chatgpt-export",
         "surface": null,

@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS conversation(
   title_origin        TEXT,          -- custom | generated | first_user
   cwd                 TEXT,
   git_branch          TEXT,
+  -- The model of the last message that named one, resolved in the rollup at the bottom of
+  -- `index::write_conversations_with` — never collapsed by an importer. See `message.model`.
   model               TEXT,
   surface             TEXT,          -- derived, never part of an id (ADR 16)
   started_at          INTEGER,
@@ -44,6 +46,10 @@ CREATE TABLE IF NOT EXISTS message(
   ts           INTEGER,
   on_head_path INTEGER NOT NULL DEFAULT 1,  -- reachable from head_id by parent walk
   is_error     INTEGER NOT NULL DEFAULT 0,  -- a tool_result reporting a failure
+  -- The model that produced this message, as declared; NULL on user turns and tool results.
+  -- 166 of 3,097 conversations name more than one, so this is where that fact lives; the
+  -- `conversation.model` label is a summary of this column (chat-search-n58.25, ADR 24).
+  model        TEXT,
   text         TEXT NOT NULL
 );
 
@@ -116,7 +122,7 @@ CREATE TABLE IF NOT EXISTS build_info(
 
 /// Bumped when importer output changes in a way that requires a rebuild. Recorded in
 /// `build_info` so a stale index is detectable rather than silently wrong.
-pub const IMPORTER_VERSION: u32 = 4;
+pub const IMPORTER_VERSION: u32 = 5;
 
 #[cfg(test)]
 mod tests {
@@ -126,8 +132,14 @@ mod tests {
     /// on, so what comes back is the plan the *schema* forces rather than one the planner
     /// happened to like against a particular corpus — and an empty database is the only state
     /// `rm index.db && cs index` guarantees on the way through.
+    ///
+    /// The sitting tables are built first because they are `temp` and the transcript read
+    /// joins one, so without them the statement does not prepare at all. `blocks::load` calls
+    /// `sittings::ensure` immediately before running it for the same reason, which makes this
+    /// the state the query is genuinely planned in rather than a convenience for the test.
     fn plan(sql: &str) -> String {
         let conn = crate::open(":memory:").expect("an in-memory index");
+        crate::sittings::ensure(&conn).expect("the sitting tables");
         let mut stmt =
             conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).expect("a plannable statement");
         // Column 3 of `EXPLAIN QUERY PLAN` is `detail`, the sentence the planner writes. Both
@@ -147,7 +159,7 @@ mod tests {
     /// settle it (chat-search-me9.26).
     #[test]
     fn the_conversation_shape_is_answered_from_the_index_alone() {
-        let plan = plan(&crate::search::kind_runs_sql());
+        let plan = plan(&crate::search::drawn_bands_sql());
         assert!(
             plan.contains("COVERING INDEX idx_message_reading"),
             "the shape must never reach the table: `message` stores its text inline, so a plan \
@@ -167,7 +179,7 @@ mod tests {
     /// `idx_message_reading` is the ordering.
     #[test]
     fn reading_a_conversation_in_order_costs_no_sort() {
-        let plan = plan(&crate::blocks::load_sql());
+        let plan = plan(&crate::blocks::read_record_sql());
         assert!(
             plan.contains("idx_message_reading"),
             "reading order comes from the index. Plan was:\n{plan}"

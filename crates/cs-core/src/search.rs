@@ -1,6 +1,7 @@
 use crate::highlight;
 use crate::model::Kind;
 use crate::query::{Facet, Query};
+use crate::sittings::Sitting;
 use rusqlite::{params, params_from_iter, types::Value, Connection};
 use serde::Serialize;
 
@@ -146,6 +147,10 @@ pub fn snippet_marked_at(
 
 /// How to run a search, as distinct from what was asked. The query text itself moves to
 /// [`crate::query::Query`]; what remains here is tuning the caller chooses.
+///
+/// `Clone` because [`crate::answer::Answer`] keeps the whole of it, `now_ms` included, as half
+/// of the receipt it settles against — see [`crate::answer::Answer::settle`].
+#[derive(Debug, Clone)]
 pub struct SearchOptions {
     pub limit: i64,
     pub field: Field,
@@ -159,11 +164,11 @@ pub struct SearchOptions {
     /// See [`DECAY`], which is the default.
     pub decay: f64,
     /// How many matching messages each returned conversation carries. Formerly a positional
-    /// argument to [`search_grouped`], which put one of the ten options somewhere the other
+    /// argument to the grouped search, which put one of the ten options somewhere the other
     /// nine could not be read from.
     pub nested: usize,
-    /// Fill [`Group::kind_runs`] — what each conversation is made of, for a client that draws
-    /// it as a strip.
+    /// Fill `kind_runs` — what each conversation is made of, for a client that draws it as a
+    /// strip ([`crate::answer::Group::kind_runs`] is where it lands).
     ///
     /// Off by default because it is the one field whose cost scales with the *conversations*
     /// returned rather than with the matches in them: it reads every head-path message of
@@ -255,7 +260,7 @@ fn like_contains(value: &str) -> String {
 /// `WHERE 1 = 1`. Values are bound rather than interpolated: `agent:codex` and `agent:claude`
 /// then produce one cached statement instead of two, which is what keeps the typeahead's
 /// prepared-statement cache useful.
-fn filter_sql(query: &Query, now_ms: i64, binds: &mut Vec<Value>) -> String {
+pub(crate) fn filter_sql(query: &Query, now_ms: i64, binds: &mut Vec<Value>) -> String {
     let mut sql = String::new();
 
     // `agent:` is equality — a source id is an enum, and a substring match on one would make
@@ -295,30 +300,55 @@ fn filter_sql(query: &Query, now_ms: i64, binds: &mut Vec<Value>) -> String {
         ));
     }
 
-    // `date:` is a half-open window on when the conversation ended.
-    for (window, negated) in query.date_windows(now_ms) {
-        let mut bounds = Vec::new();
-        if let Some(from) = window.from {
-            bounds.push(format!("c.ended_at >= {}", bind(binds, Value::Integer(from))));
-        }
-        if let Some(until) = window.until {
-            bounds.push(format!("c.ended_at < {}", bind(binds, Value::Integer(until))));
-        }
-        if bounds.is_empty() {
-            continue;
-        }
-        let inside = format!("(c.ended_at IS NOT NULL AND {})", bounds.join(" AND "));
-        // Negation wraps the whole test rather than flipping each comparison, which is what
-        // makes an undated conversation survive `-date:today`: it is not in the window, so
-        // it belongs in the complement. Flipped comparisons would leave it NULL and drop it.
-        let clause = if negated { format!("NOT {inside}") } else { inside };
-        sql.push_str(&format!("\n           AND {clause}"));
+    if let Some(dates) = date_sql(query, now_ms, binds) {
+        sql.push_str(&format!("\n           AND {dates}"));
     }
 
     sql
 }
 
-pub fn search(conn: &Connection, query: &Query, q: &SearchOptions) -> rusqlite::Result<Vec<Hit>> {
+/// The `date:` half of [`filter_sql`], as a boolean expression over `c.ended_at`.
+///
+/// A function of its own because [`crate::timeline`] needs the same test as a *selected column*
+/// rather than as a predicate: the drawer draws what a window does not hold while counting what
+/// it does, so one statement has to answer both. Two spellings of "inside the window" would be
+/// the local-date bug's shape one client further out — a filter and a picture of it, derived
+/// separately, agreeing until the day one of them moved.
+///
+/// `None` when the query names no window at all, which is not `Some("1")`: a caller with nothing
+/// to test should get no column rather than a column of ones.
+pub(crate) fn date_sql(query: &Query, now_ms: i64, binds: &mut Vec<Value>) -> Option<String> {
+    // `date:` is a half-open window on when the conversation ended.
+    let clauses: Vec<String> = query
+        .date_windows(now_ms)
+        .into_iter()
+        .filter_map(|(window, negated)| {
+            let mut bounds = Vec::new();
+            if let Some(from) = window.from {
+                bounds.push(format!("c.ended_at >= {}", bind(binds, Value::Integer(from))));
+            }
+            if let Some(until) = window.until {
+                bounds.push(format!("c.ended_at < {}", bind(binds, Value::Integer(until))));
+            }
+            if bounds.is_empty() {
+                return None;
+            }
+            let inside = format!("(c.ended_at IS NOT NULL AND {})", bounds.join(" AND "));
+            // Negation wraps the whole test rather than flipping each comparison, which is what
+            // makes an undated conversation survive `-date:today`: it is not in the window, so
+            // it belongs in the complement. Flipped comparisons would leave it NULL and drop it.
+            Some(if negated { format!("NOT {inside}") } else { inside })
+        })
+        .collect();
+    // Two `date:` tokens intersect, which is `Query::toggling`'s rule read from the other end.
+    (!clauses.is_empty()).then(|| clauses.join(" AND "))
+}
+
+pub(crate) fn search(
+    conn: &Connection,
+    query: &Query,
+    q: &SearchOptions,
+) -> rusqlite::Result<Vec<Hit>> {
     if !query.is_searchable() {
         return Ok(Vec::new());
     }
@@ -413,9 +443,18 @@ fn mark(conn: &Connection, query: &Query, field: Field, pending: Vec<Unmarked>) 
 /// in a kind nobody indexes, the text was never indexed at all, or it was indexed and ranked
 /// too low — and they need opposite fixes. Guessing between them is the slowest part of tuning
 /// ranking, so the index answers it directly.
+///
+/// **About the row, not about the record.** Asked for an id the search layer folded into a
+/// sitting, every count below is the whole sitting's, because the thing that failed to come
+/// back was the row — explaining the two messages of the record someone happened to name would
+/// answer a question about a result set that never had it in it (chat-search-o1i.8).
 #[derive(Debug, Serialize)]
 pub struct Explain {
+    /// The unit explained — the record that *opened* it when `sitting` is set, so this is the
+    /// id that would have appeared in the result set and not necessarily the one asked about.
     pub conv_id: String,
+    /// Set when the id names several activity-log records the search layer reads as one chat.
+    pub sitting: Option<Sitting>,
     pub exists: bool,
     pub messages: i64,
     pub prose_messages: i64,
@@ -455,26 +494,50 @@ pub struct Explain {
     pub verdict: String,
 }
 
+/// `?1, ?2, …` over a range of parameter numbers.
+///
+/// SQLite has no array parameter, so an `IN` list of unknown length has to be spelled out.
+/// What goes in it is a count, never a value — every id is still bound.
+fn placeholders(range: std::ops::RangeInclusive<usize>) -> String {
+    range.map(|i| format!("?{i}")).collect::<Vec<_>>().join(", ")
+}
+
 /// `now_ms` is threaded in rather than read from the clock so this answers about the ranking
 /// that actually ran. It previously built its options with the zero default and therefore
 /// reported a rank no shipping ranker produces — while printing a verdict blaming ranking.
+///
+/// Every count is taken over [`crate::sittings::resolve`]'s answer rather than over the id as
+/// given, so the unit explained is the unit ranked. Whatever resolves `cs show` resolves this.
 pub fn explain(
     conn: &Connection,
     conv_id: &str,
     text: &str,
     now_ms: i64,
 ) -> rusqlite::Result<Explain> {
-    let exists: bool =
-        conn.query_row("SELECT COUNT(*) FROM conversation WHERE id=?1", params![conv_id], |r| {
-            Ok(r.get::<_, i64>(0)? > 0)
-        })?;
+    crate::sittings::ensure(conn)?;
+    // Never empty, so `records[0]` is always a real id and every `IN` below has something in
+    // it. It is the id as given when nothing was folded, and the opener otherwise.
+    let records = crate::sittings::resolve(conn, conv_id)?;
+    let sitting = Sitting::of(conn, conv_id)?;
+    let ids = || params_from_iter(records.iter());
+    // `?1, ?2, …`, sized to the sitting. Built rather than bound as a list because SQLite has
+    // no array parameter; the values themselves are still bound, never interpolated.
+    let of_row = placeholders(1..=records.len());
+
+    let exists: bool = conn.query_row(
+        &format!("SELECT COUNT(*) FROM conversation WHERE id IN ({of_row})"),
+        ids(),
+        |r| Ok(r.get::<_, i64>(0)? > 0),
+    )?;
 
     let (messages, prose_messages, off_path): (i64, i64, i64) = conn.query_row(
-        "SELECT COUNT(*),
-                COALESCE(SUM(kind='prose'),0),
-                COALESCE(SUM(on_head_path=0),0)
-         FROM message WHERE conv_id=?1",
-        params![conv_id],
+        &format!(
+            "SELECT COUNT(*),
+                    COALESCE(SUM(kind='prose'),0),
+                    COALESCE(SUM(on_head_path=0),0)
+             FROM message WHERE conv_id IN ({of_row})"
+        ),
+        ids(),
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
 
@@ -489,15 +552,21 @@ pub fn explain(
     // indexer's rule is "every prose message gets a posting", so a count that applied that rule
     // a second time would agree with it by construction and catch nothing.
     let indexed_prose: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM fts_prose_docsize d JOIN message m ON m.rowid = d.id
-         WHERE m.conv_id = ?1",
-        params![conv_id],
+        &format!(
+            "SELECT COUNT(*) FROM fts_prose_docsize d JOIN message m ON m.rowid = d.id
+             WHERE m.conv_id IN ({of_row})"
+        ),
+        ids(),
         |r| r.get(0),
     )?;
 
+    // The opener's, matching the row: `hydrate` reads this column for the conversation the row
+    // points at. A sitting whose third record was deleted upstream and whose first was not is
+    // a state nothing downstream can draw, and inventing an "any of them" answer here would
+    // put a marker on a row the search reply does not carry one for.
     let deleted_upstream: bool = conn.query_row(
         "SELECT deleted_upstream_at IS NOT NULL FROM conversation WHERE id=?1",
-        params![conv_id],
+        params![records[0]],
         |r| r.get(0),
     ).unwrap_or(false);
 
@@ -519,18 +588,27 @@ pub fn explain(
         unindexed_kinds.iter().map(|k| format!("'{k}'")).collect::<Vec<_>>().join(",");
 
     let unindexed_messages: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM message WHERE conv_id=?1 AND kind IN ({unindexed_list})"),
-        params![conv_id],
+        &format!(
+            "SELECT COUNT(*) FROM message
+             WHERE conv_id IN ({of_row}) AND kind IN ({unindexed_list})"
+        ),
+        ids(),
         |r| r.get(0),
     )?;
 
+    // The term goes in the slot after the ids, so the two lists cannot collide as the sitting
+    // grows.
+    let of_term = format!("?{}", records.len() + 1);
     let mut term_hits = Vec::new();
     let mut unindexed_term_hits = Vec::new();
     for term in parsed.terms() {
+        let with_term = || params_from_iter(records.iter().chain(std::iter::once(term)));
         let n: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM message WHERE conv_id=?1 AND kind='prose'
-               AND lower(text) LIKE '%' || lower(?2) || '%'",
-            params![conv_id, term],
+            &format!(
+                "SELECT COUNT(*) FROM message WHERE conv_id IN ({of_row}) AND kind='prose'
+                   AND lower(text) LIKE '%' || lower({of_term}) || '%'"
+            ),
+            with_term(),
             |r| r.get(0),
         )?;
         term_hits.push((term.clone(), n));
@@ -541,10 +619,11 @@ pub fn explain(
         // a reader to look, where a miss would let them conclude the word does not exist.
         let u: i64 = conn.query_row(
             &format!(
-                "SELECT COUNT(*) FROM message WHERE conv_id=?1 AND kind IN ({unindexed_list})
-                   AND lower(text) LIKE '%' || lower(?2) || '%'"
+                "SELECT COUNT(*) FROM message
+                 WHERE conv_id IN ({of_row}) AND kind IN ({unindexed_list})
+                   AND lower(text) LIKE '%' || lower({of_term}) || '%'"
             ),
-            params![conv_id, term],
+            with_term(),
             |r| r.get(0),
         )?;
         unindexed_term_hits.push((term.clone(), u));
@@ -553,12 +632,19 @@ pub fn explain(
     // Asked of the filters alone, with no MATCH in the way, so the answer holds even for a
     // query with no searchable terms — which is precisely when the text-shaped verdicts have
     // nothing to say and the filter is the whole story.
-    let mut binds = vec![Value::Text(conv_id.to_string())];
+    //
+    // Excluded only when *no* record survives. The ranker applies filters per message against
+    // the conversation that holds it and folds afterwards, so a sitting whose middle record
+    // passes is a row the query can still return — reporting it excluded because its opener
+    // was filtered out would blame the filter for a result that is there.
+    let mut binds: Vec<Value> = records.iter().map(|id| Value::Text(id.clone())).collect();
     let filters = filter_sql(&parsed, now_ms, &mut binds);
     let excluded_by_filter = exists
         && !filters.is_empty()
         && !conn.query_row(
-            &format!("SELECT EXISTS(SELECT 1 FROM conversation c WHERE c.id = ?1{filters})"),
+            &format!(
+                "SELECT EXISTS(SELECT 1 FROM conversation c WHERE c.id IN ({of_row}){filters})"
+            ),
             params_from_iter(binds.iter()),
             |r| r.get::<_, i64>(0).map(|n| n > 0),
         )?;
@@ -568,7 +654,10 @@ pub fn explain(
         &parsed,
         &SearchOptions { limit: 500, include_off_path: true, ..SearchOptions::new(now_ms) },
     )?;
-    let best_rank = ranked.iter().position(|h| h.conv_id == conv_id);
+    // `search` is the ungrouped route, so its hits name the record that holds each message.
+    // Any record of the sitting is the row's best hit, because the row is what the grouped
+    // ranker would have built out of them.
+    let best_rank = ranked.iter().position(|h| records.contains(&h.conv_id));
     let best_score = best_rank.map(|i| ranked[i].score);
 
     let verdict = if !exists {
@@ -608,7 +697,8 @@ pub fn explain(
     };
 
     Ok(Explain {
-        conv_id: conv_id.to_string(),
+        conv_id: records[0].clone(),
+        sitting,
         exists,
         messages,
         prose_messages,
@@ -689,7 +779,7 @@ mod tests {
                 titles: Default::default(),
                 cwd: None,
                 git_branch: None,
-                model: None,
+                declared_model: None,
                 surface: None,
                 forked_from_native_id: None,
                 head_native_id: None,
@@ -703,6 +793,7 @@ mod tests {
                     role: crate::model::Role::User,
                     kind: crate::model::Kind::Prose,
                     ts: Some(1_700_000_000_000),
+                    model: None,
                     text: (*text).into(),
                 }],
             })
@@ -857,10 +948,16 @@ mod tests {
 
 // ---------------------------------------------------------------- grouping
 
-/// A conversation and its best matching messages — the Algolia DocSearch shape: the
-/// conversation is the result, matching messages nest beneath it.
+/// A conversation and its best matching messages, as the ranking builds it.
+///
+/// Crate-private: what a client reads is [`crate::answer::Group`], which this is one `From`
+/// away from. The two are kept apart rather than merged because this one carries whatever the
+/// ranking needs to carry, and that is not a decision the wire should have to follow.
 #[derive(Debug, Clone, Serialize)]
-pub struct Group {
+pub(crate) struct Group {
+    /// The conversation this row points at. When [`Group::sitting`] is set, this is the
+    /// conversation that *opened* the sitting — the earliest record, whose prompt is the
+    /// title — and the rest are named there.
     pub conv_id: String,
     pub source: String,
     /// The source's own id (ADR 2 makes it stable).
@@ -925,18 +1022,21 @@ pub struct Group {
     /// survives the query being cleared — the strip is what makes the no-query list
     /// triageable in the first place.
     pub kind_runs: Vec<crate::blocks::Run>,
+    /// Set when this row is several activity-log records read back as one chat. See
+    /// [`Sitting`]; every count above is the sitting's, not the opening record's.
+    pub sitting: Option<Sitting>,
     pub deleted_upstream: bool,
     pub hits: Vec<Hit>,
 }
 
-/// The shape query, named so the test that pins its plan reads the statement [`kind_runs`]
+/// The shape query, named so the test that pins its plan reads the statement [`drawn_bands`]
 /// runs rather than a copy of it.
 ///
 /// The columns are the whole point and a copy would not notice losing them: every one of
 /// these sits in `idx_message_reading`, which is what keeps this an index-only read. Adding a
 /// fourth would drop it back to walking the table, and the difference does not show up as a
 /// failure — only as a slower keystroke that nothing complains about.
-pub(crate) fn kind_runs_sql() -> String {
+pub(crate) fn drawn_bands_sql() -> String {
     format!(
         "SELECT role, kind, is_error FROM message
          WHERE conv_id = ?1 AND on_head_path = 1
@@ -945,7 +1045,12 @@ pub(crate) fn kind_runs_sql() -> String {
     )
 }
 
-/// One conversation's shape — see [`Group::kind_runs`].
+/// One conversation's drawn messages, as bands, in reading order — see [`Group::kind_runs`].
+///
+/// Bands rather than runs, because a row can be several conversations ([`Sitting`]) and two
+/// run lists cannot be concatenated without re-encoding the seam between them. Run-length
+/// encoding is therefore left to the one caller that knows how many conversations it is
+/// looking at.
 ///
 /// Three narrow columns and no `text`. That matters more than it looks: `message` stores its
 /// body inline, so a `SELECT` naming `text` walks the whole 324 MB of it, and the top 354
@@ -954,18 +1059,18 @@ pub(crate) fn kind_runs_sql() -> String {
 /// One prepared statement reused across the page, for the same reason [`hydrate`] does it —
 /// an `IN (...)` list sized to the result count would be a new statement per query and would
 /// lose the cache on every keystroke.
-fn kind_runs(conn: &Connection, conv_id: &str) -> rusqlite::Result<Vec<crate::blocks::Run>> {
-    let mut stmt = conn.prepare_cached(&kind_runs_sql())?;
+fn drawn_bands(conn: &Connection, conv_id: &str) -> rusqlite::Result<Vec<crate::blocks::Band>> {
+    let mut stmt = conn.prepare_cached(&drawn_bands_sql())?;
     let rows = stmt
         .query_map(params![conv_id], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? != 0))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(crate::blocks::runs(
-        rows.iter()
-            .filter(|(_, kind, is_error)| crate::blocks::drawn(kind, *is_error))
-            .map(|(role, kind, _)| crate::blocks::band(role, kind)),
-    ))
+    Ok(rows
+        .iter()
+        .filter(|(_, kind, is_error)| crate::blocks::drawn(kind, *is_error))
+        .map(|(role, kind, _)| crate::blocks::band(role, kind))
+        .collect())
 }
 
 /// How much a conversation's *additional* matches count beyond its best one.
@@ -993,25 +1098,40 @@ pub const REPEAT_WEIGHT: f64 = 0.25;
 /// Filtered, though nothing is ranked: `date:today` with no search terms is a real question —
 /// "what did I work on today" — and answering it with the whole recent list would be the
 /// silent-no-op this crate refuses everywhere else.
-pub fn recent(
+///
+/// One row per sitting, like the ranked path: the browse list is where the shredding shows
+/// worst, since 1,271 Gemini records unfolded would be a third of everything a reader scrolls
+/// past. The row is the conversation that *opened* the sitting, dated and counted by the
+/// whole of it. One consequence worth naming: a `date:` filter is still tested against each
+/// conversation's own `ended_at`, so a sitting that began before midnight and ran past it is
+/// judged on the record that opened it rather than on the whole span.
+pub(crate) fn recent(
     conn: &Connection,
     query: &Query,
     now_ms: i64,
     limit: i64,
     shape: bool,
 ) -> rusqlite::Result<Vec<Group>> {
+    crate::sittings::ensure(conn)?;
     let mut binds = vec![Value::Integer(limit)];
     let filters = filter_sql(query, now_ms, &mut binds);
-    // `1 = 1` so the fragment's leading `AND` has something to attach to when there are no
-    // filters at all, which is the common case here.
+    // Named once: it is both what the row displays and what the list is ordered by, and those
+    // two disagreeing is how a "most recent" list ends up sorted by a date it does not show.
+    let ended = crate::sittings::total("ended_at");
     let sql = format!(
-        "SELECT c.id, c.source, c.title, c.ended_at, c.user_turns, c.native_id,
-                c.deleted_upstream_at, c.msg_count, c.prose_count, c.cwd
+        "SELECT c.id, c.source, c.title, {ended}, {turns}, c.native_id,
+                c.deleted_upstream_at, {msgs}, {prose}, c.cwd
          FROM conversation c
-         WHERE 1 = 1{filters}
+         {join}
+         WHERE {openers}{filters}
          -- `NULLS LAST` is not portable to older SQLite; this expresses the same order.
-         ORDER BY c.ended_at IS NULL, c.ended_at DESC
-         LIMIT ?1"
+         ORDER BY {ended} IS NULL, {ended} DESC
+         LIMIT ?1",
+        turns = crate::sittings::total("user_turns"),
+        msgs = crate::sittings::total("msg_count"),
+        prose = crate::sittings::total("prose_count"),
+        join = crate::sittings::OF_CONVERSATION,
+        openers = crate::sittings::OPENERS_ONLY,
     );
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_from_iter(binds.iter()), |r| {
@@ -1030,8 +1150,9 @@ pub fn recent(
             match_count: 0,
             // No query, so nothing matched and there is nowhere to put a mark.
             match_seqs: Vec::new(),
-            // Filled below, once the statement holding this row is done with.
+            // Both filled below, once the statement holding this row is done with.
             kind_runs: Vec::new(),
+            sitting: None,
             native_id: r.get(5)?,
             destinations: crate::destinations(&r.get::<_, String>(1)?, &r.get::<_, String>(5)?),
             deleted_upstream: r.get::<_, Option<i64>>(6)?.is_some(),
@@ -1040,6 +1161,7 @@ pub fn recent(
     })?;
     let mut groups = rows.collect::<rusqlite::Result<Vec<Group>>>()?;
     drop(stmt);
+    fill_sittings(conn, &mut groups)?;
     // The shape is a property of the conversation rather than of a query, so a client that
     // asked for it gets it here too. Without that, clearing the query would blank the one
     // column that made the list triageable — backwards, since this list is exactly where a
@@ -1050,36 +1172,65 @@ pub fn recent(
     Ok(groups)
 }
 
-/// Give every group its [`Group::kind_runs`].
-fn fill_shape(conn: &Connection, groups: &mut [Group]) -> rusqlite::Result<()> {
+/// Name the records behind every row that is a sitting rather than a conversation.
+///
+/// Ahead of [`fill_shape`], which reads the membership rather than looking it up a second
+/// time. Unconditional, where the shape is opt-in: this is one indexed lookup per row and
+/// only for the rows that are folds, and a client cannot ask for it because it cannot know
+/// which rows those are until it has the answer.
+fn fill_sittings(conn: &Connection, groups: &mut [Group]) -> rusqlite::Result<()> {
     for group in groups {
-        group.kind_runs = kind_runs(conn, &group.conv_id)?;
+        group.sitting = Sitting::of(conn, &group.conv_id)?;
     }
     Ok(())
 }
 
-/// Conversations matching `q`, best-first, each carrying up to [`SearchOptions::nested`]
-/// messages.
+/// Give every group its [`Group::kind_runs`].
 ///
-/// [`search_grouped_counted`] when how many were left out matters too.
-pub fn search_grouped(
+/// A sitting's shape is its records' shapes end to end, run-length encoded across the seams
+/// so a stretch of prose spanning three records reads as one run rather than three. Built by
+/// concatenating the bands rather than by widening [`kind_runs`]'s query, because the order
+/// messages are read in lives in [`crate::blocks::READING_ORDER`] and a second `ORDER BY`
+/// that had to interleave the fold would be that rule written down twice.
+fn fill_shape(conn: &Connection, groups: &mut [Group]) -> rusqlite::Result<()> {
+    for group in groups {
+        let bands = match &group.sitting {
+            Some(sitting) => {
+                let mut bands = Vec::new();
+                for member in &sitting.members {
+                    bands.extend(drawn_bands(conn, member)?);
+                }
+                bands
+            }
+            None => drawn_bands(conn, &group.conv_id)?,
+        };
+        group.kind_runs = crate::blocks::runs(bands);
+    }
+    Ok(())
+}
+
+/// Conversations matching `q`, best-first, with no count beside them.
+///
+/// Test-only. It was the public way in until chat-search-me9.36.3, and what retired it is that
+/// the count is free: [`search_grouped_counted`] answers it off work the ranking pass had to do
+/// anyway, so a ranking whose size cannot be reported is not a thing any caller wants. Plenty of
+/// tests are about the order of the rows and nothing else, and this keeps them saying so.
+#[cfg(test)]
+fn grouped(
     conn: &Connection,
     query: &Query,
     q: &SearchOptions,
 ) -> rusqlite::Result<Vec<Group>> {
-    // Both `Empty` and `TooShort` fall back to recency. The client decides how to *say* which
-    // of the two it is showing; the routing is the same, and doing it here is what lets the
-    // TUI stop blanking its own query text to force this branch.
-    if !query.is_searchable() {
-        return recent(conn, query, q.now_ms, q.limit, q.shape);
-    }
-    let (ranked, _) = rank(conn, query, q)?;
-    best_of(conn, query, q, ranked)
+    Ok(search_grouped_counted(conn, query, q)?.groups)
 }
 
-/// How many conversations a query selects, as far as a search could tell for free.
+/// How many rows a query selects, as far as a search could tell for free.
+///
+/// Rows rather than conversations, and the two are the same number everywhere except the
+/// Google Takeout activity log, where several conversations can be one [`Sitting`]. A total
+/// counted the other way would say 40 beside twelve rows on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Total {
+pub(crate) enum Total {
     /// The whole number. The pass that produced it saw every match, so nothing is missing.
     Exact(usize),
     /// At least this many, and how many more is not known: the ranking scan stopped at its
@@ -1093,7 +1244,7 @@ pub enum Total {
 }
 
 /// A result set and what the search learned about its true size on the way past.
-pub struct Counted {
+pub(crate) struct Counted {
     /// The conversations `limit` left room for, best-first.
     pub groups: Vec<Group>,
     /// Never below `groups.len()`, and [`Total::Exact`] with exactly that value whenever
@@ -1114,7 +1265,7 @@ pub struct Counted {
 /// worth the second pass. In a typeahead client that judgement is "once the user stops typing":
 /// a broad prefix is the expensive case *and* the one whose total nobody is reading yet, so
 /// spending the milliseconds there is spending them at the one moment they buy nothing.
-pub fn search_grouped_counted(
+pub(crate) fn search_grouped_counted(
     conn: &Connection,
     query: &Query,
     q: &SearchOptions,
@@ -1163,22 +1314,28 @@ fn best_of(
 /// a count over any other set would describe a result list nobody is looking at. Nothing here
 /// touches `message.text`, so the cost is the posting list and the rowid lookups, not the
 /// widest column in the schema.
-pub fn count_matching(
+pub(crate) fn count_matching(
     conn: &Connection,
     query: &Query,
     q: &SearchOptions,
 ) -> rusqlite::Result<usize> {
+    crate::sittings::ensure(conn)?;
     let table = q.field.table();
     let mut binds =
         vec![Value::Text(query.match_expr()), Value::Integer(q.include_off_path as i64)];
     let filters = filter_sql(query, q.now_ms, &mut binds);
+    // Distinct *rows*, which is why the fold is joined in here as well as in `rank`: counting
+    // conversations would put a number beside the list that the list cannot add up to.
     let sql = format!(
-        "SELECT COUNT(DISTINCT m.conv_id)
+        "SELECT COUNT(DISTINCT {group_id})
          FROM {table}
          JOIN message m      ON m.rowid = {table}.rowid
          JOIN conversation c ON c.id = m.conv_id
+         {join}
          WHERE {table} MATCH ?1
-           AND (?2 = 1 OR m.on_head_path = 1){filters}"
+           AND (?2 = 1 OR m.on_head_path = 1){filters}",
+        group_id = crate::sittings::GROUP_ID,
+        join = crate::sittings::OF_MESSAGE,
     );
     let mut stmt = conn.prepare_cached(&sql)?;
     let n: i64 = stmt.query_row(params_from_iter(binds.iter()), |r| r.get(0))?;
@@ -1192,19 +1349,32 @@ pub fn count_matching(
 fn count_filtered(conn: &Connection, query: &Query, now_ms: i64) -> rusqlite::Result<usize> {
     let mut binds = Vec::new();
     let filters = filter_sql(query, now_ms, &mut binds);
-    // `1 = 1` for the same reason as in `recent`: the fragment's leading `AND` needs something
-    // to attach to, and here there are often no filters at all.
-    let sql = format!("SELECT COUNT(*) FROM conversation c WHERE 1 = 1{filters}");
+    // Counts what `recent` lists, join for join: one row per sitting, so the header and the
+    // list below it cannot disagree.
+    let sql = format!(
+        "SELECT COUNT(*) FROM conversation c
+         {join}
+         WHERE {openers}{filters}",
+        join = crate::sittings::OF_CONVERSATION,
+        openers = crate::sittings::OPENERS_ONLY,
+    );
     let mut stmt = conn.prepare_cached(&sql)?;
     let n: i64 = stmt.query_row(params_from_iter(binds.iter()), |r| r.get(0))?;
     Ok(n as usize)
 }
 
-/// Every matching message, scored and folded into conversations, best-first.
+/// Every matching message, scored and folded into rows, best-first.
 ///
 /// Scores are pulled ungrouped and folded here rather than in SQL: FTS5 auxiliary functions
 /// like bm25() cannot be used through a CTE or subquery, so the grouping has to happen after
 /// the rows come back.
+///
+/// **What a row is comes from SQL, not from here.** The grouping key is
+/// [`crate::sittings::GROUP_ID`] — a message's conversation, or the sitting its conversation
+/// belongs to when the export shredded one chat into many. Doing it at this level rather than
+/// merging finished groups afterwards is what makes the fold free of consequences: the score,
+/// the match count and the positions are computed once, over the messages of the whole
+/// sitting, by code that never learns a sitting exists.
 ///
 /// The flag reports that the scan stopped at its ceiling rather than at the end of the
 /// matches. That is the difference between "these are the conversations that matched" and
@@ -1215,6 +1385,7 @@ fn rank(
     query: &Query,
     q: &SearchOptions,
 ) -> rusqlite::Result<(Vec<Ranked>, bool)> {
+    crate::sittings::ensure(conn)?;
     // Pull well beyond `limit` conversations' worth of messages, since one conversation can
     // account for many hits and would otherwise crowd out the tail.
     let ceiling = (q.limit * 50).clamp(500, 5_000);
@@ -1234,15 +1405,19 @@ fn rank(
     ];
     let filters = filter_sql(query, q.now_ms, &mut binds);
     let sql = format!(
-        "SELECT m.id, m.conv_id, m.seq,
+        "SELECT m.id, {group_id}, {position},
                 bm25({table}) / (1.0 + ?5 * (max(0, ?1 - ifnull(m.ts, ?1)) / {YEAR_MS})) AS score
          FROM {table}
          JOIN message m      ON m.rowid = {table}.rowid
          JOIN conversation c ON c.id = m.conv_id
+         {join}
          WHERE {table} MATCH ?2
            AND (?3 = 1 OR m.on_head_path = 1){filters}
          ORDER BY score
-         LIMIT ?4"
+         LIMIT ?4",
+        group_id = crate::sittings::GROUP_ID,
+        position = crate::sittings::POSITION,
+        join = crate::sittings::OF_MESSAGE,
     );
     // Bound rather than interpolated: a decay swept across a range would otherwise mint a
     // new statement per value and defeat the cache this call relies on. The filter fragment
@@ -1258,21 +1433,23 @@ fn rank(
         ))
     })?;
 
+    // Keyed by row, which is a conversation id for all but the folded activity records — see
+    // `sittings::GROUP_ID`, where the distinction is made and then stops mattering.
     let mut order: Vec<String> = Vec::new();
-    let mut by_conv: std::collections::HashMap<String, Vec<(String, i64, f64)>> = Default::default();
+    let mut by_row: std::collections::HashMap<String, Vec<(String, i64, f64)>> = Default::default();
     let mut scanned = 0i64;
     for row in rows {
-        let (msg_id, conv_id, seq, score) = row?;
+        let (msg_id, row_id, seq, score) = row?;
         scanned += 1;
-        if !by_conv.contains_key(&conv_id) {
-            order.push(conv_id.clone());
+        if !by_row.contains_key(&row_id) {
+            order.push(row_id.clone());
         }
-        by_conv.entry(conv_id).or_default().push((msg_id, seq, score));
+        by_row.entry(row_id).or_default().push((msg_id, seq, score));
     }
 
     let mut ranked: Vec<Ranked> = Vec::with_capacity(order.len());
     for conv_id in order {
-        let hits = by_conv.remove(&conv_id).unwrap_or_default();
+        let hits = by_row.remove(&conv_id).unwrap_or_default();
         // bm25 is negative and better is more negative, so the best hit is the minimum.
         let best = hits.iter().map(|(_, _, s)| *s).fold(f64::INFINITY, f64::min);
         let total: f64 = hits.iter().map(|(_, _, s)| *s).sum();
@@ -1301,8 +1478,11 @@ fn rank(
     Ok((ranked, scanned >= ceiling))
 }
 
-/// One conversation that survived ranking, before its display columns are fetched.
+/// One row that survived ranking, before its display columns are fetched.
 struct Ranked {
+    /// The conversation the row points at — the opener, when the row is a [`Sitting`]. Always
+    /// a real id: nothing here is coined, which is the whole reason the fold can be a
+    /// heuristic without touching ADR 16.
     conv_id: String,
     score: f64,
     match_count: usize,
@@ -1318,7 +1498,7 @@ struct Ranked {
 
 /// Ten cells showing where in a conversation the matches fall, densest marked heaviest.
 ///
-/// Rendered here rather than by each client for the same reason as [`Group::ended_date`]:
+/// Rendered here rather than by each client for the same reason as the local day on a group:
 /// every surface wants it, and a second implementation is a second chance to get the
 /// bucketing subtly different from the first.
 pub fn match_density(seqs: &[i64], msg_count: i64) -> String {
@@ -1358,11 +1538,21 @@ fn hydrate(
     shape: bool,
     ranked: Vec<Ranked>,
 ) -> rusqlite::Result<Vec<Group>> {
-    let mut meta = conn.prepare_cached(
-        "SELECT source, title, native_id, deleted_upstream_at, ended_at, user_turns,
-                msg_count, prose_count, cwd
-         FROM conversation WHERE id = ?1",
-    )?;
+    // Every total is the row's, not the conversation's: a sitting is dated by the last record
+    // in it and counted across all of them, while the title, the source and the id stay the
+    // opener's. `match_density` divides by `msg_count`, and the positions `rank` produced are
+    // already numbered across the sitting, so taking one record's count here would draw every
+    // mark in the first tenth of the strip.
+    let mut meta = conn.prepare_cached(&format!(
+        "SELECT c.source, c.title, c.native_id, c.deleted_upstream_at, {ended}, {turns},
+                {msgs}, {prose}, c.cwd
+         FROM conversation c {join} WHERE c.id = ?1",
+        ended = crate::sittings::total("ended_at"),
+        turns = crate::sittings::total("user_turns"),
+        msgs = crate::sittings::total("msg_count"),
+        prose = crate::sittings::total("prose_count"),
+        join = crate::sittings::OF_CONVERSATION,
+    ))?;
     let mut msg = conn.prepare_cached(
         "SELECT m.id, m.conv_id, m.role, m.kind, m.ts, m.text, m.on_head_path,
                 m.is_sidechain, m.thread_key,
@@ -1446,8 +1636,9 @@ fn hydrate(
             score,
             match_count,
             match_seqs: seqs,
-            // Filled below, with `meta` and `msg` released.
+            // Both filled below, with `meta` and `msg` released.
             kind_runs: Vec::new(),
+            sitting: None,
             hits: Vec::new(),
         });
     }
@@ -1458,6 +1649,7 @@ fn hydrate(
     drop(msg);
     drop(meta);
 
+    fill_sittings(conn, &mut groups)?;
     if shape {
         fill_shape(conn, &mut groups)?;
     }
@@ -1518,7 +1710,7 @@ mod group_tests {
         let q = SearchOptions { limit: 10, nested: 3, ..SearchOptions::new(NO_DECAY) };
         // An empty MATCH expression is a syntax error, so the point is that this does not
         // merely return nothing — it returns something useful, which is what a TUI opens on.
-        let groups = search_grouped(&conn, &Query::typeahead(""), &q).unwrap();
+        let groups = grouped(&conn, &Query::typeahead(""), &q).unwrap();
         let ids: Vec<_> = groups.iter().map(|g| g.conv_id.as_str()).collect();
         assert_eq!(ids, ["c:a", "c:c", "c:b", "c:z"]);
         assert!(groups.iter().all(|g| g.hits.is_empty()), "no query means no hits to nest");
@@ -1580,7 +1772,7 @@ mod group_tests {
         .unwrap();
 
         let opts = SearchOptions { limit: 5, nested: 3, ..SearchOptions::new(NO_DECAY) };
-        let groups = search_grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
+        let groups = grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
         assert_eq!(groups.len(), 1);
         assert_eq!(groups[0].ended_at, Some(ended));
         assert_eq!(groups[0].ended_date, crate::time::local_ymd(ended));
@@ -1665,7 +1857,7 @@ mod group_tests {
 
         let opts =
             SearchOptions { limit: 5, nested: 1, shape: true, ..SearchOptions::new(NO_DECAY) };
-        let groups = search_grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
+        let groups = grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
         let shape = &groups[0].kind_runs;
 
         // Main thread entire, then the sidechain entire.
@@ -1703,7 +1895,7 @@ mod group_tests {
 
         let opts =
             SearchOptions { limit: 5, nested: 1, shape: true, ..SearchOptions::new(NO_DECAY) };
-        let groups = search_grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
+        let groups = grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
         let group = &groups[0];
 
         let drawn = crate::blocks::load(&conn, "c:1", &[])
@@ -1735,10 +1927,10 @@ mod group_tests {
             ("main", false, 0, "user", "prose", false, "the borrow checker"),
         ]);
         let opts = SearchOptions { limit: 5, nested: 1, ..SearchOptions::new(NO_DECAY) };
-        let quiet = search_grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
+        let quiet = grouped(&conn, &Query::exact("borrow"), &opts).unwrap();
         assert!(quiet[0].kind_runs.is_empty(), "nobody asked for it");
 
-        let asked = search_grouped(
+        let asked = grouped(
             &conn,
             &Query::exact("borrow"),
             &SearchOptions { shape: true, ..opts },
@@ -1813,7 +2005,7 @@ mod group_tests {
                 limit: 10, nested: 1, repeat_weight: w, decay: 0.0,
                 ..SearchOptions::new(NO_DECAY)
             };
-            search_grouped(&conn, &Query::exact("widget"), &q).unwrap()[0].conv_id.clone()
+            grouped(&conn, &Query::exact("widget"), &q).unwrap()[0].conv_id.clone()
         };
         assert_eq!(top(0.0), "c:one-strong", "pure max: the single best hit is the whole score");
         assert_eq!(top(1.0), "c:many-weak", "pure sum: volume wins, which is what damping prevents");
@@ -1835,7 +2027,7 @@ mod group_tests {
                 limit: 10, nested: 1, decay: d, now_ms: 3 * year,
                 ..SearchOptions::new(NO_DECAY)
             };
-            search_grouped(&conn, &Query::exact("widget"), &q).unwrap()[0].conv_id.clone()
+            grouped(&conn, &Query::exact("widget"), &q).unwrap()[0].conv_id.clone()
         };
         assert_eq!(top(0.0), "c:a-old", "recency-blind: equal scores, tie broken by id");
         assert_eq!(top(DECAY), "c:b-new", "three years of age is enough to lose the top slot");
@@ -1913,7 +2105,7 @@ mod group_tests {
             seed(&conn, &format!("c:{i:03}"), 1_000, &["widget"]);
         }
         let q = SearchOptions { limit: 10, ..SearchOptions::new(NO_DECAY) };
-        let plain = search_grouped(&conn, &Query::exact("widget"), &q).unwrap();
+        let plain = grouped(&conn, &Query::exact("widget"), &q).unwrap();
         let counted = search_grouped_counted(&conn, &Query::exact("widget"), &q).unwrap();
         let ids = |gs: &[Group]| gs.iter().map(|g| g.conv_id.clone()).collect::<Vec<_>>();
         assert_eq!(ids(&plain), ids(&counted.groups), "one ranking, two views of it");
@@ -1933,6 +2125,339 @@ mod group_tests {
         // Exact, and taken inline: this branch counts `conversation` rows rather than
         // postings, so there is nothing here worth deferring.
         assert_eq!(counted.matched, Total::Exact(5));
+    }
+}
+
+/// What a search returns once an activity log has been read back as the chats it was.
+///
+/// [`crate::sittings`] proves the fold itself — where a sitting starts and stops. These prove
+/// that the fold *arrives*: that a result set counts, positions, dates and totals a sitting as
+/// one row rather than as the several conversations the index holds. The two failures are
+/// different, and the second is the one chat-search-o1i.5 is about.
+#[cfg(test)]
+mod sitting_tests {
+    use super::*;
+
+    const MINUTE: i64 = 60_000;
+
+    /// One activity record: a conversation of `turns`, at one instant, under one surface.
+    ///
+    /// The counts on `conversation` are set by hand rather than left at their defaults,
+    /// because summing them is exactly what a sitting does — a fixture that left them zero
+    /// would agree with the code about nothing.
+    fn record(conn: &Connection, id: &str, surface: &str, ended: i64, turns: &[(&str, &str)]) {
+        let prose = turns.iter().filter(|(_, kind)| *kind == "prose").count() as i64;
+        conn.execute(
+            "INSERT INTO conversation(id, source, native_id, surface, title, started_at,
+                                      ended_at, msg_count, prose_count, user_turns)
+             VALUES (?1, 'google-takeout', ?1, ?2, ?1, ?3, ?3, ?4, ?5, 1)",
+            params![id, surface, ended, turns.len() as i64, prose],
+        )
+        .unwrap();
+        for (i, (text, kind)) in turns.iter().enumerate() {
+            let role = if i % 2 == 0 { "user" } else { "assistant" };
+            conn.execute(
+                "INSERT INTO message(id, conv_id, thread_key, seq, role, kind, ts, text)
+                 VALUES (?1, ?2, 'main', ?3, ?4, ?5, ?6, ?7)",
+                params![format!("{id}:m{i}"), id, i as i64, role, kind, ended, text],
+            )
+            .unwrap();
+            if *kind == "prose" {
+                let rowid = conn.last_insert_rowid();
+                conn.execute(
+                    "INSERT INTO fts_prose(rowid, text) VALUES (?1, ?2)",
+                    params![rowid, text],
+                )
+                .unwrap();
+            }
+        }
+    }
+
+    /// Three records inside one 30-minute window, all about the same thing, plus a fourth an
+    /// hour later that is a different sitting and a fifth that is a different product.
+    fn corpus() -> Connection {
+        let conn = crate::open(":memory:").unwrap();
+        record(&conn, "g:1", "gemini-apps", 0, &[("what is a monad", "prose"), ("a monoid", "prose")]);
+        record(&conn, "g:2", "gemini-apps", 10 * MINUTE, &[("monad laws", "prose"), ("three of them", "prose")]);
+        record(&conn, "g:3", "gemini-apps", 25 * MINUTE, &[("monad in rust", "prose"), ("no higher kinds", "prose")]);
+        record(&conn, "g:4", "gemini-apps", 120 * MINUTE, &[("monad again", "prose"), ("still a monoid", "prose")]);
+        record(&conn, "a:1", "ai-mode", 12 * MINUTE, &[("monad definition", "prose"), ("endofunctors", "prose")]);
+        conn
+    }
+
+    fn opts() -> SearchOptions {
+        SearchOptions { limit: 20, nested: 3, ..SearchOptions::new(0) }
+    }
+
+    #[test]
+    fn several_records_of_one_chat_come_back_as_one_row_rather_than_as_several() {
+        // The whole of chat-search-o1i.5. Five conversations hold the word; three of them were
+        // one sitting at the keyboard, so the reader is owed three rows and not five.
+        let conn = corpus();
+        let groups = grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        let ids: Vec<&str> = groups.iter().map(|g| g.conv_id.as_str()).collect();
+        assert_eq!(ids.len(), 3, "got {ids:?}");
+
+        let folded = groups.iter().find(|g| g.sitting.is_some()).unwrap();
+        // Keyed on the record that *opened* it, whose prompt is the row's title. Any other
+        // choice would title the row with something said in the middle of the conversation.
+        assert_eq!(folded.conv_id, "g:1");
+        assert_eq!(folded.title.as_deref(), Some("g:1"));
+        assert_eq!(folded.sitting.as_ref().unwrap().members, ["g:1", "g:2", "g:3"]);
+        // Reported rather than implied: a client has to be able to say *this row is three
+        // records we believe were one sitting*, and on what basis.
+        assert_eq!(folded.sitting.as_ref().unwrap().gap_ms, crate::sittings::GAP_MS);
+
+        // The hour-long silence and the other product are their own rows, and neither is a
+        // fold, so both say so by carrying nothing.
+        for id in ["g:4", "a:1"] {
+            let row = groups.iter().find(|g| g.conv_id == id).unwrap();
+            assert!(row.sitting.is_none(), "{id} is one conversation and should say so");
+        }
+    }
+
+    #[test]
+    fn a_sitting_is_counted_and_positioned_as_the_conversation_it_was() {
+        let conn = corpus();
+        let groups = grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        let folded = groups.iter().find(|g| g.conv_id == "g:1").unwrap();
+
+        // Six messages and three turns, not the opener's two and one.
+        assert_eq!((folded.msg_count, folded.prose_count, folded.user_turns), (6, 6, 3));
+        // Positions run across the sitting rather than restarting per record, which is what
+        // makes them a coordinate the strip can be drawn in: seq 0 of `g:3` is position 4.
+        assert_eq!(folded.match_seqs, [0, 2, 4]);
+        assert_eq!(folded.match_count, 3);
+        // And the two halves agree, which is what breaks first if either is taken from the
+        // opening record alone: three marks spread across the strip. Positions numbered per
+        // record against a sitting-wide total would draw `▄·········`, and a sitting-wide
+        // numbering against one record's total would run off the end of it.
+        assert_eq!(match_density(&folded.match_seqs, folded.msg_count), "▁··▁··▁···");
+
+        // Dated by the last record in the sitting: "when was this" means when it ended.
+        assert_eq!(folded.ended_at, Some(25 * MINUTE));
+    }
+
+    #[test]
+    fn the_nested_hits_stay_with_the_records_they_came_from() {
+        // A sitting is a way of *reading* the index, not a rewrite of it. The row is folded;
+        // the messages under it still name the conversation that actually holds them, which is
+        // what lets a client open the right one.
+        let conn = corpus();
+        let groups = grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        let folded = groups.iter().find(|g| g.conv_id == "g:1").unwrap();
+        let mut from: Vec<&str> = folded.hits.iter().map(|h| h.conv_id.as_str()).collect();
+        from.sort_unstable();
+        assert_eq!(from, ["g:1", "g:2", "g:3"]);
+    }
+
+    #[test]
+    fn the_total_beside_a_result_set_counts_rows_and_not_records() {
+        // A header saying "5 matched" over three rows is the same bug as the duplicate rows,
+        // one layer up: the number and the list have to be counting the same thing.
+        let conn = corpus();
+        let query = Query::exact("monad");
+        let counted = search_grouped_counted(&conn, &query, &opts()).unwrap();
+        assert_eq!(counted.groups.len(), 3);
+        assert_eq!(counted.matched, Total::Exact(3));
+        // And the settling pass, which is a different query and therefore a second chance to
+        // count the wrong thing.
+        assert_eq!(count_matching(&conn, &query, &opts()).unwrap(), 3);
+    }
+
+    #[test]
+    fn the_browse_list_folds_too_and_its_total_agrees_with_it() {
+        // The list a typeahead opens on, where the shredding shows worst: unfolded, the
+        // activity log is a third of everything a reader scrolls past.
+        let conn = corpus();
+        let groups = recent(&conn, &Query::exact(""), 0, 20, false).unwrap();
+        let ids: Vec<&str> = groups.iter().map(|g| g.conv_id.as_str()).collect();
+        // Ordered by when each row *ended*, so the sitting sorts on its last record rather
+        // than on the one that opened it two hours earlier.
+        assert_eq!(ids, ["g:4", "g:1", "a:1"]);
+        assert_eq!(groups[1].sitting.as_ref().unwrap().members, ["g:1", "g:2", "g:3"]);
+
+        // Filling the limit forces the count onto the second branch, which is the one that
+        // asks the database rather than reading `groups.len()`.
+        let counted = search_grouped_counted(
+            &conn,
+            &Query::exact(""),
+            &SearchOptions { limit: 3, ..opts() },
+        )
+        .unwrap();
+        assert_eq!(counted.matched, Total::Exact(3), "the browse total counts rows");
+    }
+
+    #[test]
+    fn a_sittings_shape_is_its_records_end_to_end_with_the_seams_encoded_away() {
+        use crate::blocks::{Band, Run};
+        let conn = corpus();
+        let shaped = SearchOptions { shape: true, ..opts() };
+        let groups = grouped(&conn, &Query::exact("monad"), &shaped).unwrap();
+        let folded = groups.iter().find(|g| g.conv_id == "g:1").unwrap();
+        // Six bands, from three records of two — the opening record's shape alone would be
+        // two, and a strip drawn from it would say "one question" about a nine-turn sitting.
+        assert_eq!(
+            folded.kind_runs,
+            [
+                Run(Band::User, 1), Run(Band::Agent, 1), Run(Band::User, 1),
+                Run(Band::Agent, 1), Run(Band::User, 1), Run(Band::Agent, 1),
+            ]
+        );
+
+        // And the seam is re-encoded rather than merely concatenated: two records that both
+        // end and begin in the same band are one run across the join, not two. This is why
+        // the bands are joined and run-length encoded once at the end, instead of each
+        // record's runs being appended to the last record's.
+        let conn = crate::open(":memory:").unwrap();
+        record(&conn, "g:1", "gemini-apps", 0, &[("monad", "prose")]);
+        record(&conn, "g:2", "gemini-apps", MINUTE, &[("monad again", "prose")]);
+        let groups = grouped(&conn, &Query::exact("monad"), &shaped).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].kind_runs, [Run(Band::User, 2)]);
+    }
+
+    #[test]
+    fn opening_a_row_renders_the_sitting_the_row_counted() {
+        // chat-search-o1i.8: the search layer said six messages and three turns while the
+        // reader opened the same id and drew two, because `blocks::load` took the argument as a
+        // conversation and the row had stopped being one. The two numbers are asserted against
+        // each other rather than against a literal — the requirement is that the halves agree,
+        // and either of them alone can be right about a corpus the other never sees.
+        let conn = corpus();
+        let groups = grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        let folded = groups.iter().find(|g| g.conv_id == "g:1").unwrap();
+
+        let t = crate::Transcript::read(&conn, "g:1", &[]).unwrap();
+        assert_eq!(t.count as i64, folded.msg_count);
+        assert_eq!(t.conv_id, folded.conv_id);
+        assert_eq!(t.sitting.as_ref().unwrap().members, folded.sitting.as_ref().unwrap().members);
+
+        // In the sitting's order, records end to end, each record internally in reading order.
+        let ids: Vec<&str> = t.messages.iter().map(|m| m.block.msg_id.as_str()).collect();
+        assert_eq!(ids, ["g:1:m0", "g:1:m1", "g:2:m0", "g:2:m1", "g:3:m0", "g:3:m1"]);
+
+        // And numbered across the sitting, in the coordinate space the row's `match_seqs`
+        // already used. Per-record numbering would repeat 0 and 1 three times, and a client
+        // lining the two up would mark the opening turn three times over.
+        let seqs: Vec<i64> = t.messages.iter().map(|m| m.block.seq).collect();
+        assert_eq!(seqs, [0, 1, 2, 3, 4, 5]);
+        assert!(folded.match_seqs.iter().all(|s| seqs.contains(s)));
+    }
+
+    #[test]
+    fn any_member_of_a_sitting_opens_all_of_it_under_the_openers_name() {
+        // A client copying an id out of `Sitting.members` has no reason to prefer the first,
+        // and every one of them is a real permanent id the contract invites it to open. So the
+        // middle record opens the same transcript the row does — named for the opener, because
+        // a sitting has no id of its own (ADR 16) and naming it `g:2` would claim the reader is
+        // looking at one record.
+        let conn = corpus();
+        let opened = crate::Transcript::read(&conn, "g:1", &[]).unwrap();
+        for id in ["g:2", "g:3"] {
+            let t = crate::Transcript::read(&conn, id, &[]).unwrap();
+            assert_eq!(t.conv_id, "g:1", "{id} names the opener");
+            assert_eq!(t.count, opened.count, "{id} opens the whole sitting");
+        }
+
+        // The records outside it are untouched: an hour of silence and a different product are
+        // their own conversations, and each opens as itself with nothing to report.
+        for id in ["g:4", "a:1"] {
+            let t = crate::Transcript::read(&conn, id, &[]).unwrap();
+            assert_eq!(t.conv_id, id);
+            assert_eq!(t.count, 2);
+            assert!(t.sitting.is_none(), "{id} is one conversation and says so");
+        }
+    }
+
+    #[test]
+    fn explaining_a_row_explains_the_sitting_and_not_the_record_that_opened_it() {
+        // `cs explain` is asked why a *result* is missing or misplaced, and the result is the
+        // row. Counting the opener's two messages would answer about something the ranker
+        // never treated as a unit, and the counts beside the verdict would contradict the row
+        // in the very result set the question is about.
+        let conn = corpus();
+        let e = explain(&conn, "g:1", "monad", 0).unwrap();
+        assert_eq!((e.messages, e.prose_messages, e.indexed_prose), (6, 6, 6));
+        assert_eq!(e.sitting.as_ref().unwrap().members, ["g:1", "g:2", "g:3"]);
+        // Three records hold the word, not just the one named.
+        assert_eq!(e.term_hits, [("monad".to_string(), 3)]);
+        assert!(e.best_rank.is_some(), "a record of it did rank");
+
+        // Any member asks the same question and gets the same answer, under the opener's name
+        // — the same resolution `cs show` does, because a client copying an id out of
+        // `Sitting.members` cannot know which of them opened it.
+        for id in ["g:2", "g:3"] {
+            let member = explain(&conn, id, "monad", 0).unwrap();
+            assert_eq!(member.conv_id, "g:1", "{id}");
+            assert_eq!(member.messages, e.messages, "{id}");
+            assert_eq!(member.best_rank, e.best_rank, "{id}");
+        }
+
+        // And a conversation the fold never touched still answers for itself alone.
+        let alone = explain(&conn, "g:4", "monad", 0).unwrap();
+        assert_eq!((alone.conv_id.as_str(), alone.messages), ("g:4", 2));
+        assert!(alone.sitting.is_none());
+    }
+
+    #[test]
+    fn a_sitting_is_only_filtered_out_when_every_record_in_it_is() {
+        // A sitting that began before midnight and ran past it — the one shape where a `date:`
+        // filter can split one row's records. The ranker filters per message against the
+        // conversation holding it and folds afterwards, so the row survives on the record that
+        // passes; judging the opener alone would blame the filter for a result that is in the
+        // list.
+        let midnight = crate::time::local_day_start(30 * 24 * 3_600_000).unwrap();
+        let conn = crate::open(":memory:").unwrap();
+        record(&conn, "g:1", "gemini-apps", midnight - 5 * MINUTE, &[("monad", "prose")]);
+        record(&conn, "g:2", "gemini-apps", midnight + 5 * MINUTE, &[("monad again", "prose")]);
+
+        let today = format!("date:{}", crate::time::local_ymd(midnight).unwrap());
+        assert_ne!(
+            crate::time::local_ymd(midnight - 5 * MINUTE),
+            crate::time::local_ymd(midnight + 5 * MINUTE),
+            "the fixture has to actually put the opener outside the window"
+        );
+
+        let e = explain(&conn, "g:1", &format!("monad {today}"), 0).unwrap();
+        assert!(!e.excluded_by_filter, "g:2 is inside it, so the row is too");
+        assert!(
+            grouped(&conn, &Query::exact(&format!("monad {today}")), &opts())
+                .unwrap()
+                .iter()
+                .any(|g| g.conv_id == "g:1"),
+            "and the verdict agrees with the result set it is about"
+        );
+    }
+
+    #[test]
+    fn a_corpus_with_no_activity_log_in_it_is_unchanged_by_any_of_this() {
+        // The fold has to be invisible to the 70% of this corpus that arrives as transcripts.
+        // Both tables are empty for them, so every join finds nothing and every row is its
+        // own conversation.
+        let conn = crate::open(":memory:").unwrap();
+        for (i, id) in ["c:1", "c:2"].iter().enumerate() {
+            conn.execute(
+                "INSERT INTO conversation(id, source, native_id, title, ended_at, msg_count,
+                                          prose_count, user_turns)
+                 VALUES (?1, 'codex', ?1, ?1, ?2, 1, 1, 1)",
+                params![id, i as i64],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO message(id, conv_id, thread_key, seq, role, kind, ts, text)
+                 VALUES (?1, ?2, 'main', 0, 'user', 'prose', 0, 'monad')",
+                params![format!("{id}:m0"), id],
+            )
+            .unwrap();
+            let rowid = conn.last_insert_rowid();
+            conn.execute("INSERT INTO fts_prose(rowid, text) VALUES (?1, 'monad')", params![rowid])
+                .unwrap();
+        }
+        let groups = grouped(&conn, &Query::exact("monad"), &opts()).unwrap();
+        assert_eq!(groups.len(), 2);
+        assert!(groups.iter().all(|g| g.sitting.is_none()));
+        assert!(groups.iter().all(|g| g.msg_count == 1));
     }
 }
 
@@ -2015,7 +2540,7 @@ mod filter_tests {
 
     /// Conversation ids a query returns, sorted so the assertion is about the set.
     fn ids(conn: &Connection, text: &str) -> Vec<String> {
-        let mut got: Vec<String> = search_grouped(conn, &Query::exact(text), &opts())
+        let mut got: Vec<String> = grouped(conn, &Query::exact(text), &opts())
             .unwrap()
             .into_iter()
             .map(|g| g.conv_id)
@@ -2125,7 +2650,7 @@ mod filter_tests {
         // the whole recent list.
         let conn = corpus();
         let recent_ids = |text: &str| {
-            let mut got: Vec<String> = search_grouped(&conn, &Query::typeahead(text), &opts())
+            let mut got: Vec<String> = grouped(&conn, &Query::typeahead(text), &opts())
                 .unwrap()
                 .into_iter()
                 .map(|g| g.conv_id)
@@ -2164,7 +2689,7 @@ mod filter_tests {
         let typed = Query::exact("agent:codex borrow");
         let run = |q: &Query| {
             let mut got: Vec<String> =
-                search_grouped(&conn, q, &opts()).unwrap().into_iter().map(|g| g.conv_id).collect();
+                grouped(&conn, q, &opts()).unwrap().into_iter().map(|g| g.conv_id).collect();
             got.sort();
             got
         };
@@ -2419,7 +2944,7 @@ mod filter_cost {
             (0..7)
                 .map(|_| {
                     let t0 = std::time::Instant::now();
-                    let groups = search_grouped(&conn, &query, &opts()).unwrap();
+                    let groups = grouped(&conn, &query, &opts()).unwrap();
                     std::hint::black_box(groups);
                     t0.elapsed().as_secs_f64() * 1000.0
                 })
@@ -2489,7 +3014,7 @@ mod count_cost {
                             search_grouped_counted(&conn, &query, &opts()).unwrap().matched,
                         );
                     } else {
-                        std::hint::black_box(search_grouped(&conn, &query, &opts()).unwrap().len());
+                        std::hint::black_box(grouped(&conn, &query, &opts()).unwrap().len());
                     }
                     t0.elapsed().as_secs_f64() * 1000.0
                 })
@@ -2535,5 +3060,112 @@ mod count_cost {
         // And the deferred half stays bounded: it is one pass over the postings the ranking
         // just walked, so it cannot run away from the search that precedes it.
         assert!(pause < 60.0, "settling a total took {pause:.1} ms");
+    }
+}
+
+/// What reading the activity log back as chats costs, and what it buys.
+///
+/// Measured the same way and for the same reason as [`filter_cost`]. Three quantities:
+///
+/// * **`ensure`, warm.** Charged to every search, so it is the number that has to be near
+///   zero. It is two cached statements — a temp-schema lookup and a count over
+///   `idx_conversation_source` — deliberately in place of loading a map per query.
+/// * **`ensure`, cold.** Charged to the first search on a connection, and again after a
+///   reindex. This is why the fold is a table built once and not a map rebuilt per keystroke.
+/// * **the fold against the joins alone.** Emptying the two tables leaves every `LEFT JOIN`
+///   in place and finding nothing, which is exactly what a corpus with no Google Takeout in
+///   it pays. The difference between that and the populated fold is what the Gemini records
+///   cost — and beside it, the rows they save.
+///
+/// What this cannot measure from inside is the joins themselves, since removing them is a
+/// different build. Against `63a8b31` on the same 4,377-conversation index, at `limit` 50:
+/// `the` 65.0 -> 70.5 ms, `con` 41.3 -> 43.4, `tes` 29.4 -> 31.0, `rus` 23.2 -> 23.3,
+/// `ind` 13.4 -> 12.9, blank 0.9 -> 1.9. So the joins are 5–8% on the broadest prefixes and
+/// nothing on the narrow ones, against 17% fewer rows for `the` (4,243 -> 3,511).
+///
+/// This is the third `--ignored` benchmark in this file and they contend: run them with
+/// `--test-threads=1`, or each on its own. Three timing loops racing for the same index put
+/// [`count_cost`] four times over its budget on `63a8b31` too, so a failure from running them
+/// together is measuring the harness rather than the code.
+#[cfg(test)]
+mod sitting_cost {
+    use super::*;
+
+    #[test]
+    #[ignore = "needs a real index; set CS_INDEX to an index.db"]
+    fn folding_an_activity_log_does_not_cost_a_keystroke_its_budget() {
+        let Ok(path) = std::env::var("CS_INDEX") else { return };
+        let conn = Connection::open(path).expect("readable index");
+        // The TUI's own shape, as [`count_cost`] uses it: `limit` 50, and `nested: 0` because
+        // per keystroke it draws no snippets. Building them swings ±10 ms between runs on a
+        // narrow query and none of that swing is the fold, so it would be noise standing in
+        // front of the thing being measured.
+        let opts =
+            || SearchOptions { limit: 50, nested: 0, ..SearchOptions::new(crate::time::now_ms()) };
+
+        let ms = |f: &dyn Fn()| {
+            let t0 = std::time::Instant::now();
+            f();
+            t0.elapsed().as_secs_f64() * 1000.0
+        };
+        // Best of seven, floor taken, exactly as `filter_cost` does — see its note on why the
+        // minimum is the honest number.
+        let best = |f: &dyn Fn()| (0..7).map(|_| ms(f)).fold(f64::INFINITY, f64::min);
+
+        let cold = ms(&|| crate::sittings::ensure(&conn).unwrap());
+        let warm = best(&|| crate::sittings::ensure(&conn).unwrap());
+        println!("ensure: {cold:.1} ms cold, {warm:.2} ms warm");
+
+        let search = |text: &str| {
+            let query = Query::typeahead(text);
+            best(&|| {
+                std::hint::black_box(grouped(&conn, &query, &opts()).unwrap());
+            })
+        };
+        // The whole row count, settled: a blank query takes the branch that ranks nothing and
+        // has no `MATCH` expression to count with, and a broad prefix comes back a floor.
+        let total = |text: &str| {
+            let query = Query::typeahead(text);
+            match search_grouped_counted(&conn, &query, &opts()).unwrap().matched {
+                Total::Exact(n) => n,
+                Total::AtLeast(_) => count_matching(&conn, &query, &opts()).unwrap(),
+            }
+        };
+
+        let queries = ["", "borrow checker", "gemini", "monad", "ind", "the"];
+        // Warmed before either pass. The two passes cannot run at once, so whichever goes
+        // first would otherwise be charged for pulling the postings off disk — which on a
+        // 345 MB index is larger than the difference being measured, and lands entirely on
+        // the fold, since the fold has to be measured before the tables are emptied.
+        for text in queries {
+            std::hint::black_box(grouped(&conn, &Query::typeahead(text), &opts()).unwrap());
+        }
+        let with: Vec<(f64, usize)> = queries.iter().map(|t| (search(t), total(t))).collect();
+
+        // The tables emptied rather than dropped: `ensure` rebuilds on a changed fingerprint,
+        // not on an empty table, so this leaves every join in place and finding nothing —
+        // which is the shape of the query plan for a corpus that has no activity log at all.
+        conn.execute_batch("DELETE FROM conv_sitting; DELETE FROM sitting;").unwrap();
+        let mut worst = 0.0f64;
+        println!("    joins     fold    rows   folded   query");
+        for (text, (fold_ms, fold_n)) in queries.iter().zip(with) {
+            let bare_ms = search(text);
+            let bare_n = total(text);
+            println!("{bare_ms:9.1}{fold_ms:9.1}{bare_n:8}{fold_n:9}   {text}");
+            worst = worst.max(fold_ms - bare_ms);
+        }
+        println!("worst the fold added: {worst:.1} ms");
+
+        // The invariant the temp table exists to hold: what every search pays is a lookup, not
+        // a rebuild, and a rebuild is what the first one pays instead.
+        // Measured at 0.04 ms warm and 8–24 ms cold — 132 ms once, on a cold page cache,
+        // which is what the ceiling below leaves room for.
+        assert!(warm < 1.0, "every search paid {warm:.2} ms to check the fold was current");
+        assert!(cold < 300.0, "building the fold took {cold:.1} ms");
+        // And the fold itself stays inside the noise of the joins that carry it: measured at
+        // 0.9–2.9 ms across runs. It is a thousand-row table joined by primary key, so
+        // anything much above this means a plan changed, not that there is more Gemini in the
+        // corpus.
+        assert!(worst < 8.0, "the fold added {worst:.1} ms to a keystroke");
     }
 }

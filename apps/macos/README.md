@@ -1261,32 +1261,49 @@ match — and line 3 only when there is one, which the contract decides rather t
 on the left, directory and age on the right, because `cwd` answers *which of my worlds was this*
 rather than *what is it*.
 
-What it draws is what the wire carries: source, size, directory, age, the title, and the best match
-with its highlight runs. Four of the mockup's cells are not on the wire at all and one is held back
-on purpose. All five are absent rather than blank — a cell with nothing behind it is not a column to
-reserve space for:
+What it draws is what the wire carries: source, model, size, directory, forks, age, the title, and
+the best match with its highlight runs. Two of the mockup's cells are not on the wire at all and one
+is held back on purpose. All three are absent rather than blank — a cell with nothing behind it is
+not a column to reserve space for:
 
 | cell | why not |
 | --- | --- |
-| model | in the index, not in the contract. `chat-search-me9.8.14` |
-| forks | `thread_count`, same |
 | total edit lines | nowhere. `export.py` sums them by parsing `Edit`/`Write` tool arguments |
 | topics | a `poc/ui` clustering over the corpus, not an index fact |
 | the ribbon | deliberate: it needs `kind_runs` and `match_seqs` in one coordinate space, which `chat-search-me9.25` says they are not, and nothing stands in its place |
 
+**Model and forks are drawn per row on that same principle, now that `chat-search-me9.8.14` has put
+them on the wire.** Neither is a column standing empty: 1,300 conversations of 4,426 name no model —
+the whole of Google Takeout, whose activity records have no such field — and only 45 hold more than
+one strand, so a reserved fork column would be three blank characters on 99% of the list. Each cell
+appears when its row has something to say and is gone when it does not.
+
+Which means both had to be placed where a cell that comes and goes moves nothing else. `model` is
+**last in the left cluster rather than second**, where the mockup puts it, because the cell before
+the gutter is the only one in that cluster whose width the gutter can absorb — second, it would step
+the size column left on every Takeout row that scrolled past. `forks` sits between the directory and
+the age for the mirror-image reason: `age` is anchored to the trailing edge either way, and the
+directory is the cell built to stretch, so it is the one that lends the mark its three characters.
+
 **The agent badge is the word, not an icon, and that is a re-measure rather than a disagreement.**
 The mockup dropped the word because its list column was a fixed 706px and the word cost the 66px
-`cwd` needed to stop collapsing. This row does not spend that: with no model cell and no ribbon it
-costs about 200pt less, so at the window's 720pt floor `cwd` still gets ~470pt against the mockup's
-17-character budget. It is also the only channel there is — no asset catalog means no per-source
+`cwd` needed to stop collapsing. This row does not spend that: with no ribbon it costs about 130pt
+less, so at the window's 720pt floor `cwd` still gets ~360pt against the mockup's 17-character
+budget. It is also the only channel there is — no asset catalog means no per-source
 icon, and SF Symbols has no glyph for a vendor — so the row carries colour and text where the
 mockup carried shape and colour. Text is the channel that survives greyscale.
 
-**The column plan is in characters of the meta face, not in points.** `source` 14, size 9, the
-gutter 4 and `age` 4, with the directory taking what is left up to 44. One character is measured
-off the theme's own size and design, so a direction that moves `--fs-meta` moves the columns with
-it instead of leaving the text to outgrow its cell. The terminal states its own plan in character
-cells for a different reason — it has nothing else — and the two are the same idea.
+**The column plan is in characters of the meta face, not in points.** `source` 14, model 16, size 9,
+the gutter 4, forks 3 and `age` 4, with the directory taking what is left up to 44. One character is
+measured off the theme's own size and design, so a direction that moves `--fs-meta` moves the columns
+with it instead of leaving the text to outgrow its cell. The terminal states its own plan in
+character cells for a different reason — it has nothing else — and the two are the same idea.
+
+The model cell is sized the way the directory is, off the corpus: 94.6% of model names are 16
+characters or fewer, and the tail is 134 rows of `text-davinci-002-render-sha` — a ChatGPT internal
+name whose instances the missing eleven characters would not tell apart. It tail-elides rather than
+middle-elides, because the pairs that differ only at the end (`claude-opus-4-7` against
+`claude-opus-4-8`) are 15 characters and fit whole.
 
 The directory's ceiling is the corpus's: 88% of directories are 35 characters or fewer, 91% are 44
 or fewer, and the tail is worktree paths, which middle-elide to their leaf. Elision is middle and

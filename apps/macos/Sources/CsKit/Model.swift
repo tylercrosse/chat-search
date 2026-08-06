@@ -123,7 +123,22 @@ public struct Conversation: Decodable, Sendable, Identifiable {
     public let userTurns: Int
     public let msgCount: Int
     public let proseCount: Int
+    /// How many strands of the conversation's DAG its messages fall into — what a reader calls a
+    /// fork. 1 on 4,379 of 4,426 conversations and above 1 on 45, so it is a mark that appears
+    /// rather than a column that is nearly always the digit one. `0` on the two conversations
+    /// holding no messages, which is neither one strand nor several: `forks` reads both as
+    /// nothing to say.
+    public let threadCount: Int
     public let cwd: String?
+    /// The model of the **last message that named one**, resolved in the indexer's rollup — a
+    /// summary rather than a fact about the conversation (ADR 24). 166 conversations name more
+    /// than one, so a cell drawing this says *the model this ended on* and must not imply the
+    /// whole of it was that.
+    ///
+    /// Null on 1,300 of 4,426 — the whole of Google Takeout, whose activity records carry no
+    /// model field at any nesting level, plus 20 elsewhere that named none. Free-form as the
+    /// source wrote it, from `gpt-4o` to `text-davinci-002-render-sha`: rendered, never parsed.
+    public let model: String?
     /// Opaque ordering. The rows arrive best first and that order *is* the ranking, so this is
     /// carried to be shown and never to re-sort on.
     public let score: Double
@@ -142,6 +157,14 @@ public struct Conversation: Decodable, Sendable, Identifiable {
     public let matches: [Match]
 
     public var id: String { convId }
+
+    /// The number beside a fork mark, or nil when there is no fork to mark.
+    ///
+    /// Both states `threadCount` collapses to here mean "nothing to say": 1 is the ordinary
+    /// linear conversation, 4,379 rows of 4,426, and 0 is the two that hold no messages at all.
+    /// Drawing the difference would spend a cell on the fact that nothing happened, which is
+    /// why `docs/TUI-DESIGN.md` §3 asks for a marker above 1 and not a numeric column.
+    public var forks: Int? { threadCount > 1 ? threadCount : nil }
 
     /// The last path component of `cwd`, which is how a project reads in a row. Absent for the
     /// 69% of the corpus that is ChatGPT, so it is a hint and never a column.

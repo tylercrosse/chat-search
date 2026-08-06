@@ -12,10 +12,10 @@ import SwiftUI
 /// so the two trades that column forced were re-measured rather than inherited.
 ///
 /// **The agent badge is the word, not an icon.** The mockup dropped the word to buy `cwd` back the
-/// 66px it needed at 706. This row does not spend that: with no model cell and no ribbon it costs
-/// about 200pt less than the mockup's, so at the window's 720pt floor there is ~470pt left for the
-/// directory and the gutter between the clusters, against a mockup that could afford the path 17
-/// characters. Even once the ribbon lands the directory keeps ~27 of its 44. The word is also the
+/// 66px it needed at 706. This row does not spend that: with no ribbon it costs about 130pt less
+/// than the mockup's, so at the window's 720pt floor there is ~360pt left for the directory and
+/// the gutter between the clusters, against a mockup that could afford the path 17 characters.
+/// Even once the ribbon lands the directory keeps ~24 of its 44. The word is also the
 /// only channel left, since a package with no asset catalog has no
 /// per-source icon and SF Symbols has no glyph for a vendor; `poc/ui/NOTES.md` §7 asks for three
 /// redundant channels and this row has two, colour and text, rather than the mockup's shape and
@@ -26,11 +26,12 @@ import SwiftUI
 /// `chat-search-me9.31` is the bead. A ribbon in the wrong space is worse than none, and a
 /// stand-in mark would have to be undone when the real one arrives.
 ///
-/// **Four of the mockup's cells are not on the wire at all** — model, total edit lines, forks and
-/// topics. The first two exist in the index and `cs search --json` does not carry them
-/// (`chat-search-me9.8.14`); the last two are derived by `poc/ui/export.py` from data the contract
-/// has no field for. They are absent rather than blank: a cell with no data anywhere behind it is
-/// not a column this row gets to reserve space for.
+/// **Two of the mockup's cells are still not on the wire** — total edit lines and topics, both
+/// derived by `poc/ui/export.py` from data the contract has no field for. They are absent rather
+/// than blank: a cell with no data anywhere behind it is not a column this row gets to reserve
+/// space for. Model and forks were in that list until `chat-search-me9.8.14` put them on the wire,
+/// and each is now drawn per row on the same principle — present when the row has something to
+/// say, gone when it does not, so neither spends width on 1,300 and 4,381 rows respectively.
 struct ResultRow: View {
     let conv: Conversation
     /// How to read `snippetSpans`, off the envelope that carried them rather than assumed. The
@@ -83,6 +84,20 @@ struct ResultRow: View {
                 .lineLimit(1)
                 .frame(width: cell(Columns.size), alignment: .trailing)
 
+            // Last in the left cluster rather than second, which is where the mockup puts it,
+            // and the swap is what lets the cell be absent instead of blank. 1,300 rows of
+            // 4,426 name no model — the whole of Google Takeout and a scattering elsewhere —
+            // so a cell that comes and goes has to be the one next to the gutter, or the size
+            // column steps left every time one of them scrolls past. Here the gutter absorbs
+            // it and nothing else in the row moves.
+            if let model = conv.model, !model.isEmpty {
+                Text(model)
+                    .foregroundStyle(theme.color(.ink3))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(width: cell(Columns.model), alignment: .leading)
+            }
+
             // The gutter takes the slack, and `cwd` takes it first up to a ceiling. `styles.css`
             // makes `cwd` the flexible track and its own comment says the gutter is — a
             // disagreement no fixed 706px column could show. A resizable window shows it at once:
@@ -106,6 +121,19 @@ struct ResultRow: View {
                 // flexible siblings otherwise split the slack, leaving a path elided next to an
                 // empty gap wide enough to have shown it.
                 .layoutPriority(1)
+
+            // A mark, not a column (`docs/TUI-DESIGN.md` §3). 45 conversations in 4,426 hold
+            // more than one strand, so a cell reserved on every row would be three characters
+            // of blank on 99% of them; absent, it costs the directory those characters only on
+            // the rows that have something to say, and the directory is the cell built to
+            // stretch. `age` is anchored to the trailing edge either way, so the right cluster
+            // stays a cluster.
+            if let forks = conv.forks {
+                Text(verbatim: "\(Display.forkMark)\(forks)")
+                    .foregroundStyle(theme.color(.ink3))
+                    .lineLimit(1)
+                    .frame(width: cell(Columns.forks), alignment: .trailing)
+            }
 
             Text(Display.age(endedAt: conv.endedAt))
                 .lineLimit(1)
@@ -219,6 +247,15 @@ struct ResultRow: View {
         static let source = 14.0
         /// `2553 msgs` — the largest conversation in the corpus is 2,553 messages.
         static let size = 9.0
+        /// Sized the way the directory is, off what the corpus actually holds: 94.6% of model
+        /// names are 16 characters or fewer, and the tail is 134 rows of
+        /// `text-davinci-002-render-sha`, a ChatGPT internal name whose 134 instances are not
+        /// told apart by the eleven characters it would take to finish it. Tail-elided, unlike
+        /// the directory: `claude-opus-4-7` and `claude-opus-4-8` are 15 and both fit whole, so
+        /// nothing discriminating is ever the part that goes.
+        static let model = 16.0
+        /// `⑂10` — the most-forked conversation in the corpus holds ten strands.
+        static let forks = 3.0
         /// As much of a directory as the row will show before eliding it. Not a fixed width: the
         /// cell is smaller than this whenever the window is.
         static let dir = 44.0

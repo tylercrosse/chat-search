@@ -627,6 +627,10 @@ level, and the other 20 are spread thin across every source that does.
 | 12 × three sources | No assistant turn at all — a session of slash commands, or a `New chat` opened and abandoned. There was nothing for a model to have produced. |
 | 8 × `chatgpt-export`, `claude-code` | Assistant turns that declared no model. The field is optional in both formats and some conversations simply do not carry it, which is why this cannot be typed non-optional on the evidence of the other 4,406. |
 
+A browse list shows fewer of them than that — 491 of 3,617 rows, measured through the Swift
+decoder the same day — because Takeout's records reach a client already folded into
+[sittings](#sitting). The count above is of conversations, as every count in this section is.
+
 **The inverse of `cwd`, and worth reading beside it.** `cwd` is null because a web page has no
 working directory — an absence of the concept. This is null because nothing *said*, which is
 ordinary missing data and a client should draw it as nothing at all rather than as `unknown`.

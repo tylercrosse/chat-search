@@ -1025,6 +1025,17 @@ pub(crate) struct Group {
     /// Once asked for, it is a property of the conversation rather than of the query, so it
     /// survives the query being cleared — the strip is what makes the no-query list
     /// triageable in the first place.
+    ///
+    /// **Sent at full resolution, and that is a decision rather than an omission** (ADR 26,
+    /// chat-search-me9.31). It is a third of the response — 226 KB of 486 on the broadest
+    /// query at limit 100, measured 2026-08-06 — and it is still not quantised to the ~200
+    /// columns a row strip has, because the server does not know the width, does not know
+    /// which of the four bands the reader is currently showing ([`crate::blocks::Folds`] is
+    /// client session state), and would be serving the narrowest of the three scales the same
+    /// data feeds. A client that hides the tool band and rebuilds its axis from a bucketed
+    /// strip gets it wrong by up to 2.75x with nothing here to say so. The bytes worth taking
+    /// first are the pretty-printing on this same response, which is 2.4–3.0x and costs no
+    /// interface change (chat-search-me9.29).
     pub kind_runs: Vec<crate::blocks::Run>,
     /// Set when this row is several activity-log records read back as one chat. See
     /// [`Sitting`]; every count above is the sitting's, not the opening record's.

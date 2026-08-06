@@ -21,6 +21,7 @@ swift run -c release chat-search --bin /path/to/cs --limit 30
 swift run -c release chat-search --size 720x480
 swift run -c release chat-search --group project
 swift run -c release chat-search --theme paper
+swift run -c release chat-search --appearance light --theme-light paper --theme-dark terminal
 ```
 
 `--size` opens the window at a stated size and `--group` opens the list already cut along an axis.
@@ -29,9 +30,10 @@ and a grouped list rebuilds sections where an ungrouped one rebuilds rows, so `-
 way into that mode. A window that always opens at one size, or always ungrouped, makes checking
 either of those a manual drag nobody repeats.
 
-`--theme` is the one that is *not* an instrument. It picks one of the four directions compiled into
-the binary and it sticks, which is why it is the only flag here that changes anything about the
-next launch. See [the theme seam](#the-theme-seam).
+The last four are the ones that are *not* instruments. They choose among the four directions
+compiled into the binary and which side of one you are looking at, and they stick, which is why
+they are the only flags here that change anything about the next launch. See
+[the theme seam](#the-theme-seam).
 
 ## What it is made of
 
@@ -221,15 +223,103 @@ done
 is sans on slate with a teal one, and nothing under `Sources/ChatSearch` differs between the two
 runs.
 
-### Where the choice lives
+### Two axes: an appearance, and a direction per side
 
-`--theme` sticks, which is what separates it from `--size` and `--group`. It sticks in
-`~/Library/Preferences/chat-search.plist`:
+A direction says what both sides look like; the appearance says which side you are looking at.
+Until `chat-search-me9.8.22` there was only the first and macOS decided the second, so "GitHub
+Light in the day and Solarized Dark at night" was not a sentence this app could hear.
 
 ```bash
-defaults read chat-search theme      # what the next launch will draw
+swift run -c release chat-search --appearance light      # light, whatever macOS is doing
+swift run -c release chat-search --theme-light paper --theme-dark terminal
+```
+
+**The appearance is one line — `NSApp.appearance` — and that is the whole mechanism.** Every colour
+is a dynamic `NSColor` whose provider is called with the appearance in force *where the colour is
+being drawn* (`Theme.dynamic`), so an override at the application reaches every token with no
+palette re-resolve, no view change, and no second code path for "the app is forcing dark". `nil` is
+`system`, which is a thing somebody chooses rather than the absence of a choice — the difference
+shows the moment it has to be written down.
+
+**A side override is colour and nothing else.** `--theme-light paper` puts paper's light palette on
+the light side and leaves the type scale and the row metrics alone; those come from `--theme`, once,
+for both sides. That is a decision and not a limitation of the seam, and the reason is the flip
+nobody is present for: macOS switches at sunset, possibly mid-read, and colour changing then is the
+point of the setting where the reading measure changing under someone's eyes is a bug.
+`poc/ui/DESIGN-BRIEF.md` names rows-per-screen first on its list of what would actually break this.
+The cost avoided is a real number rather than a worry — the corpus's 923-message conversation in the
+default 900×620 window, `--shot` reporting the same drawer twice:
+
+| | document | on screen at rest |
+| --- | ---: | --- |
+| paper's light colours in terminal's metrics | 14,486.7 pt | messages 179–192, 10 rows |
+| the whole of paper | 14,613.6 pt | messages 177–190, 9 rows |
+
+So a whole-direction flip would move the document 127 pt and change which messages are in front of
+you, at sunset, with nobody watching.
+
+The alternative is recorded rather than dismissed: a whole direction per side is more expressive and
+more honest about what a direction *is* — paper's serif reading face by day as well as its stock —
+and it is one line in `Theme.composed` on the day it is chosen. What it would owe first is an answer
+to what happens to scroll position across the flip.
+
+**Mixing cannot produce an unmeasured palette.** `ThemeCheck` fences each side on its own and names
+the side in every failure it prints, so a light half and a dark half taken from two fenced
+directions are each already measured: the mix is closed under the fence, and `--verify-theme` does
+not have to know that mixing exists.
+
+**And the override is probed rather than assumed.** An `NSApp.appearance` that reached only the
+window's own chrome would draw a dark frame around a light window, and a picture of that reads
+exactly like a picture of a light theme — so `--shot` and `--measure` print what the app's *own view
+tree* resolved:
+
+```
+appearance: light → the view tree draws in NSAppearanceNameAqua, --bg #f6f1e6,
+which is the light side of terminal with paper's light.
+```
+
+Taken on a Mac in dark mode, which is what makes it evidence rather than a restatement: `#f6f1e6` is
+`paper`'s light `--bg`, sampled back out of the same token a view would have asked for.
+
+```bash
+for a in system light dark; do
+  swift run -c release chat-search --shot --appearance $a \
+      --theme-light paper --theme-dark terminal --out /tmp/theme-$a.png
+done
+```
+
+### Where the choice lives
+
+All four stick, which is what separates them from `--size` and `--group`. They stick in
+`~/Library/Preferences/chat-search.plist`:
+
+| key | what it holds |
+| --- | --- |
+| `theme` | the direction: both sides' colours unless a side says otherwise, and both sides' type and geometry always |
+| `theme-light` | a direction whose light *colours* the light side wears, and nothing else of it |
+| `theme-dark` | the same for the dark side |
+| `appearance` | `system`, `light` or `dark` |
+
+```bash
+defaults read chat-search            # what the next launch will draw
 defaults delete chat-search theme    # back to the direction the build ships
 ```
+
+`--theme` writes the first key and clears the two side keys, because "this direction on both sides"
+is what it says and a leftover override would contradict it.
+
+**A `theme` written before this build is read, not converted.** It meant one direction on both
+sides, following the system, which is exactly what it still means here — so nothing is rewritten,
+and what is owed is the sentence, said once on stderr with the flag that records the reading and
+stops it:
+
+```
+theme: paper on both sides, appearance following the system — that is what a `theme` set before
+this build means. … `--appearance system` records this reading so this line stops.
+```
+
+Converting it would be this app changing a preference nobody asked it to change, at launch, which is
+the thing the scripted-run rule below exists to prevent.
 
 `UserDefaults` without a bundle was probed rather than assumed: a non-bundled executable gets a
 defaults domain named after the executable, and the value is written and read back across runs. The
@@ -239,16 +329,17 @@ one re-pick of a theme, which is why it did not buy a hand-rolled file under
 `~/.config/chat-search/`: that directory is `cs`'s, this is the client's own state, and a plist is
 inspectable with `defaults read` where a new dotfile format would be inspectable with nothing.
 
-Two rules around it, both of which exist to stop the flag lying. A name this build does not carry
-never quietly becomes another one — it says so on stderr and leaves the previous answer standing,
-because a flag that silently does nothing is the failure this is most likely to have. And a
-scripted run never writes the preference: `--measure` and `--shot` draw in whatever direction a
-script names them, and neither is somebody choosing a theme. Same rule and the same reason as both
-staying out of the query log.
+Two rules around all four, both of which exist to stop a flag lying. A name this build does not
+carry never quietly becomes another one — on a flag or in the plist, per side or for the appearance
+— it says so on stderr and leaves the previous answer standing, because a flag that silently does
+nothing is the failure this is most likely to have. And a scripted run writes none of the four:
+`--measure` and `--shot` draw in whatever direction and appearance a script names them, and neither
+is somebody choosing a theme. Same rule and the same reason as both staying out of the query log.
 
 A flag is the affordance because a terminal is this app's front door — no bundle, no Dock icon, no
 menu bar. A picker *inside* the app wants a menu bar to hang itself on, which this executable has
-never built, so it is filed rather than half-done: `chat-search-me9.8.21`.
+never built, so it is filed rather than half-done: `chat-search-me9.8.21`, which is now a surface
+over three settings that already work rather than the only way to reach them.
 
 ### Why `--verify-theme` and not a test
 
@@ -306,9 +397,9 @@ holds as authored, which neither of these two is.
 
 Three things this seam does **not** do yet, each filed:
 
-- **Picking one means relaunching.** `--theme` chooses at launch and the app remembers it; changing
-  your mind while looking at the window does not. That wants a menu bar this executable has never
-  built. `chat-search-me9.8.21`.
+- **Picking one means relaunching.** The four flags choose at launch and the app remembers all of
+  them; changing your mind while looking at the window does not. That wants a menu bar this
+  executable has never built. `chat-search-me9.8.21`.
 - **Nothing loads at runtime.** Dialling in type and spacing is edit, regenerate, rebuild, relaunch.
   Reading a token set from a file would make it edit and relaunch — and that file is the user-theme
   class, so it is measured on load, drawn regardless, and a file that cannot be *read* falls back to

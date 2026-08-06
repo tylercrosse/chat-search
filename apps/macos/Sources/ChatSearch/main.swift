@@ -56,6 +56,11 @@ struct Options {
     /// `--shot` can reach it by typing. Not a preference — it is not remembered, and the fold a
     /// person performs by hand is the one that counts.
     var folded = false
+    /// Whether the settings window is up when the app comes up. The same kind of affordance as
+    /// `--folded` and needed for a sharper version of the same reason: the window is reached by
+    /// Cmd-comma, which is a key no script can press, and it is a second window — so `--shot`
+    /// cannot photograph it and driving its controls cannot be checked without a way in.
+    var settings = false
 
     /// Nobody is typing into this run. Both scripted modes stay out of the front, so they can be
     /// run beside whatever a person is actually doing — and out of the query log, because their
@@ -85,6 +90,7 @@ func parse(_ argv: [String]) -> Options {
         // changes what it is measuring is worse than one that ignores you.
         case "--group": if let v = next(), let axis = Grouping(rawValue: v) { o.group = axis }
         case "--folded": o.folded = true
+        case "--settings": o.settings = true
         case "--verify-theme": o.verifyTheme = true
         // Kept as typed rather than resolved here: a name this build does not carry gets a
         // sentence on stderr from `ThemeChoice`, which is also where the remembered one is read,
@@ -110,6 +116,8 @@ func parse(_ argv: [String]) -> Options {
                                        and the row metrics come from --theme, for both sides
                   --appearance WHICH   \(Appearance.names) — which side is drawn, whatever
                                        macOS is doing. Also remembered
+                  --settings           open the settings window at launch. All three settings
+                                       are on it, and it is Cmd-comma the rest of the time
                   --measure            type the measurement phrases and print keystroke→frame
                   --interval MS        milliseconds between simulated keystrokes (default 100)
                   --verify-theme       re-measure every compiled-in direction and exit
@@ -155,11 +163,17 @@ if options.verifyTheme { exit(ThemeCheck.run(Theme.directions, as: .direction)) 
 // default is what the build ships and this is what the person chose, and only one of those two is
 // allowed to be the answer once a choice exists. Two answers now — a theme, which may be one
 // direction's light beside another's dark, and the appearance it is drawn in.
-let (theme, appearance) = ThemeChoice.resolve(
-    ThemeChoice.Request(
-        direction: options.theme, light: options.themeLight, dark: options.themeDark,
-        appearance: options.appearance),
-    remember: !options.scripted)
+//
+// Resolved once and then *held*, where it used to be resolved once and then fixed: the settings
+// window moves these while the app is running (`chat-search-me9.8.21`), so what the launch settled
+// on is this object's starting state rather than the last word.
+let settings = ThemeSettings(
+    ThemeChoice.resolve(
+        ThemeChoice.Request(
+            direction: options.theme, light: options.themeLight, dark: options.themeDark,
+            appearance: options.appearance),
+        remember: !options.scripted),
+    remembers: !options.scripted)
 
 guard let binary = CsClient.locate(binary: options.binary) else {
     FileHandle.standardError.write(
@@ -167,32 +181,40 @@ guard let binary = CsClient.locate(binary: options.binary) else {
     exit(2)
 }
 
-/// Owns the window and, under `--measure`, the display link. Neither exists under `swift run`
-/// unless something makes them.
+/// Owns the windows and, under `--measure`, the display link. None of them exists under
+/// `swift run` unless something makes them.
 @MainActor
-final class AppHost: NSObject, NSApplicationDelegate {
+final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let model: SearchModel
     let options: Options
-    /// The direction in force, injected at the root rather than reached for in a view. One
-    /// override is the whole of what several themes in one binary costs the views, which is what
-    /// the token seam was built before the views to buy (`chat-search-me9.8.8`).
-    let theme: Theme
-    /// And which of its two sides is drawn, which costs the views nothing at all.
-    let appearance: Appearance
+    /// The direction and the side in force, injected at the root rather than reached for in a
+    /// view. One override is the whole of what several themes in one binary costs the views, which
+    /// is what the token seam was built before the views to buy (`chat-search-me9.8.8`).
+    let settings: ThemeSettings
+    private var window: NSWindow?
+    /// Built the first time Cmd-comma is pressed and kept afterwards, so the window comes back
+    /// where it was left rather than centred again.
+    private var settingsWindow: NSWindow?
     private var frames: FrameClock?
 
-    init(model: SearchModel, options: Options, theme: Theme, appearance: Appearance) {
+    init(model: SearchModel, options: Options, settings: ThemeSettings) {
         self.model = model
         self.options = options
-        self.theme = theme
-        self.appearance = appearance
+        self.settings = settings
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
         // Before the window, so nothing is drawn in one appearance and then re-drawn in another.
         // `nil` for `system` is not a no-op worth skipping: it is what says this app has no opinion
         // when nobody has expressed one, and it is what an override is cleared back to.
-        NSApp.appearance = appearance.nsAppearance
+        NSApp.appearance = settings.appearance.nsAppearance
+        // The two surfaces SwiftUI does not own, kept in step with the ones it does.
+        settings.onChange = { [weak self] in self?.themeChanged() }
+        // A hand-made `NSApplication` has no menu bar at all, so this is what makes Cmd-comma and
+        // Cmd-Q into keys that do something. Installed in every run rather than only in the ones a
+        // person is looking at: an accessory app does not draw a menu bar, which makes this inert
+        // under `--shot` and `--measure` rather than a second behaviour to reason about.
+        NSApp.mainMenu = MainMenu.build(openSettings: self, action: #selector(showSettings(_:)))
         model.group(by: options.group)
         // After the axis, because folding is a property of the groups that axis produced. It moves
         // the default rather than folding what is on screen now, so a group that arrives on a later
@@ -206,11 +228,16 @@ final class AppHost: NSObject, NSApplicationDelegate {
         window.title = "chat-search"
         // The one colour SwiftUI does not own. It shows through for a frame during a live resize,
         // and the system default is a grey nobody in this app chose.
-        window.backgroundColor = theme.nsColor(.bg)
+        window.backgroundColor = settings.theme.nsColor(.bg)
         window.center()
-        let hosting = NSHostingView(rootView: Shell(model: model).environment(\.theme, theme))
+        // The delegate is for one thing: this window closing takes the settings window with it.
+        // `applicationShouldTerminateAfterLastWindowClosed` is what makes closing the window quit
+        // the app, and a settings panel left open behind it would quietly turn one close into two.
+        window.delegate = self
+        let hosting = NSHostingView(rootView: Root(model: model, settings: settings))
         window.contentView = hosting
         window.orderFrontRegardless()
+        self.window = window
         // A scripted run does not steal focus — `.accessory` above — which also keeps the number
         // comparable with `poc/swift/RESULTS.md` §1, taken the same way. A latency measured in a
         // frontmost app and one measured in a background app are not the same measurement.
@@ -221,8 +248,26 @@ final class AppHost: NSObject, NSApplicationDelegate {
         // With the scripted runs, where the rest of the evidence is: a person looking at the
         // window can already see which side they got.
         if options.scripted {
-            print(AppearanceProbe.line(theme: theme, view: hosting, asked: appearance))
+            print(
+                AppearanceProbe.line(
+                    theme: settings.theme, view: hosting, asked: settings.appearance))
         }
+
+        // The settings window's own pass, and it replaces the reader's rather than following it:
+        // what this run has to show is three controls and what moving them does to the app behind
+        // them, and twenty seconds of scrolling a transcript first says nothing about any of it.
+        // It opens the window by pressing Cmd-comma rather than being handed one, which is why
+        // this run is the only one that does not open it here.
+        if options.shot, options.settings {
+            Task { @MainActor in
+                await Measure.settings(
+                    model: model, settings: settings, view: hosting, query: options.shotQuery,
+                    to: options.shotPath)
+                NSApp.terminate(nil)
+            }
+            return
+        }
+        if options.settings { showSettings(nil) }
 
         if options.shot {
             // A display link under `--shot` as well as under `--measure`: the drawer is driven
@@ -252,6 +297,43 @@ final class AppHost: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Cmd-comma, and the only thing on the menu that is this app's rather than AppKit's.
+    ///
+    /// A window and not a sheet on the main one: three settings are a place you go and come back
+    /// from, and a sheet would cover the app it is previewing, which is the whole of the preview.
+    @objc func showSettings(_ sender: Any?) {
+        if let settingsWindow {
+            settingsWindow.makeKeyAndOrderFront(sender)
+            return
+        }
+        // `NSWindow(contentViewController:)` rather than a content view and a size: SwiftUI knows
+        // how tall three controls and two captions are and this is the one way to ask it, which
+        // matters more here than anywhere else in the app — every other window in this process
+        // opens at a size somebody chose.
+        let window = NSWindow(
+            contentViewController: NSHostingController(rootView: SettingsForm(settings: settings)))
+        window.styleMask = [.titled, .closable]
+        window.title = "Settings"
+        // A settings window is not the app's life. Without this, closing it once deallocates it and
+        // the second Cmd-comma opens a window that has already been released.
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.makeKeyAndOrderFront(sender)
+        settingsWindow = window
+    }
+
+    /// What has to change outside SwiftUI when a control moves. Everything else is the environment.
+    private func themeChanged() {
+        NSApp.appearance = settings.appearance.nsAppearance
+        window?.backgroundColor = settings.theme.nsColor(.bg)
+    }
+
+    /// The main window closing takes the settings window with it, so that closing the app's window
+    /// still quits the app rather than leaving a settings panel holding the process open.
+    func windowWillClose(_ note: Notification) {
+        settingsWindow?.close()
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
 
     /// The last thing this process does, and the only place §6's other event can be emitted.
@@ -272,7 +354,6 @@ let host = AppHost(
             binary: binary, db: options.db, config: options.config, driven: options.scripted),
         limit: options.limit),
     options: options,
-    theme: theme,
-    appearance: appearance)
+    settings: settings)
 app.delegate = host
 app.run()

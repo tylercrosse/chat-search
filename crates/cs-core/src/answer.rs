@@ -235,10 +235,19 @@ pub struct Group {
     pub msg_count: i64,
     /// Prose messages only, which is what a prose search could possibly have matched.
     pub prose_count: i64,
+    /// How many strands of the DAG the conversation holds (ADR 4) — 1 on 4,379 of 4,426, above
+    /// 1 on 45, and `0` on the two that hold no messages at all. A client draws it as a mark
+    /// that appears rather than as a column of ones.
+    pub thread_count: i64,
     /// Working directory, for sources that have one. `null` for every ChatGPT conversation —
     /// 2,011 of this corpus — which a client must draw as "this source has no such thing"
     /// rather than as missing data (chat-search-6eb.26).
     pub cwd: Option<String>,
+    /// The model of the last message that named one, resolved in the indexer's rollup — a
+    /// summary of `message.model` rather than a fact about the conversation (ADR 24). `null`
+    /// for 1,300 of 4,426, which is every Google Takeout row plus 20 that never reached an
+    /// assistant turn.
+    pub model: Option<String>,
     /// **Opaque ordering.** Results arrive best-first; a client never re-sorts on this and never
     /// parses it. Today it is damped BM25 divided by a recency factor, and the ranking is
     /// expected to grow into hybrid lexical-plus-vector scoring (GLOSSARY.md's Indexer entry
@@ -424,7 +433,9 @@ impl From<search::Group> for Group {
             user_turns,
             msg_count,
             prose_count,
+            thread_count,
             cwd,
+            model,
             score,
             match_count,
             match_seqs,
@@ -444,7 +455,9 @@ impl From<search::Group> for Group {
             user_turns,
             msg_count,
             prose_count,
+            thread_count,
             cwd,
+            model,
             score,
             match_count,
             match_seqs,
@@ -561,18 +574,23 @@ mod tests {
 
     /// Three conversations of different ages, all mentioning the borrow checker.
     fn corpus() -> Vec<Conversation> {
+        let mut c0 = conv(
+            "codex",
+            "c0",
+            Some("Borrow checker notes"),
+            vec![
+                msg(0, Role::User, Kind::Prose, "how does the borrow checker decide?"),
+                msg(1, Role::Assistant, Kind::Prose, "the borrow checker tracks lifetimes"),
+                msg(2, Role::Assistant, Kind::ToolCall, "Read(lifetimes.rs)"),
+                msg(3, Role::Tool, Kind::ToolResult, "84 lines"),
+            ],
+        );
+        // One message names a model and the three around it do not, which is the shape the
+        // rollup summarises: the label is the *last* message that named one, so the tool call
+        // and its result after this must not blank it (ADR 24, chat-search-n58.25).
+        c0.messages[1].model = Some("gpt-5-codex".into());
         vec![
-            conv(
-                "codex",
-                "c0",
-                Some("Borrow checker notes"),
-                vec![
-                    msg(0, Role::User, Kind::Prose, "how does the borrow checker decide?"),
-                    msg(1, Role::Assistant, Kind::Prose, "the borrow checker tracks lifetimes"),
-                    msg(2, Role::Assistant, Kind::ToolCall, "Read(lifetimes.rs)"),
-                    msg(3, Role::Tool, Kind::ToolResult, "84 lines"),
-                ],
-            ),
+            c0,
             conv(
                 "claude-code",
                 "c1",
@@ -667,6 +685,7 @@ mod tests {
                 "match_count",
                 "match_seqs",
                 "matches",
+                "model",
                 "msg_count",
                 "native_id",
                 "prose_count",
@@ -675,6 +694,7 @@ mod tests {
                 // — but a key a client decodes, so it is stated (`chat-search-o1i.5`).
                 "sitting",
                 "source",
+                "thread_count",
                 "title",
                 "user_turns",
             ]
@@ -689,6 +709,11 @@ mod tests {
         assert_eq!(g["user_turns"], 1);
         assert_eq!(g["msg_count"], 4);
         assert_eq!(g["prose_count"], 2);
+        // The rollup's summary, not the last message's own column: two messages after the one
+        // that named it declare nothing, and a label taken from the final row would be null.
+        assert_eq!(g["model"], "gpt-5-codex");
+        // One `thread_key` throughout, which is what 4,379 of 4,426 conversations look like.
+        assert_eq!(g["thread_count"], 1);
         assert_eq!(g["match_count"], 2);
         assert_eq!(g["match_seqs"], serde_json::json!([0, 1]));
         assert!(g["score"].is_number());

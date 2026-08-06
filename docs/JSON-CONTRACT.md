@@ -97,7 +97,9 @@ Identity is stated once, here, and never repeated inside `matches`.
 | `user_turns` | integer | never | What a human would call a turn — user prose, not raw message count. |
 | `msg_count` | integer | never | Every message, tool traffic included. The denominator `match_seqs` positions are relative to. |
 | `prose_count` | integer | never | Prose messages only: what a prose search could possibly have matched. |
+| `thread_count` | integer | never | How many strands of the conversation's DAG (ADR 4) its messages fall into — what a reader calls a fork. **1 on 4,379 of 4,426 and above 1 on only 45**, so draw it as a mark that appears rather than as a column that is almost always the digit one; the mockup shows it above 1 and not at all otherwise. `0` on the two conversations that hold no messages, which is neither one strand nor several. Where a row is a [`sitting`](#sitting) this is the opening record's and not the fold's sum: an activity log put back together is one linear chat, and adding its members' counts would report eight forks on a Gemini conversation that never branched. |
 | `cwd` | string | **nullable** | Working directory, for sources that have one. |
+| `model` | string | **nullable** | The model of the **last message that named one**, resolved in the indexer's rollup — a summary of the message-level field rather than a fact about the conversation (ADR 24). 166 conversations name more than one, so a cell drawing this is saying *the model this ended on* and should not imply the whole of it was that. Free-form as the source wrote it, from `gpt-4o` to `text-davinci-002-render-sha`: an open set to render, never to parse or map. See [The nullable fields](#the-nullable-fields) for what null means. The opening record's where a row is a sitting, as `thread_count` is. |
 | `score` | number | never | **Opaque ordering.** The rows arrive best first and that order *is* the ranking; a client never re-sorts on this number and never parses it. Today it is damped bm25 divided by a recency factor, which makes it negative and meaningful only against the other rows of the same response — none of which is promised, because the ranking is expected to grow past term matching (GLOSSARY.md's Indexer entry already says "and later vectors") and that moves the sign and the range without changing what the number is *for*. Always finite: a message with no timestamp is scored as though it were current rather than producing a NaN, which would reach the wire as `null`. |
 | `match_count` | integer | never | Total matching messages, including any not returned in `matches`. |
 | `match_seqs` | array of integer | never; may be empty | Where the matches sit, as 0-based message positions, ascending. **Positions into `msg_count`**, which is *not* the coordinate space `kind_runs` uses — `chat-search-me9.25` is that gap. Empty when nothing matched. |
@@ -573,7 +575,7 @@ is whole.
 
 ## The nullable fields
 
-Six of them across the three row shapes, and in every case null is a fact about the conversation
+Seven of them across the three row shapes, and in every case null is a fact about the conversation
 rather than a gap in the data. None is being papered over at the source, and that is deliberate:
 `""` would erase a distinction the importers spend real code creating, and omitting the key
 would say "not applicable" about something that is merely unknown.
@@ -612,6 +614,22 @@ Null for **2,023 of 3,059** — 2,011 ChatGPT and 12 Gemini CLI. Overwhelmingly 
 and not missing data: a conversation that happened on a web page has no working directory to
 have. Render it as an absence of the concept rather than an absence of the value
 (`chat-search-6eb.26`). Derived, so ADR 16 forbids it ever reaching an id.
+
+### `model` — no message in this conversation named one
+
+Null for **1,300 of 4,426**, measured 2026-08-06, and the shape of that number is the point: 1,280
+of them are the whole of Google Takeout, whose activity records carry no model field at any nesting
+level, and the other 20 are spread thin across every source that does.
+
+| conversations | what they hold |
+| --- | --- |
+| 1,280 × `google-takeout` | Every row of the source. The export is an activity log of prompts and responses and does not record which model answered, so this is "not applicable" for a whole surface rather than a gap in 1,280 records. |
+| 12 × three sources | No assistant turn at all — a session of slash commands, or a `New chat` opened and abandoned. There was nothing for a model to have produced. |
+| 8 × `chatgpt-export`, `claude-code` | Assistant turns that declared no model. The field is optional in both formats and some conversations simply do not carry it, which is why this cannot be typed non-optional on the evidence of the other 4,406. |
+
+**The inverse of `cwd`, and worth reading beside it.** `cwd` is null because a web page has no
+working directory — an absence of the concept. This is null because nothing *said*, which is
+ordinary missing data and a client should draw it as nothing at all rather than as `unknown`.
 
 ### `Hit.title` — the conversation's title
 

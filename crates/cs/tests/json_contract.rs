@@ -239,6 +239,10 @@ fn corpus() -> Vec<Conversation> {
         ],
     );
     ordinary.cwd = Some("/tmp/proj".into());
+    // The only row here that names a model, and one message of the four names it. The label is
+    // the *last* message that named one, so the two after this declaring nothing must not blank
+    // it — and the rest of the fixture is what makes the field null in the same reply.
+    ordinary.messages[1].model = Some("gpt-5-codex".into());
 
     // Untitled: every title candidate was machinery. Modelled on the gemini-cli row, which has
     // no user turn at all — the agent said something searchable and the person never did, so
@@ -281,7 +285,24 @@ fn corpus() -> Vec<Conversation> {
         vec![msg(0, Role::Assistant, Kind::Prose, Some(t), "a borrow of the same value")],
     );
 
-    vec![ordinary, untitled, undated, abandoned, unreachable]
+    // Two strands rather than one, which is 45 conversations in 4,426 and the only state in
+    // which `thread_count` is worth a client drawing. The second strand is rooted rather than
+    // chained: a `thread_key` names a parallel stream (ADR 4), not a child of the message
+    // before it, so both leaves are on the head path and both messages are searchable.
+    let mut forked = conv(
+        "claude-code",
+        "two-threads",
+        titled("the borrow checker, on two branches"),
+        vec![
+            msg(0, Role::User, Kind::Prose, Some(t), "does the borrow checker allow this"),
+            msg(1, Role::User, Kind::Prose, Some(t + 1), "and on the subagent's own strand"),
+        ],
+    );
+    forked.messages[1].thread_key = "sidechain".into();
+    forked.messages[1].parent_native_id = None;
+    forked.messages[1].is_sidechain = true;
+
+    vec![ordinary, untitled, undated, abandoned, unreachable, forked]
 }
 
 /// Every row object the two replies produce, kept apart by shape. Envelopes are excluded —
@@ -483,6 +504,37 @@ fn an_empty_array_is_not_a_null() {
         assert_eq!(group["matches"], serde_json::json!([]), "an empty query matches nothing");
         assert_eq!(group["match_seqs"], serde_json::json!([]));
     }
+}
+
+#[test]
+fn a_row_says_which_model_it_ended_on_and_how_many_strands_it_holds() {
+    // Both were columns of the index that no client could see (`chat-search-me9.8.14`), and
+    // both are summaries rather than raw values — which is the part a shape pin cannot check.
+    // `model` is the last message that named one, not the last message's own field, and
+    // `thread_count` is a count of strands, not of messages.
+    let f = Fixture::new();
+    let results = f.search("", &[]);
+    let by_id = |id: &str| {
+        results["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["conv_id"] == id)
+            .unwrap_or_else(|| panic!("no {id} in the list"))
+            .clone()
+    };
+
+    let ordinary = by_id("codex:ordinary");
+    assert_eq!(ordinary["model"], "gpt-5-codex", "the rollup keeps the only message that said");
+    assert_eq!(ordinary["thread_count"], 1, "four messages, one strand");
+    assert_eq!(by_id("claude-code:two-threads")["thread_count"], 2, "two messages, two strands");
+    // Neither one strand nor several: the conversation that holds no messages at all. A client
+    // drawing a fork mark above 1 shows nothing here, which is right for both reasons.
+    assert_eq!(by_id("chatgpt-export:abandoned")["thread_count"], 0);
+    assert!(
+        by_id("gemini-cli:no-destination")["model"].is_null(),
+        "nothing in it named a model, which is 1,300 of 4,426 rows"
+    );
 }
 
 #[test]

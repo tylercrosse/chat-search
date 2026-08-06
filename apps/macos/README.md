@@ -1119,6 +1119,8 @@ preset pass prints those three beside the frames. On the corpus's longest conver
 ```
 presets, over 1479 drawn messages of claude-code:4579afb5-…:
   segments   84 rows, 41 of them run summaries · 43 full, 345 brief, 1091 off
+    of those, 39 name calls, 9 failures, 10 questions, 7 carry the match dot
+    the fullest of them reads: → 5 calls · 1 failed · asked you 1×
   outline    1479 rows, 0 of them run summaries · 0 full, 1479 brief, 0 off
   read       1479 rows, 0 of them run summaries · 388 full, 1091 brief, 0 off
   everything 1479 rows, 0 of them run summaries · 1479 full, 0 brief, 0 off
@@ -1129,7 +1131,13 @@ presets, over 1479 drawn messages of claude-code:4579afb5-…:
   the pass itself: 1868 messages built and 7 canvas renders, put back before the next pass reads either
 ```
 
-The first of the three is the drift check on the one rule this client spells twice. The second is
+The two indented lines are the other thing a frame cannot carry: it shows four summaries and the
+transcript holds forty-one, so the counts say how many of them are richer than a bare number and
+the fullest one is printed verbatim. A corpus where no run ever failed or asked anything would let
+"calls, failures and questions rather than a count" pass untested, and this is what says it did not.
+
+The first of the three checks below them is the drift check on the one rule this client spells
+twice. The second is
 "a per-message override beats the band", driven against `outline` so that one message going full is
 unambiguous. The third is the absence of `defaultZoomFor`, driven with a preset the wire does not
 answer — a reader that re-derived the knobs from each transcript would land somewhere else and the

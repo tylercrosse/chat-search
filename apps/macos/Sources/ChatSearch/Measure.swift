@@ -299,6 +299,23 @@ enum Measure {
                 + "\(levels[.hidden] ?? 0) off")
             let file = path.replacingOccurrences(of: ".png", with: "-preset-\(preset.rawValue).png")
             print("    \(file) \(capture(window, to: file))")
+            // What a summary line actually says, which is the half of `segments` a frame shows
+            // four of and the transcript holds forty. The claim is that it carries calls,
+            // failures and questions rather than a count, and a corpus where no run ever failed
+            // or asked anything would let that claim pass untested.
+            if preset == .segments {
+                let drawnSegments = reader.rows.compactMap { row -> Segment? in
+                    if case .summary(let segment) = row { return segment } else { return nil }
+                }
+                print("      of those, \(drawnSegments.count { $0.calls > 0 }) name calls, "
+                    + "\(drawnSegments.count { $0.failures > 0 }) failures, "
+                    + "\(drawnSegments.count { $0.questions > 0 }) questions, "
+                    + "\(drawnSegments.count { $0.marked }) carry the match dot")
+                if let richest = drawnSegments.max(by: { ($0.summary.count, $0.calls) < ($1.summary.count, $1.calls) }) {
+                    print("      the fullest of them reads: → "
+                        + richest.summary.map(\.text).joined(separator: " · "))
+                }
+            }
         }
 
         // Back to what the drawer opens at, so everything after this pass sees the screen it

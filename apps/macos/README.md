@@ -20,19 +20,21 @@ swift run -c release chat-search --db /tmp/scratch.db --config /tmp/scratch-conf
 swift run -c release chat-search --bin /path/to/cs --limit 30
 swift run -c release chat-search --size 720x480
 swift run -c release chat-search --group project --folded
+swift run -c release chat-search --settings
 swift run -c release chat-search --theme paper
 swift run -c release chat-search --appearance light --theme-light paper --theme-dark terminal
 ```
 
-`--size` opens the window at a stated size, `--group` opens the list already cut along an axis, and
-`--folded` opens every group of it shut. All three are verification affordances rather than
-preferences — the row has to hold at several widths, a grouped list rebuilds sections where an
-ungrouped one rebuilds rows, and a folded one draws heads where an open one draws heads and rows,
-so `--measure` needs a way into each of those modes. A window that always opens at one size, always
-ungrouped, or always open, makes checking any of them a manual drag nobody repeats. `--folded`
-moves the *default* rather than folding what is on screen at the time, so a group arriving on a
-later keystroke is folded too: an instrument that measured a list unfolding itself as it typed
-would not be measuring anything.
+`--size` opens the window at a stated size, `--group` opens the list already cut along an axis,
+`--folded` opens every group of it shut, and `--settings` opens the settings window beside it. All
+four are verification affordances rather than preferences — the row has to hold at several widths, a
+grouped list rebuilds sections where an ungrouped one rebuilds rows, a folded one draws heads where
+an open one draws heads and rows, and the settings window is behind a Cmd-comma no script can press,
+so `--measure` and `--shot` need a way into each of those modes. A window that always opens at one
+size, always ungrouped, or always open, makes checking any of them a manual drag nobody repeats.
+`--folded` moves the *default* rather than folding what is on screen at the time, so a group
+arriving on a later keystroke is folded too: an instrument that measured a list unfolding itself as
+it typed would not be measuring anything.
 
 The last four are the ones that are *not* instruments. They choose among the four directions
 compiled into the binary and which side of one you are looking at, and they stick, which is why
@@ -340,10 +342,87 @@ nothing is the failure this is most likely to have. And a scripted run writes no
 `--measure` and `--shot` draw in whatever direction and appearance a script names them, and neither
 is somebody choosing a theme. Same rule and the same reason as both staying out of the query log.
 
-A flag is the affordance because a terminal is this app's front door — no bundle, no Dock icon, no
-menu bar. A picker *inside* the app wants a menu bar to hang itself on, which this executable has
-never built, so it is filed rather than half-done: `chat-search-me9.8.21`, which is now a surface
-over three settings that already work rather than the only way to reach them.
+A flag is still the affordance a script reaches for, and a terminal is still this app's front door —
+no bundle, no Dock icon. But a flag is no longer the *only* way in, because the menu bar it was
+waiting on now exists.
+
+### The menu bar, and the settings window on it
+
+This executable creates `NSApplication` by hand and never built an `NSMenu`, so until
+`chat-search-me9.8.21` there was no app menu to hang `Settings…` on — and Cmd-Q did not work either,
+for exactly the same reason. A hand-made application has no menu bar at all, not an empty one, and a
+key equivalent is a thing a menu delivers.
+
+```
+chat-search
+  About chat-search
+  Settings…            ⌘,
+  Quit chat-search     ⌘Q
+```
+
+**Quit is not scope creep.** It is broken without this, the menu is the only place a key equivalent
+can live, and shipping the menu that fixes it while leaving it off would be a deliberate choice to
+leave it broken. **Edit, Window and Hide are not here**, and that is the same argument stopping
+where the bead stopped: Cmd-C and Cmd-V in the search field are broken for the reason Cmd-Q was,
+which makes it a real gap and `chat-search-me9.8.24` rather than something to fold in on the way
+past.
+
+Cmd-comma opens a window carrying the three settings above:
+
+```
+Appearance   ( ) System   (•) Light   ( ) Dark
+             Drawing the light side.
+Light theme  [ paper · direction     v ]
+Dark theme   [ terminal · direction  v ]
+             Colour only — the type scale and the spacing come from paper, on both sides.
+```
+
+A window and not a `View > Theme` submenu, because a submenu with one checkmark can express one
+list, and this is three settings where two of them are lists and the third governs which list you
+are currently looking at. The caption under the appearance says which side is *actually* on screen
+rather than which one was asked for — under `system` the setting does not know and the view does,
+which is the same reading `--shot`'s probe takes and for the same reason.
+
+Each direction menu names the class beside the direction, which is what `chat-search-me9.8.12` built
+the class for: a build can carry a direction read off disk (`chat-search-me9.8.10`), and a menu that
+lists a shipped direction and a user theme without distinguishing them is telling you the two are
+equally fenced when ADR 25 says only one of them is.
+
+**Preview on selection, not on confirm.** There is no OK button and nothing to apply — the app
+redraws under the window as each control moves, which is the only preview worth having, and the
+whole of it is one observed value going back into `\.theme`.
+
+**Both menus on one direction means that direction whole.** There are four settings and three
+controls: nothing on the window stands for where the type scale and the geometry come from. So the
+two side menus agreeing is read as `--theme NAME` — that direction on both sides, side keys cleared
+— and menus that disagree write the two side keys and leave the layout direction exactly as it was.
+Without that rule, picking `paper` in both menus would draw paper's colours in `terminal`'s metrics
+while `--theme paper` draws the serif face, and the same choice said two ways would give two
+results. The caption under the menus says which direction it currently is, because a setting that
+changes the window and appears nowhere on it is worse than a fourth control.
+
+**The window is drawn in stock AppKit controls**, which is the one view in this app that does not
+read its colours off `\.theme`. Two reasons: the preview is the window *behind* this one, so a panel
+that also repainted itself would put the sample beside the swatch and make neither readable; and a
+radio group painted in a direction's tokens is a theme authoring a control, which is the direction
+this surface is under the most pressure to drift in. What it must not become is the rest of that
+list — a colour well, a slider on a token, a "customise…" button. `docs/DECISIONS.md` ADR 25 turns
+on the app not being the author of a theme, and selecting a direction is selecting. A token that
+needs dialling is `chat-search-me9.8.10`'s file-off-disk route, where the authoring happens in a file
+you own and the result is still measured on load.
+
+**And it is checkable from a script**, which a window normally is not:
+
+```bash
+swift run -c release chat-search --settings                    # open it at launch
+swift run -c release chat-search --shot --settings --out /tmp/s.png
+```
+
+`--shot --settings` presses Cmd-comma through `NSMenu.performKeyEquivalent` — the call AppKit makes
+for a real keystroke — then moves all three controls and reads the app's own view tree back after
+each one, photographs both windows at each appearance, checks that a scripted run wrote none of the
+four keys, exercises the writes against a scratch defaults domain, and quits by pressing Cmd-Q. The
+run ending is the evidence for that last one: reaching the line after it is the failure.
 
 ### Why `--verify-theme` and not a test
 

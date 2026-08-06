@@ -700,6 +700,60 @@ collapsed forms (`chat-search-me9.20`), and the mockup's **fidelity chips, segme
 work summary**, which need facts — segments, topics, touched files — that nothing on the wire
 carries. The **minimap** was in that list until `chat-search-me9.8.18`; it is below.
 
+### The marked text, built once rather than once a frame
+
+`BlockRow.marked` was a computed property on a `View`, so every body evaluation cut the whole
+message into runs and concatenated a fresh `AttributedString` of it. That is the shape
+`cs_core::blocks` refused one layer down — marks are held on the block rather than located at
+render time "because locating them means tokenizing the message … and a renderer runs on every
+frame" — so core paid once and the client reintroduced the cost a layer up (`chat-search-me9.8.29`).
+
+`MarkedText` keeps one entry per message, replaced rather than duplicated when its fold toggles,
+and thrown away whole when the conversation, the terms it was marked against, or the direction
+drawing it changes. It hangs off `ReaderModel` beside the folds rather than off the view, for the
+reason the folds are there. **Appearance is deliberately not part of the key**: every token is one
+dynamic `NSColor` that picks its own side where it is drawn, so a light/dark flip repaints these
+without rebuilding any of them, and only a change of *direction* has to.
+
+**The clock cannot check this and two counters can**, which is why `--shot` prints them. `builds`
+is what was assembled, `reuses` is what was handed back already assembled, and their sum is the
+number of times a row asked — so the second number is work this run did not do, counted rather
+than inferred off a percentile. On the run below:
+
+| | messages built | evaluations | answered from the table |
+| --- | ---: | ---: | ---: |
+| after the fling | 401 | 1,112 | 711 — 64% |
+| by the end of the pass | 1,325 | 7,603 | 6,278 — 83% |
+
+The fling is close to the table's worst case, which is why its share is the lower of the two: it
+travels 319pt every 8 ms in one direction, so nearly every row it prepares is one nobody has drawn
+yet. The drag and the keyboard steps are where a reader actually revisits messages, and they are
+where the 83% comes from.
+
+**The frame statistics do not separate**, and saying so is the point of printing counts instead.
+Five alternating pairs — 2026-08-06, live index, the corpus's longest conversation at 2,431
+messages on the head path, window 1100×760, `--theme terminal --appearance dark` pinned so neither
+arm inherits a remembered direction, driven half a document in 60 steps:
+
+| | main-thread lag p50 | p95 | max | vsyncs missed | footprint |
+| --- | ---: | ---: | ---: | --- | --- |
+| before | 0.6–0.7 ms | 22.2–29.1 | 29.4–431.0 | 4–8 of ~66 | 97.7–122.0 MB |
+| after | 0.6–0.7 ms | 4.2–25.9 | 9.0–418.6 | 0–6 of ~67 | 98.2–125.3 MB |
+
+p95 and the missed-vsync count are better in four of the five pairs and the ranges overlap in
+both, which on this machine is the same reading the minimap comparison below arrived at: it cannot
+be told apart from what else the laptop was doing. The footprint is the answer to the obvious
+objection — a table of 1,325 `AttributedString`s over a conversation whose text is already
+resident costs nothing this can measure.
+
+Two things worth knowing before taking these again. **Both arms need the same executable name**:
+`UserDefaults` keys off it (see "Where the choice lives"), so a build copied to `/tmp/before` reads
+an empty preference domain and draws a different theme than the one beside it — the first attempt
+at this compared `terminal` against `terminal with paper's light`. And **the pictures are the check
+on "nothing moved"**: across the pair, every frame is identical outside a 162×16 px patch of the
+footer holding the query's own millisecond readout, which differs by as much between two runs of
+one build.
+
 ### The minimap
 
 Beside the transcript, the whole conversation as a column. Every message on the head path is a

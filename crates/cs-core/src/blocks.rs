@@ -21,7 +21,41 @@ use rusqlite::Connection;
 
 use crate::highlight::{self, Span};
 
-/// How much of every message is shown by default.
+/// One fold per [`Band`] — the whole of what a reader sees before they touch anything.
+///
+/// The vocabulary; [`Density`] is now two named points in it. Keyed on band rather than on
+/// [`crate::Kind`] because a user turn and an assistant turn are both `prose`, so no map over
+/// kinds can say *the question stays open and the answer folds down*. That is the fidelity the
+/// interface prototype has had for some time and the one every client has asked for since
+/// (chat-search-me9.41).
+///
+/// Band is the right key for the same reason it is the right key everywhere else it is already
+/// load-bearing: the reader's minimap encodes band as width, and the theme fence spaces the four
+/// on a luminance ramp. A fifth axis of fidelity would be a distinction none of those can draw.
+///
+/// Two levels, not three. Hiding a band outright is a real setting the prototype carries, and it
+/// arrives with the per-band controls that make these knobs reachable — chat-search-me9.8.36.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Folds {
+    pub user: Fold,
+    pub agent: Fold,
+    pub reasoning: Fold,
+    pub tool: Fold,
+}
+
+impl Folds {
+    /// The fold this map gives that band.
+    pub fn of(self, band: Band) -> Fold {
+        match band {
+            Band::User => self.user,
+            Band::Agent => self.agent,
+            Band::Reasoning => self.reasoning,
+            Band::Tool => self.tool,
+        }
+    }
+}
+
+/// How much of every message is shown by default — a named point in [`Folds`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Density {
@@ -32,17 +66,38 @@ pub enum Density {
 }
 
 impl Density {
-    /// How a message of this kind folds when the reader has not said otherwise.
+    /// This preset written out per band.
+    ///
+    /// Public because a client porting the fidelity model needs four knobs to start from and
+    /// then move independently. A preset it can only interrogate one band at a time is one it
+    /// has to reassemble by asking four questions and hoping it asked all of them.
+    pub fn folds(self) -> Folds {
+        match self {
+            // Both sides of the prose, because at this density the conversation is the thing
+            // being read. That the two are now separately expressible is what the map buys; it
+            // is not an invitation for this preset to start using it.
+            Density::Full => Folds {
+                user: Fold::Expanded,
+                agent: Fold::Expanded,
+                reasoning: Fold::Collapsed,
+                tool: Fold::Collapsed,
+            },
+            Density::Outline => Folds {
+                user: Fold::Collapsed,
+                agent: Fold::Collapsed,
+                reasoning: Fold::Collapsed,
+                tool: Fold::Collapsed,
+            },
+        }
+    }
+
+    /// How a message in this band folds when the reader has not said otherwise.
     ///
     /// The *default* only. An explicit per-message fold always beats it, and holding that
     /// override is the client's job because it is session state, not a property of the
     /// conversation.
-    pub fn default_fold(self, kind: &str) -> Fold {
-        match (self, kind) {
-            (Density::Outline, _) => Fold::Collapsed,
-            (Density::Full, "prose") => Fold::Expanded,
-            (Density::Full, _) => Fold::Collapsed,
-        }
+    pub fn default_fold(self, band: Band) -> Fold {
+        self.folds().of(band)
     }
 }
 
@@ -111,6 +166,13 @@ pub enum Band {
     Reasoning,
     /// Calls and their results, failures included.
     Tool,
+}
+
+impl Band {
+    /// Every variant, so a rule expressed over bands can be *derived* by a caller rather than
+    /// restated — the same reason [`crate::Kind::ALL`] exists. [`Folds`] is the first such rule,
+    /// and a band it forgot would be a band silently taking someone else's default.
+    pub const ALL: [Band; 4] = [Band::User, Band::Agent, Band::Reasoning, Band::Tool];
 }
 
 /// Which band a message belongs to.
@@ -476,7 +538,7 @@ impl Transcript {
                     drawn: block.drawn(),
                     mark_kind: block.mark_kind(),
                     band: block.band(),
-                    fold: Density::Full.default_fold(&block.kind),
+                    fold: Density::Full.default_fold(block.band()),
                     block,
                 })
                 .collect(),
@@ -517,16 +579,60 @@ mod tests {
     }
 
     #[test]
-    fn full_density_expands_prose_and_collapses_the_rest() {
-        assert_eq!(Density::Full.default_fold("prose"), Fold::Expanded);
-        assert_eq!(Density::Full.default_fold("reasoning"), Fold::Collapsed);
-        assert_eq!(Density::Full.default_fold("tool_call"), Fold::Collapsed);
+    fn full_density_expands_both_sides_of_the_prose_and_collapses_the_rest() {
+        // Unchanged from when this was keyed on `kind`, and that is the point: re-keying the
+        // default on band is a change to what *can* be said, not to what the presets say.
+        assert_eq!(Density::Full.default_fold(Band::User), Fold::Expanded);
+        assert_eq!(Density::Full.default_fold(Band::Agent), Fold::Expanded);
+        assert_eq!(Density::Full.default_fold(Band::Reasoning), Fold::Collapsed);
+        assert_eq!(Density::Full.default_fold(Band::Tool), Fold::Collapsed);
     }
 
     #[test]
-    fn outline_collapses_everything_including_prose() {
-        for kind in ["prose", "reasoning", "tool_call", "tool_result"] {
-            assert_eq!(Density::Outline.default_fold(kind), Fold::Collapsed, "{kind}");
+    fn outline_collapses_every_band_including_both_prose_ones() {
+        for band in Band::ALL {
+            assert_eq!(Density::Outline.default_fold(band), Fold::Collapsed, "{band:?}");
+        }
+    }
+
+    #[test]
+    fn a_default_fold_can_differ_between_the_two_prose_bands() {
+        // The thing the old signature made unsayable. `default_fold(kind)` saw one `"prose"`
+        // where a reader sees two, so `{ user: expanded, agent: collapsed }` — the fidelity the
+        // interface prototype opens at — could not be expressed at all, whatever value of
+        // `Density` it was asked for.
+        let asked = Folds {
+            user: Fold::Expanded,
+            agent: Fold::Collapsed,
+            reasoning: Fold::Collapsed,
+            tool: Fold::Collapsed,
+        };
+        let question = block("prose", "user", "a", "why is this slow");
+        let answer = block("prose", "assistant", "b", "let me look");
+        assert_eq!(question.kind, answer.kind, "the two are one kind, which was the problem");
+        assert_eq!(asked.of(question.band()), Fold::Expanded);
+        assert_eq!(asked.of(answer.band()), Fold::Collapsed);
+    }
+
+    #[test]
+    fn each_band_reads_its_own_knob_and_no_one_elses() {
+        // Four fields behind one `match` is where a copy-paste goes unnoticed: `Band::Agent =>
+        // self.user` type-checks, and every preset in this file happens to give those two the
+        // same answer, so nothing else here would catch it. Raising one band at a time is what
+        // makes the wiring visible when there are only two folds to tell the fields apart with.
+        let collapsed = Density::Outline.folds();
+        for raised in Band::ALL {
+            let mut folds = collapsed;
+            match raised {
+                Band::User => folds.user = Fold::Expanded,
+                Band::Agent => folds.agent = Fold::Expanded,
+                Band::Reasoning => folds.reasoning = Fold::Expanded,
+                Band::Tool => folds.tool = Fold::Expanded,
+            }
+            for band in Band::ALL {
+                let expected = if band == raised { Fold::Expanded } else { Fold::Collapsed };
+                assert_eq!(folds.of(band), expected, "raised {raised:?}, asked {band:?}");
+            }
         }
     }
 
@@ -697,8 +803,10 @@ mod tests {
         // off one vocabulary rather than two that happen to agree today.
         let bands: Vec<&str> = msgs.iter().map(|m| m["band"].as_str().unwrap()).collect();
         assert_eq!(bands, ["user", "agent", "tool", "tool", "reasoning"]);
-        // Both sides of the prose expand: the fold is by kind, so neither role is demoted into a
-        // one-liner the other is spared.
+        // Both sides of the prose expand, and now because `Density::Full` says so per band
+        // rather than because `"prose"` was one word. What travels is still one fold per
+        // message: the map is core's way of stating the default, not a second thing the wire
+        // has to carry.
         let folds: Vec<&str> = msgs.iter().map(|m| m["fold"].as_str().unwrap()).collect();
         assert_eq!(folds, ["expanded", "expanded", "collapsed", "collapsed", "collapsed"]);
     }

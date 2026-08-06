@@ -419,9 +419,10 @@ enum Measure {
     }
 
     /// A key equivalent as AppKit would deliver it, minus the hardware.
-    private static func press(_ character: String, code: UInt16) -> NSEvent {
+    private static func press(_ character: String, code: UInt16, shift: Bool = false) -> NSEvent {
         NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            with: .keyDown, location: .zero,
+            modifierFlags: shift ? [.command, .shift] : .command, timestamp: 0,
             windowNumber: 0, context: nil, characters: character,
             charactersIgnoringModifiers: character, isARepeat: false, keyCode: code)!
     }
@@ -444,6 +445,223 @@ enum Measure {
     private static func describe(_ keys: [String: String]) -> String {
         let set = keys.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
         return set.isEmpty ? "none set" : set.joined(separator: " ")
+    }
+
+    /// The clipboard, pressed through the menu that delivers it.
+    ///
+    /// `chat-search-me9.8.24` is one claim — Cmd-C, Cmd-V, Cmd-X, Cmd-A and Cmd-Z do something in
+    /// the search field — and there is no picture of it: a box reading `borrow checker` looks the
+    /// same however the text arrived. So the keys are pressed the way AppKit presses them, on
+    /// `NSApp.mainMenu`, and the field editor is read back after each. Before this bead every one
+    /// of them found no item, reached nothing and moved nothing; that is the whole of the bug, and
+    /// it is why the check is on the menu rather than on the field, which was never broken.
+    ///
+    /// **This is the one scripted run that takes the front, and that is what makes it a run.** A
+    /// key equivalent is resolved against the key window's first responder and an inactive
+    /// application has no key window, so a pass that presses keys has to be frontmost — which is
+    /// exactly what `--measure` and `--shot` must not be, since a latency taken in a background app
+    /// and one taken in a frontmost app are not the same measurement. Folding this into `--shot`
+    /// would have cost that run its comparability with `poc/swift/RESULTS.md` §1. Measured rather
+    /// than assumed: with `--shot`'s `.accessory` policy every item on this bar validates as
+    /// disabled and each key press moves nothing, which is what a background app's menu bar is.
+    ///
+    /// **It puts the pasteboard back.** A scripted run that ate somebody's clipboard would be the
+    /// same mistake as one that appended to `queries.jsonl` — a benchmark writing over a thing a
+    /// person put there on purpose (ADR 22). What it restores is the string, so a run that
+    /// interrupts a copied image or a promised file leaves the string standing in its place. Stated
+    /// rather than hidden: the general pasteboard cannot be snapshotted whole.
+    @MainActor
+    static func clipboard(model: SearchModel, window: NSWindow, query: String) async {
+        print(drivenLine())
+        print("the menu, and the clipboard it delivers. \(machineLine())")
+        for line in menuLines() { print("  \(line)") }
+
+        // Taking the front once is not enough on a machine with anything else running on it. A
+        // build finishing, a terminal being scripted, a notification — anything that activates
+        // takes key status away, and from that moment every item on this bar validates as grey and
+        // every key press below moves nothing while still reporting that the menu matched it. That
+        // is the failure this pass is most likely to have, and it looks exactly like the bug it is
+        // checking for, so the front is reclaimed before each press and the reclaims are counted.
+        var reclaimed = 0
+        @discardableResult @MainActor func front() async -> Bool {
+            guard !window.isKeyWindow else { return true }
+            reclaimed += 1
+            for _ in 0..<10 where !window.isKeyWindow {
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+                try? await Task.sleep(for: .milliseconds(200))
+            }
+            return window.isKeyWindow
+        }
+
+        try? await Task.sleep(for: .milliseconds(600))
+        await front()
+        print("  key window \(window.isKeyWindow), first responder "
+            + (window.firstResponder.map { String(describing: type(of: $0)) } ?? "none"))
+        validation("with an empty box")
+        guard let editor = window.firstResponder as? NSTextView else {
+            print("  the query box does not hold the first responder — nothing to drive")
+            return
+        }
+
+        let held = NSPasteboard.general.string(forType: .string)
+        var restored = false
+        // A function and not only a `defer`, because this pass ends by pressing Cmd-W and the
+        // process does not come back from that — `NSApp.terminate` unwinds no scope, so a restore
+        // that lived in a `defer` alone would run on every path except the one this run takes.
+        // Found by running it: the first pass to press Cmd-W left the phrase on the clipboard.
+        func restore() {
+            guard !restored else { return }
+            restored = true
+            NSPasteboard.general.clearContents()
+            if let held { NSPasteboard.general.setString(held, forType: .string) }
+            print("  the pasteboard is put back to \"\(held ?? "")\"")
+        }
+        defer { restore() }
+
+        // A phrase with a filter token in it, because pasting a path or a phrase out of a terminal
+        // is the ordinary reason this key gets reached for, and a grammar is the kind of thing
+        // people paste rather than retype.
+        let phrase = "dir:chat-search agent:codex"
+        model.query = phrase
+        try? await Task.sleep(for: .milliseconds(600))
+
+        // `matched` is what the menu says and not what happened: `performKeyEquivalent` answers
+        // that an item carries this key, which is false before this bead and true after it, but it
+        // is true of a greyed item too. The state read back beside it is the evidence.
+        func key(_ character: String, _ code: UInt16, shift: Bool = false) async -> String {
+            await front()
+            let matched = NSApp.mainMenu?.performKeyEquivalent(
+                with: press(character, code: code, shift: shift)) ?? false
+            try? await Task.sleep(for: .milliseconds(600))
+            return "matched \(matched)"
+        }
+        // The field and the query both, because they are two facts: an edit that the field editor
+        // performed and SwiftUI never heard about would leave the box reading one thing and the
+        // search answering another, which is the way this can be wrong while looking right.
+        func state() -> String {
+            "field \"\(editor.string)\" · query \"\(model.query)\" · pasteboard "
+                + "\"\(NSPasteboard.general.string(forType: .string) ?? "")\""
+        }
+
+        print("  the box holds \"\(editor.string)\"")
+        print("  ⌘A → \(await key("a", 0)), selected \(editor.selectedRange().length) of "
+            + "\(editor.string.count) characters")
+        print("  ⌘C → \(await key("c", 8)), \(state())")
+        print("  ⌘X → \(await key("x", 7)), \(state())")
+        print("  ⌘V → \(await key("v", 9)), \(state())")
+        print("  ⌘Z → \(await key("z", 6)), \(state())")
+        print("  ⇧⌘Z → \(await key("z", 6, shift: true)), \(state())")
+        _ = await key("a", 0)
+        await front()
+        validation("with the phrase selected")
+
+        // The negative control, and it is a real one rather than a contrived key: Cmd-H is on no
+        // menu here because `MainMenu` measured `hide:` as permanently grey in this process, so
+        // pressing it shows what all six keys above looked like before this bead — a key equivalent
+        // no item carries, matching nothing and moving nothing. The line beneath it is the other
+        // half of that reading: the capability exists and it is the menu route that does not.
+        print("  ⌘H, which this bar deliberately does not carry → \(await key("h", 4)), "
+            + "the app is hidden: \(NSApp.isHidden)")
+        NSApp.hide(nil)
+        try? await Task.sleep(for: .milliseconds(900))
+        print("    NSApp.hide(nil) called directly → the app is hidden: \(NSApp.isHidden), "
+            + "so it is the item AppKit refuses and not the act")
+        NSApp.unhide(nil)
+        await front()
+        try? await Task.sleep(for: .milliseconds(600))
+
+        // Minimize, pressed for the reason the settings pass presses Cmd-Q rather than describing
+        // it. Put back afterwards: a pass that left the window in the Dock would be reporting on a
+        // run nobody could see the rest of.
+        print("  ⌘M → \(await key("m", 46)), the window is in the Dock: \(window.isMiniaturized)")
+        window.deminiaturize(nil)
+        await front()
+        try? await Task.sleep(for: .milliseconds(600))
+
+        // The transcript's half, and the honest shape of it. A selection there is made by dragging,
+        // a drag is the one gesture nothing here can produce — the same wall the fold pass names
+        // from the other side, and posting synthetic mouse events would need the Accessibility
+        // grant this app has never asked anybody for. So what is asked instead is where AppKit
+        // *would* send Copy: `target(forAction:)` is the call the menu itself makes, so a target
+        // here is the item resolving through the responder chain rather than dying at the end of it.
+        //
+        // With no selection it resolves nowhere, which is the correct answer and not a finding: a
+        // Copy that offered itself with nothing selected would be the lie in the other direction.
+        // So this half is *reasoned* rather than read, and the reasoning is named on the line
+        // itself so nobody mistakes it for a measurement.
+        model.query = query
+        model.queryChanged()
+        try? await Task.sleep(for: .seconds(2))
+        guard let conv = model.conversations.first else {
+            print("  nothing matched \"\(query)\" — the transcript's half is unchecked")
+            restore()
+            return
+        }
+        model.reader.open(conv, query: query)
+        try? await Task.sleep(for: .seconds(2))
+        await front()
+        let copySelector = #selector(NSText.copy(_:))
+        func lands() -> String {
+            NSApp.target(forAction: copySelector).map { String(describing: type(of: $0)) }
+                ?? "nowhere"
+        }
+        print("  \(model.reader.transcript?.drawn ?? 0) messages of \(conv.convId) open, "
+            + "\(copyResponders(window).count) view(s) in the window answer `copy:`")
+        print("    from the query box, Copy lands on \(lands())")
+        if let drawer = readerScrollView(window)?.documentView {
+            window.makeFirstResponder(drawer)
+            try? await Task.sleep(for: .milliseconds(600))
+            print("    with the first responder moved into the drawer "
+                + "(\(window.firstResponder.map { String(describing: type(of: $0)) } ?? "none")), "
+                + "Copy lands on \(lands())")
+        }
+        print("    nowhere is right with nothing selected, and a selection in the transcript is "
+            + "made with the pointer, which nothing here drives")
+        print("    so that half is reasoned and not read: it is this same item on this same chain, "
+            + "and `copy:` against nil is what SwiftUI's own TextEditingCommands installs")
+        print("  the front was taken back \(reclaimed) time(s) during this pass")
+
+        // And Cmd-W last, for the reason the settings pass presses Cmd-Q last: closing this
+        // window is what quits this app, so if the key reaches the item the run ends on it and the
+        // line below is only ever printed when it did not. The pasteboard goes back *before* it
+        // rather than on the way out, since there is no way out.
+        restore()
+        print("  ⌘W: pressing it, and this run ends there if the menu handled it")
+        _ = await key("w", 13)
+        print("  ⌘W DID NOT CLOSE THE WINDOW — the item is on the menu and the key did not reach it")
+    }
+
+    /// Every item as AppKit validates it against whatever holds the first responder now.
+    ///
+    /// This is the half of a menu bar no screenshot states and the half this bead turns on: an item
+    /// AppKit greys out is an item that reaches nothing, whoever put it there. It is read twice,
+    /// with an empty box and with a phrase selected, because half of these are *supposed* to be
+    /// grey in the first reading — a Copy that offered itself with nothing selected would be the
+    /// same lie in the other direction.
+    @MainActor
+    private static func validation(_ when: String) {
+        print("  the menu \(when):")
+        for menu in NSApp.mainMenu?.items.compactMap(\.submenu) ?? [] {
+            menu.update()
+            print("    \(menu.title.isEmpty ? "(application)" : menu.title): "
+                + menu.items.filter { !$0.isSeparatorItem && !$0.isAlternate }
+                    .map { "\($0.title)\($0.isEnabled ? "" : " [grey]")" }
+                    .joined(separator: ", "))
+        }
+    }
+
+    /// Every view in the window that answers `copy:`, which is where an Edit menu's Copy lands.
+    @MainActor
+    private static func copyResponders(_ window: NSWindow) -> [NSView] {
+        var found: [NSView] = []
+        func walk(_ view: NSView?) {
+            guard let view else { return }
+            if view.responds(to: #selector(NSText.copy(_:))) { found.append(view) }
+            for sub in view.subviews { walk(sub) }
+        }
+        walk(window.contentView)
+        return found
     }
 
     /// The fold's other half, which is not a picture: where the cursor is allowed to be.

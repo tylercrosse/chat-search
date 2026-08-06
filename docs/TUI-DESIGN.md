@@ -711,6 +711,15 @@ searches. And its cost is not an exception's: where forty tool calls matched, "e
 of the pane. Whether a matched tool expands wholly or only to its matching line, as `prose`
 already does, is open (§11).
 
+**Revised 2026-08-06: the default is keyed on band, not kind** (`me9.41`). A user turn and an
+assistant turn are both `prose`, so the table above cannot say `{ user: expanded, agent:
+collapsed }` — and that is the fidelity the interface prototype opens at. `Density` is now two
+named points in a map of one fold per band, where band is `cs_core::blocks::Band`: user, agent,
+reasoning, tool — the four a conversation's *shape* is drawn at, not the five layout bands of §2.
+The rows above are what `Full` and `Outline` happen to put in that map. Nothing folds differently
+yet; what changed is what a preset is able to say. The per-band controls, and the third level
+that hides a band outright, are `me9.8.36`.
+
 **Collapsed forms:**
 
 | kind | collapsed rendering |

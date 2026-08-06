@@ -188,6 +188,143 @@ That is ADR 22's convenience, set by the flag that made the run scripted rather 
 remembering to export it — and it is why nothing downstream has to tell a benchmark from a need,
 which ADR 22 is clear nothing can.
 
+## The menu bar
+
+This executable creates `NSApplication` by hand and never built an `NSMenu`, so until
+`chat-search-me9.8.21` there was no menu bar at all — not an empty one, none. macOS delivers a key
+equivalent through a menu and through nothing else, which is why Cmd-Q did nothing in an app that
+plainly knew how to quit, and why Cmd-C did nothing in an entirely ordinary text field until
+`chat-search-me9.8.24`. Neither the app nor the field was ever broken. The bar was absent.
+
+**One rule decides what is on it**, and it is `chat-search-me9.8.21`'s argument for Quit carried to
+the end rather than a template copied: an item is here because a key somebody already presses is
+dead without it.
+
+```
+chat-search                 Edit                      Window
+  About chat-search           Undo             ⌘Z       Close      ⌘W
+  Settings…            ⌘,     Redo            ⇧⌘Z       Minimize   ⌘M
+  Quit chat-search     ⌘Q     Cut              ⌘X
+                              Copy             ⌘C
+                              Paste            ⌘V
+                              Select All       ⌘A
+```
+
+**Edit is the one with a use in the ordinary path.** The search box is where you paste a path or a
+phrase you copied out of a terminal, and `dir:chat-search agent:codex` is a grammar people paste
+rather than retype. Every action on it goes to `nil` and up the responder chain, which is the whole
+mechanism: in the query box AppKit hands `copy:` to the window's field editor, an `NSTextView` that
+has implemented all of these since before this app existed, and in the reader to whatever
+`textSelection(.enabled)` puts behind the transcript. Nothing here implements a clipboard, and after
+this menu nothing has to — which is why the fix is a file about menus and not a file about text.
+
+**Undo is on it because Paste is.** Cmd-V into a box with a phrase already in it destroys the
+phrase, and the key that gets it back is the one people reach for without looking. The stack is the
+field editor's, so it costs nothing to maintain and is wrong only if the field editor is.
+
+**Window is what the app owes its second window.** Cmd-comma opens the settings panel and until now
+only the mouse could dismiss it — a window reached by a key and left by a click, which is the same
+asymmetry as a text field you can type into and not copy out of, one window over. `performClose:`
+goes to the key window, so Cmd-W shuts the panel when the panel is in front and the app when the app
+is, which on the main window is exactly what its close button already does.
+
+**What is not on it, each for its own reason.** An item that greys out the moment you look at it
+says this app has a capability it does not have, and says it in the one place people go to find out.
+
+| left off | why |
+| --- | --- |
+| Delete | the key already deletes, through the field editor's own bindings; the item is a mouse route to a keyboard act |
+| Paste and Match Style | there is no style in a plain query and nothing here is rich text |
+| Find | Cmd-F belongs to a document you search *inside*, and this window **is** a search — the box takes focus at launch and takes it back on any click that loses it, so the key would either restate the state the app is in or bind a second, narrower search beside the real one |
+| spelling, substitutions, transformations, speech | a query is a grammar (`agent:`, `after:`, a quoted `dir:`), and the machinery that autocorrects prose is the machinery that would quietly rewrite one |
+| Zoom, Bring All to Front | no key equivalent between them, which puts them outside the rule — the green button is the affordance for one and there is nothing for the other to gather |
+| the window list | what `NSApp.windowsMenu` would fill in, and its job is finding a window lost behind others; there are two here and Cmd-comma already raises the second |
+| Hide Others, Show All | both act on *other* applications, so neither is a key this app owes anybody, and Show All has no key equivalent to deliver |
+
+**And Hide, which was on this menu until the pass measured it.** Cmd-H is the most reflexive key on
+this platform after Cmd-Q, so it arrived on exactly the argument that carried Quit. Then
+`--clipboard` read the bar back: AppKit validates `hide:` as **disabled** in this process, with an
+explicit `NSApp` target and without one, while `NSApp.hide(nil)` called directly hides the app
+perfectly well. The capability is there; the menu route is the part AppKit refuses. The suspect is
+the one already on record for the defaults domain being named after the executable — this is a plain
+binary and not a bundle — but the reading governs either way, and a permanently grey item advertises
+a key that will never fire. So Cmd-H is now the *negative control*: the pass presses it, gets
+`matched false`, and that is what every key above it looked like before this bead.
+
+**The bottom of the Edit menu is not this app's, and there is no version of this where it is.** The
+moment a menu is titled `Edit`, AppKit inserts Writing Tools, AutoFill, Start Dictation and Emoji &
+Symbols into it. Two of those have documented switches — `NSDisabledDictationMenuItem` and
+`NSDisabledCharacterPaletteMenuItem`, both verified to work here — and two do not, so throwing them
+would buy a menu that is still the system's at the bottom while taking away two working ways of
+*entering* text into a search box. They are left alone and printed beside the six items this app
+authored, so what is here on purpose stays legible and what the platform added is visible rather
+than quietly attributed to this app.
+
+### `--clipboard`, the one run that takes the front
+
+```bash
+swift run -c release chat-search --clipboard --config /tmp/scratch-config.toml
+```
+
+There is no picture of this: a box reading `borrow checker` looks the same however the text arrived.
+So the keys are pressed the way AppKit presses them — on `NSApp.mainMenu`, through
+`performKeyEquivalent` — and the field editor and the model are read back after each one.
+
+It is a mode rather than a section of `--shot`, and the reason is the subject of the check. A key
+equivalent is resolved against the key window's first responder, and an inactive application has no
+key window, so a pass that presses keys has to be frontmost — which is exactly what `--measure` and
+`--shot` must *not* be, since a latency taken in a frontmost app and one taken in a background app
+are not the same measurement, and §1 was taken the second way. Measured rather than assumed: under
+`--shot`'s `.accessory` policy every item on this bar validates grey and every press moves nothing
+while still reporting that the menu matched it.
+
+**That failure looks exactly like the bug being checked for**, which is why the front is reclaimed
+before each press and the reclaims are counted — a build finishing or a terminal being scripted
+takes key status away, and from that moment the run is measuring the background. On the run below it
+was taken back twice.
+
+```
+the menu with an empty box:
+  Edit: Undo [grey], Redo [grey], Cut [grey], Copy [grey], Paste, Select All, Writing Tools, …
+⌘A → matched true, selected 27 of 27 characters
+⌘C → field "dir:chat-search agent:codex" · query "…" · pasteboard "dir:chat-search agent:codex"
+⌘X → field "" · query "" · pasteboard "dir:chat-search agent:codex"
+⌘V → field "dir:chat-search agent:codex" · query "…" · pasteboard "…"
+⌘Z → field "" · query ""
+⇧⌘Z → field "dir:chat-search agent:codex" · query "…"
+the menu with the phrase selected:
+  Edit: Undo, Redo Cut, Cut, Copy, Paste, Select All, …
+⌘H, which this bar deliberately does not carry → matched false, the app is hidden: false
+  NSApp.hide(nil) called directly → the app is hidden: true
+⌘M → matched true, the window is in the Dock: true
+```
+
+The bar is read **twice**, with an empty box and with the phrase selected, because half these items
+are *supposed* to be grey in the first reading — a Copy that offered itself with nothing selected
+would be the same lie in the other direction. The field and the query are both printed because they
+are two facts: an edit the field editor performed and SwiftUI never heard about would leave the box
+reading one thing and the search answering another, which is the way this can be wrong while looking
+right.
+
+**It puts the pasteboard back**, and it does it *before* Cmd-W rather than on the way out. A scripted
+run that ate somebody's clipboard would be the same mistake as one that appended to `queries.jsonl`
+— a benchmark writing over something a person put there on purpose (ADR 22) — and the first version
+of this made exactly that mistake, because `NSApp.terminate` unwinds no scope and the restore lived
+in a `defer`. What comes back is the string, so a run that interrupts a copied image or a promised
+file leaves the string standing in its place; the general pasteboard cannot be snapshotted whole.
+
+The run ends by pressing **Cmd-W**, for the reason `--shot --settings` ends on Cmd-Q: closing this
+window is what quits this app, so if the key reaches the item the process ends there and the line
+after it is only ever printed when it did not.
+
+**What it cannot reach is the transcript.** A selection there is made by dragging; posting synthetic
+mouse events would need the Accessibility grant this app has never asked anybody for, and calling
+into the view directly is the same wall the fold pass names from the other side —
+[what this cannot drive is the pointer](#seeing-it). With nothing selected `copy:` correctly resolves
+nowhere, so there is not even a negative to report. That half is **reasoned rather than read**, and
+the run says so on the line: it is this same item on this same chain, and `copy:` against `nil` is
+what SwiftUI's own `TextEditingCommands` installs.
+
 ## The theme seam
 
 No view names a colour, a size or a face. Every one is a token read off the environment, and the
@@ -343,31 +480,14 @@ nothing is the failure this is most likely to have. And a scripted run writes no
 is somebody choosing a theme. Same rule and the same reason as both staying out of the query log.
 
 A flag is still the affordance a script reaches for, and a terminal is still this app's front door —
-no bundle, no Dock icon. But a flag is no longer the *only* way in, because the menu bar it was
-waiting on now exists.
+no bundle, no Dock icon. But a flag is no longer the *only* way in, because
+[the menu bar](#the-menu-bar) it was waiting on now exists.
 
-### The menu bar, and the settings window on it
+### The settings window at Cmd-comma
 
-This executable creates `NSApplication` by hand and never built an `NSMenu`, so until
-`chat-search-me9.8.21` there was no app menu to hang `Settings…` on — and Cmd-Q did not work either,
-for exactly the same reason. A hand-made application has no menu bar at all, not an empty one, and a
-key equivalent is a thing a menu delivers.
-
-```
-chat-search
-  About chat-search
-  Settings…            ⌘,
-  Quit chat-search     ⌘Q
-```
-
-**Quit is not scope creep.** It is broken without this, the menu is the only place a key equivalent
-can live, and shipping the menu that fixes it while leaving it off would be a deliberate choice to
-leave it broken. **Edit, Window and Hide are not here**, and that is the same argument stopping
-where the bead stopped: Cmd-C and Cmd-V in the search field are broken for the reason Cmd-Q was,
-which makes it a real gap and `chat-search-me9.8.24` rather than something to fold in on the way
-past.
-
-Cmd-comma opens a window carrying the three settings above:
+`Settings…` is the one item on that bar that is this app's rather than AppKit's, and the reason
+`chat-search-me9.8.21` had to build a menu bar at all: there was nowhere to hang it. Cmd-comma opens
+a window carrying the three settings above:
 
 ```
 Appearance   ( ) System   (•) Light   ( ) Dark
@@ -515,11 +635,10 @@ Neither sets a type, radius or rhythm token. A colour port cannot move rows-per-
 density argument every other direction has to make does not arise, and `--shot --theme
 gruvbox-derived` differs from `--shot --theme terminal` in colour and in nothing else.
 
-Three things this seam does **not** do yet, each filed:
+Two things this seam does **not** do yet, each filed. Picking one used to be the third — the flags
+chose at launch and changing your mind while looking at the window did not — and
+[the settings window](#the-settings-window-at-cmd-comma) is what closed it.
 
-- **Picking one means relaunching.** The four flags choose at launch and the app remembers all of
-  them; changing your mind while looking at the window does not. That wants a menu bar this
-  executable has never built. `chat-search-me9.8.21`.
 - **Nothing loads at runtime.** Dialling in type and spacing is edit, regenerate, rebuild, relaunch.
   Reading a token set from a file would make it edit and relaunch — and that file is the user-theme
   class, so it is measured on load, drawn regardless, and a file that cannot be *read* falls back to

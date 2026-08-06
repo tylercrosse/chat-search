@@ -10,7 +10,7 @@ scrolls except the panes that would scroll in the real thing.
 ```bash
 open poc/ui/index.html          # no server, no build, no dependencies
 open poc/ui/gallery.html        # every component, every state, both themes
-open poc/ui/directions.html     # four visual directions, measured against each other
+open poc/ui/directions.html     # six visual directions, measured against each other
 open "poc/ui/index.html?dir=paper"   # the whole prototype in one of them
 ```
 
@@ -84,7 +84,13 @@ answer that — `terminal` (the incumbent, and the control), `paper`, `blueprint
 of what it costs. The table is measured off the rendered page rather than read from the tokens,
 because a row's height is a line box's opinion and not a sum of the padding you asked for.
 
-Three things are fenced and all four directions hold them: the four message kinds stay on an even
+Two more are ports rather than answers: `gruvbox-derived` and `solarized-derived`. Both say
+*derived* because every hue in them is the original's and not one lightness is — neither palette
+holds the ramp as published, and `docs/DECISIONS.md` ADR 25 is why a direction the project ships
+has no choice about that. Neither sets a type or geometry token, so on every column except colour
+they measure as the incumbent does.
+
+Three things are fenced and all six directions hold them: the four message kinds stay on an even
 ~1.8× luminance ramp against the ribbon track, the quiet text tier clears 4.5:1 on **both** grounds
 it lands on, and rows-per-screen does not drop. `python3 poc/ui/palette.py --verify` re-measures the
 stylesheets and exits non-zero if one stops holding.
@@ -96,8 +102,8 @@ stylesheets and exits non-zero if one stops holding.
 | `index.html` | the window shell |
 | `DESIGN-BRIEF.md` | what the mockup is and what its marks must encode — for handing to a design tool with a screenshot |
 | `gallery.html` · `gallery.js` · `gallery.css` | the component gallery — renders the app's own functions, so it cannot drift from what ships |
-| `directions.html` · `directions.js` | four visual directions on the row and the ribbon at real size, in both themes, with what each costs |
-| `directions.css` | those four as token sets — palette, faces, sizes, rhythm, radii; nothing structural |
+| `directions.html` · `directions.js` | six visual directions on the row and the ribbon at real size, in both themes, with what each costs |
+| `directions.css` | those six as token sets — palette, faces, sizes, rhythm, radii; nothing structural |
 | `palette.py` | solves each direction's luminance ramp, and re-measures the stylesheets with `--verify` |
 | `tokens.py` | emits the named directions as the macOS app's `Tokens.swift`, so the app and the mockup read one authored copy |
 | `styles.css` | tokens, the three views, the annotation layer |

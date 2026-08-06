@@ -172,30 +172,34 @@ pub struct SearchOptions {
     ///
     /// Off by default because it is the one field whose cost scales with the *conversations*
     /// returned rather than with the matches in them: it reads every head-path message of
-    /// every row, which at the TUI's own limit of 100 is 10k–58k messages per keystroke.
+    /// every one, which at the TUI's own limit of 100 is 10k–56k messages per keystroke. Note
+    /// *conversations* and not rows — [`fill_shape`] runs once per member of a [`Sitting`], so
+    /// a page of 100 rows can be 196 of these reads and the broad query below is exactly that.
     ///
     /// **It stays a flag, and that was decided with the covering index in place rather than
     /// before it** (chat-search-me9.26). `idx_message_reading` covers this query and did what
-    /// it was built for — the constant fell from ~520 ns per message to ~180 — but the work is
-    /// still proportional to the messages read, so what is left is real. Measured in-process
-    /// at limit 100 against 4,490 conversations / 207,857 messages, medians of 10 alternating
-    /// runs on one connection, which is what the TUI holds:
+    /// it was built for — the constant fell from ~570 ns per message to ~195, holding to
+    /// within ±4% across a five-fold range of page sizes — but the work is still proportional
+    /// to the messages read, so what is left is real. Measured in-process at limit 100 against
+    /// 4,491 conversations / 208,522 messages, medians of 10 alternating runs on one open
+    /// reader, which is what a client holds:
     ///
     /// ```text
-    ///                          search    +shape         without the index
-    /// timezone         49 rows  0.41  ->   2.22 ms      0.47 ->  5.88 ms
-    /// borrow checker   72 rows  0.56  ->   3.14 ms      0.58 ->  8.47 ms
-    /// schema migration 67 rows  0.75  ->   4.91 ms      0.84 -> 13.46 ms
-    /// commits         100 rows  6.88  ->  15.57 ms      6.91 -> 31.25 ms
-    /// the             100 rows 75.24  ->  85.00 ms     76.79 -> 107.20 ms
+    ///                    rows  convs    search    +shape       without the index
+    /// timezone             49     51     0.52  ->   2.52 ms     0.61 ->   6.48 ms
+    /// borrow checker       73     73     0.72  ->   3.54 ms     0.75 ->   9.06 ms
+    /// schema migration     68     68     1.08  ->   5.66 ms     1.05 ->  14.32 ms
+    /// commits             100    100     7.59  ->  16.30 ms     7.66 ->  32.48 ms
+    /// the                 100    196    83.65  ->  94.76 ms    82.94 -> 116.01 ms
     /// ```
     ///
     /// The absolute cost is small and it is not the argument. An ordinary query at that limit
-    /// searches in 0.4–0.8 ms, so filling the shape unconditionally would make a keystroke
-    /// **5–7× longer** — for a strip the TUI does not draw, since it draws [`match_density`]
-    /// instead. The multiple is worst exactly where the search is already fast; the broad
-    /// queries that cost the most in milliseconds are the ones where the shape is a rounding
-    /// error. A default chosen for the broad case would be paid for on every other one.
+    /// searches in 0.5–1.1 ms, so filling the shape unconditionally would make a keystroke
+    /// **about five times longer** — for a strip the TUI does not draw, since it draws
+    /// [`match_density`] instead. The multiple is worst exactly where the search is already
+    /// fast; the broad queries that cost the most in milliseconds are the ones where the shape
+    /// is a rounding error. A default chosen for the broad case would be paid for on every
+    /// other one.
     ///
     /// So the surface that draws the strip asks for it (`cs search --json`), and the surface
     /// that cannot use it does not pay. What changed is that the flag is now a measured

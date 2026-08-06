@@ -72,14 +72,17 @@ CREATE INDEX IF NOT EXISTS idx_message_parent  ON message(parent_id);
 -- TUI-DESIGN §8 is not built yet, and an index that stopped working the day it was would be a
 -- trap. The cost is walking the 4% of rows that are off-path, against a sort this removes.
 --
--- What it costs on the way in: nothing measurable. Ten alternating full rebuilds of 4,490
--- conversations / 207,857 messages, this index against the three-column one it replaced, put
--- the medians at 9.40 s and 9.71 s — the wider index ahead, which only means the difference is
--- under the noise. Individual paired runs range −1.0 s to +1.1 s. The whole machine drifts far
--- harder than the schema does: the first five rounds ran 9.7–12.2 s and the last five 7.6–9.1 s,
--- which is why this had to be interleaved. An A-then-B reading of the same two builds would
--- have reported a 30% regression that is entirely warm-up, and nearly did (chat-search-me9.26).
--- On disk it is +4.4 MB on 388 MB.
+-- What it costs on the way in: nothing measurable. Ten alternating full rebuilds of 4,491
+-- conversations / 208,522 messages, this index against the three-column one it replaced, put
+-- the medians at 7.54 s and 7.59 s, with a median paired difference of exactly zero and a mean
+-- of −70 ms. On disk it is +4.4 MB on 391 MB.
+--
+-- It had to be interleaved, and that is the more durable half of the finding. An earlier
+-- uninterleaved reading of these same two builds reported 12–15 s against a 9.7 s baseline and
+-- concluded the index was expensive. It was measuring the machine: across ten rounds run cold,
+-- the first five took 9.7–12.2 s and the last five 7.6–9.1 s regardless of which schema was
+-- running. Alternate the arms per round, or this box will report whatever ran first as ~30%
+-- slower (chat-search-me9.26).
 CREATE INDEX IF NOT EXISTS idx_message_reading
   ON message(conv_id, is_sidechain, thread_key, seq, on_head_path, role, kind, is_error);
 

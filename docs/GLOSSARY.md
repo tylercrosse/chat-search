@@ -16,7 +16,7 @@ Terms are marked **[schema]** where they correspond to a table, column, or enum 
 
 A thread is _inside_ a conversation. A **sitting** (see [Search](#search)) runs the other way — several conversations read as one — and the two must not borrow each other's name.
 
-**Message** **[schema]** One immutable node. Never updated in place; corrections arrive as new messages. Carries `parent_id`, making the messages of a conversation a DAG rather than a list.
+**Message** **[schema]** One immutable node. It is never updated in place, and corrections arrive as new messages. Carries `parent_id`, which makes the messages of a conversation a DAG rather than a list.
 
 **Kind** **[schema]** What a message _is_, as distinct from who sent it. Exactly one of:
 
@@ -31,7 +31,7 @@ The split exists because tool traffic is 91% of the text. Indexing it alongside 
 
 `reasoning` comes **entirely from Codex**. Claude Code persists no reasoning text: every one of its `thinking` blocks is `{"thinking": "", "signature": "…"}` — the text is blanked and only an encrypted signature is stored, so those messages fall out at the empty-text rule.
 
-**Head** **[schema]** The currently-selected leaf message of a conversation — `conversation.head_id`. The one mutable field in the entire schema. "The conversation as displayed" is the walk from `head_id` up through `parent_id` to the root. Messages not on that path still exist and are still searchable; they are on abandoned branches.
+**Head** **[schema]** The currently-selected leaf message of a conversation — `conversation.head_id`. The one mutable field in the entire schema. "The conversation as displayed" is the walk from `head_id` up through `parent_id` to the root. Messages not on that path are on abandoned branches, but they still exist and are still searchable.
 
 ---
 
@@ -55,15 +55,15 @@ These are genuinely different and must not be collapsed.
 
 This shared session id is why per-file message ordinals collide (7,637 messages, 5% of the corpus) and why message ids must be scoped by transcript file.
 
-**Edit-branch** Intra-conversation, intra-file. Editing a ChatGPT message does not overwrite it — a new node appears under the same parent and the old one is retained. Measured across 2,011 conversations: **287 branch points** (nodes with more than one child) in 234 conversations, leaving **869 message nodes off the `current_node` path**. This is why the model is a DAG: it turns the hardest-looking mutation into an append.
+**Edit-branch** Intra-conversation, intra-file. Editing a ChatGPT message does not overwrite it — a new node appears under the same parent and the old one is retained. Measured across 2,011 conversations: **287 branch points** (nodes with more than one child) in 234 conversations, leaving **869 message nodes off the `current_node` path**. This is why the model is a DAG. It turns the hardest-looking mutation into an append.
 
 ---
 
 ## Storage
 
-**Raw archive** The immutable, append-only capture of source transcripts. The source of truth. Never rewritten. Namespaced by machine (`raw/<machine>/<source>/…`) so multiple machines can merge. Syncing this — never a database file — is how multi-machine works.
+**Raw archive** The immutable, append-only capture of source transcripts. The source of truth. Never rewritten. Namespaced by machine (`raw/<machine>/<source>/…`) so multiple machines can merge. Syncing this, and not a database file, is how multi-machine works.
 
-**Index** **[`index.db`]** Disposable. A pure function of _(raw archive, importer version)_. Deleting and rebuilding it must always be safe; a full rebuild is ~7s for 1.8 GB. Anything that cannot survive `rm index.db` is in the wrong file.
+**Index** **[`index.db`]** Disposable. A pure function of _(raw archive, importer version)_. Deleting and rebuilding it must always be safe, and a full rebuild is ~7s for 1.8 GB. Anything that cannot survive `rm index.db` is in the wrong file.
 
 **Index state** **[wire: `index_state`, `error.code`]** What a reader found at the index path — the only thing a client is meant to branch on, since the sentence beside it is prose and free to change. Four values, and each says what to do next:
 
@@ -74,13 +74,13 @@ This shared session id is why per-file message ordinals collide (7,637 messages,
 | `rebuilding` | `index_state`, exit 0 | a complete answer from the previous build, with a newer index on the way |
 | `ready` | `index_state`, exit 0 | a complete answer, nothing running |
 
-`rebuilding` never means partial. A rebuild is assembled in a sibling file (`index.db.building`) and renamed over the target, so a reader sees the whole old index or the whole new one and never a half-written one — which is what the states are worth naming for. The build holds a lock on `index.db.building.lock` for its lifetime, so a rebuild killed halfway leaves litter that reads as `ready` rather than as a build that never ends; the next `cs index` clears it (ADR 14, `chat-search-me9.28`).
+`rebuilding` never means partial. A rebuild is assembled in a sibling file (`index.db.building`) and renamed over the target, so a reader sees the whole old index or the whole new one and never a half-written one, which is the reason these states are worth naming at all. The build holds a lock on `index.db.building.lock` for its lifetime, so a rebuild killed halfway leaves litter that reads as `ready` instead of as a build that never ends. The next `cs index` clears it (ADR 14, `chat-search-me9.28`).
 
 **Library** **[`library.db`]** Precious, tiny, backed up. Holds only **authored** data as an append-only event log. Merging two machines is concatenate-and-fold with last-write-wins per key.
 
 **Derived** vs **Authored** The central invariant: every mutable thing is one or the other, never both and never neither. Derived state is recomputed on rebuild and never merged. Authored state is appended and never overwritten.
 
-**Tombstone** **[schema: `conversation.deleted_upstream_at`]** Marks that a conversation is gone from its source — you deleted it upstream, or retention pruned it. The archive _keeps_ the content; outliving upstream deletion is the point. Distinct from forgetting.
+**Tombstone** **[schema: `conversation.deleted_upstream_at`]** Marks that a conversation is gone from its source — you deleted it upstream, or retention pruned it. The archive _keeps_ the content, because outliving upstream deletion is the point. Distinct from forgetting.
 
 **Forget** The only deliberately destructive operation: remove a conversation from raw _and_ index, and record a tombstone so the next scan does not resurrect it from a source file that still exists.
 
@@ -94,23 +94,23 @@ This shared session id is why per-file message ordinals collide (7,637 messages,
 
 Joined once in `cs-core` from what the caller knows, never derived per client. `cs-core` reads no config; `cs` supplies the config and filesystem half from `Config::sources` and `drift::detect`.
 
-**Archiver** Copies raw transcript bytes from live source directories into the raw archive, append-only, and records what it saw in the manifest. **Deliberately dumb: it never parses content.** It knows paths, sizes, mtimes, hashes and per-source layout policy — nothing about conversations or messages. One per source _location_.
+**Archiver** Copies raw transcript bytes from live source directories into the raw archive, append-only, and records what it saw in the manifest. **Deliberately dumb: it never parses content.** It knows paths, sizes, mtimes, hashes and per-source layout policy, and nothing about conversations or messages. One per source _location_.
 
 If the archiver fails, data is lost permanently, which is why it is kept simple and why it can ship complete before any importer works.
 
-**Importer** Pure function: archived transcript bytes → normalized records. Understands exactly one source's format — conversations, messages, kinds, lineage. No database, no search, no knowledge of where the bytes came from. One per source _format_. Testable with golden files, which is what keeps it cheap to test and portable across a stack change.
+**Importer** Pure function: archived transcript bytes → normalized records. Understands exactly one source's format — conversations, messages, kinds, lineage. It has no database, no search, and no knowledge of where the bytes came from. One per source _format_. Testable with golden files, which keeps it cheap to cover and portable across a stack change.
 
 The split from the archiver is what makes **retroactive reparse** possible: fix an importer and rebuild, and every conversation back to the first captured byte gets the improvement. Fused, improvements would only ever apply going forward.
 
 **Indexer** Consumes normalized records and writes `index.db` — tables, FTS5, and later vectors. Bound tightly to search (they share the tokenizer, schema and ranking), so the two are one module.
 
-**Archive reader** Thin layer between archive and importer that yields `(logical_path, bytes)` regardless of whether a source is stored mirrored or bundled. Keeps layout policy (ADR 18) from leaking into importers — an importer always sees the source's original shape.
+**Archive reader** Thin layer between archive and importer that yields `(logical_path, bytes)` regardless of whether a source is stored mirrored or bundled. Keeps layout policy (ADR 18) from leaking into importers, so an importer always sees the source's original shape.
 
-**Normalized record** The contract between importers and the indexer. A type in code; serialized to JSONL only as test fixtures, so the seam stays language-portable without paying to materialise it in production.
+**Normalized record** The contract between importers and the indexer. A type in code, serialized to JSONL only as test fixtures, so the seam stays language-portable without paying to materialise it in production.
 
-**Manifest** Append-only event log inside the archive recording what the archiver observed: `{ts, op: seen|appended|rewritten|vanished, source, path, size, mtime, prefix_hash}`. Holds the facts that cannot be recomputed from a snapshot — `first_seen` and when a file vanished upstream — which is why it lives in the archive rather than the disposable index.
+**Manifest** Append-only event log inside the archive recording what the archiver observed: `{ts, op: seen|appended|rewritten|vanished, source, path, size, mtime, prefix_hash}`. It holds the two facts that cannot be recomputed from a snapshot, `first_seen` and when a file vanished upstream, which is why it lives in the archive and not in the disposable index.
 
-**Bundle** Append-only JSONL file packing many small source fragments into one, for sources like OpenCode that store 170k tiny files. One line per fragment: `{"path": …, "content": …}`. Lossless and reversible; grouping is done by path structure alone so the archiver still never parses content.
+**Bundle** Append-only JSONL file packing many small source fragments into one, for sources like OpenCode that store 170k tiny files. One line per fragment: `{"path": …, "content": …}`. Lossless and reversible. Grouping is done by path structure alone, so the archiver still never parses content.
 
 **Rebuild** vs **Tail** Rebuild reprocesses everything (~7s). Tail processes only appended bytes of recently touched files, for the session you are in right now. Detection is `(path, size, mtime, hash of first 64 KB)`: prefix hash matches and size grew means pure append; prefix hash changed means the file was rewritten and needs full re-import.
 
@@ -124,9 +124,9 @@ Resolved from `(source, native_id)` at display time, never stored. Both parts ar
 
 **Query** The parsed form of what the user asked for — terms, filters, and whether it can be run. Distinct from **search options** (limit, field, decay, `now_ms`), which are how to run it. Conflating the two is why `recent` once accepted a query object and silently ignored seven of its nine fields.
 
-Parsed exactly once, by `cs_core::query`. Everything downstream reads the parsed value; nothing re-reads the string. Before that rule existed the ranker and the highlighter each tokenized it themselves and disagreed twice — `agent:codex` reached FTS5 as two literal words, and a repeated final word lost its prefix star.
+Parsed exactly once, by `cs_core::query`. Everything downstream reads the parsed value, and nothing re-reads the string. Before that rule existed the ranker and the highlighter each tokenized it themselves and disagreed twice: `agent:codex` reached FTS5 as two literal words, and a repeated final word lost its prefix star.
 
-**Answer** **[code: `cs_core::answer`, wire: the whole search reply]** The reply to one **Query** run under one set of search options: the envelope (`v`, `ms`, `index_state`, rejected filters), the conversations that came back, and how many matched in total. Serializing it _is_ the wire — the same arrangement `blocks::Transcript` has for `cs show --json` — so the CLI, the TUI and a native client read one shape instead of three clients each assembling their own (ADR 23).
+**Answer** **[code: `cs_core::answer`, wire: the whole search reply]** The reply to one **Query** run under one set of search options: the envelope (`v`, `ms`, `index_state`, rejected filters), the conversations that came back, and how many matched in total. Serializing it _is_ the wire, the same arrangement `blocks::Transcript` has for `cs show --json`, so the CLI, the TUI and a native client read one shape instead of three clients each assembling their own (ADR 23).
 
 Distinct from the **Query** it answers and the search options it ran under, both of which it remembers privately so that settling the total counts the set that was ranked rather than whatever the caller passes second. That invariant used to live in a doc comment, and a second caller had already drifted from it.
 
@@ -144,7 +144,7 @@ Negation has two spellings, `-agent:codex` and `agent:!codex`, folded together a
 
 Repeated tokens of one facet **union** — `agent:codex agent:claude-code` selects both, which is what lets the facet bar add a chip rather than replace one. Repeated `date:` tokens **intersect**, which is the only reading under which two bounds describe a range.
 
-**Active** vs **rejected** A filter is _active_ when it reaches the SQL and _rejected_ when its value names nothing that can be selected on — `date:nope`, a half-typed `agent:`. Every filter the parser accepts is now applied, so those are the only two states; before `chat-search-6eb.11` there was a third, "understood but not wired yet," and `rejected()` is what `unapplied()` narrowed to when it went away. Rejected filters are reported, never dropped: returning unfiltered results for a query that names a filter looks like it worked. The published `unapplied_filters` JSON key keeps its name (ADR 12).
+**Active** vs **rejected** A filter is _active_ when it reaches the SQL and _rejected_ when its value names nothing that can be selected on — `date:nope`, a half-typed `agent:`. Every filter the parser accepts is now applied, so those are the only two states; before `chat-search-6eb.11` there was a third, "understood but not wired yet," and `rejected()` is what `unapplied()` narrowed to when it went away. Rejected filters are reported rather than dropped, because returning unfiltered results for a query that names a filter looks like it worked. The published `unapplied_filters` JSON key keeps its name (ADR 12).
 
 **Absolute span** A `date:` value naming instants rather than an age — `date:2026-07-28..2026-08-02`, half-open, with either end optional and a lone `YYYY-MM-DD` standing for the day it names. The one date form that does not move with the clock, which is why it is what a timeline drag produces and what `<Nu`/`>Nu` cannot say. Its bounds are held as the wall clocks that were typed and resolved against a zone only when a window is asked for, so a parsed query carries no machine's zone. Separator and reading are `cs pick --driven`'s, which has read a span of the query log the same way since it was written.
 
@@ -152,15 +152,16 @@ Repeated tokens of one facet **union** — `agent:codex agent:claude-code` selec
 
 **Mode** Whether a query can be run — `Empty` (nothing searchable typed), `TooShort` (a lone term below the prefix floor), or `Searchable`. `cs-core` owns the fact, a client owns what to show for it. The distinction is a measured ranking cost rather than a matter of taste: `h*` is 2510 ms against `hov*` at 16 ms, because BM25 scores every matching row before it can sort.
 
-**Sitting** **[read-time, `cs_core::sittings`]** Several conversations read back as the one chat they were. Google Takeout exports an activity log with no conversation key at any nesting level, so a twenty-turn Gemini chat is twenty conversations in the index; records of one `(source, surface)` separated by less than 30 minutes of silence are one sitting, keyed on the conversation that opened it. 1,271 activity records fold to 462 rows.
+**Sitting** **[read-time, `cs_core::sittings`]** Several conversations read back as the one chat they were. Google Takeout exports an activity log with no conversation key at any nesting level, so a twenty-turn Gemini chat is twenty conversations in the index. Records of one `(source, surface)` separated by less than 30 minutes of silence are one sitting, keyed on the conversation that opened it. 1,271 activity records fold to 462 rows.
 
-**Not a thread**, which is a linear stream _inside_ a conversation and runs the other way. Not a conversation either: it has no id, and it never gets one. A conversation id is permanent (ADR 16), so an id derived from a gap threshold would change the day the threshold did and duplicate the corpus — which is why this is computed at read time, in temp tables, where being wrong costs a rebuild of nothing. A **row** is what a result set returns: a conversation, or a sitting standing for several.
+A sitting is **not a thread**, which is a linear stream _inside_ a conversation and runs the other way. And it is not a conversation, because it has no id and never gets one. A conversation id is permanent (ADR 16), so an id derived from a gap threshold would change the day the threshold did and duplicate the corpus, which is why this is computed at read time, in temp tables, where being wrong costs a rebuild of nothing. A **row** is what a result set returns: a conversation, or a sitting standing for several.
 
 Having no id does not make it unopenable. `cs show` and `cs explain` resolve any member's id to the whole sitting (`sittings::resolve`) and answer for it as one conversation, under the opening record's name — so the reader and the result set count the same thing, and a client copying an id out of `Sitting.members` has no wrong one to pick.
 
-**Need** **[`queries.jsonl`]** One thing somebody went looking for, which is what the query log folds down to — deliberately not one distinct query string. `l`, `la`, `lau` … `launchd` typed in under two seconds is one need; the same query run three times to take a median is one need searched once; a pick made with nothing typed is no need at all, because nothing was asked. The unit `chat-search-6eb.21` harvests an eval set in, and the reason its "20+ distinct queries" trigger cannot be read off a count of distinct strings (ADR 22).
+**Need** **[`queries.jsonl`]** One thing somebody went looking for, which is what the query log folds down to — deliberately not one distinct query string. `l`, `la`, `lau` … `launchd` typed in under two seconds is one need. The same query run three times to take a median is one need searched once. A pick made with nothing typed is no need at all, because nothing was asked. The unit `chat-search-6eb.21` harvests an eval set in, and the reason its "20+ distinct queries" trigger cannot be read off a count of distinct strings (ADR 22).
 
 **Driven span** **[`queries.jsonl`]** An authored assertion that a stretch of the query log was machine-driven — a benchmark, a smoke test — rather than typed by somebody who wanted an answer. Authored rather than detected because nothing in a search event separates the two: a query typed to measure latency is ordinary text and goes unpicked, which is also exactly what an abandoned search looks like. Appended, never rewritten, and deletable if it was wrong.
+
 ---
 
 ## Vendor translation

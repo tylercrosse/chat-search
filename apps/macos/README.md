@@ -64,9 +64,9 @@ conversation open that is two processes per keystroke rather than one, both canc
 median conversation is ~10 KB and the corpus's longest measured 50–90 ms end to end, against the
 ~50 ms the search beside it already costs. With the [bottom drawer](#the-bottom-drawer) open it is
 three, on the same terms and for the same reason — see there for what that one costs and what
-shutting it buys. Rows and messages both go through `List` because it is
-the only one of SwiftUI's three containers that recycles — 5.2 MB scrolling the whole corpus
-against `LazyVStack`'s 65.6 MB and `VStack`'s 566 MB. That question is answered, so the app does
+shutting it buys. Rows and messages both go through `List` because it is the only one of
+SwiftUI's three containers that recycles — 5.2 MB scrolling the whole corpus against
+`LazyVStack`'s 65.6 MB and `VStack`'s 566 MB. That question is answered, so the app does
 not offer the other two.
 
 [`docs/JSON-CONTRACT.md`]: ../../docs/JSON-CONTRACT.md
@@ -1264,9 +1264,8 @@ already switches query logging off for every `cs` it spawns and prints a line sa
 `archive_root` is where a stray write would land and `queries.jsonl` is authored data that cannot
 be reconstructed. A temp `archive_root` plus `log_queries = false` is enough. Leave `--db` on the
 real index, which is what makes the number worth taking. It runs as an accessory app and does not
-steal focus, which is also
-how §1 was measured — a latency taken in a frontmost app and one taken in a background app are not
-the same measurement.
+steal focus, which is also how §1 was measured — a latency taken in a frontmost app and one taken
+in a background app are not the same measurement.
 
 2026-08-05, live index of **3,617 conversations**, `--limit 60`, 100 ms per character, no
 debounce, one `cs search --json` per keystroke, 8-core M3 at load 4.6:

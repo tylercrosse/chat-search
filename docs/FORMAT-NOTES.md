@@ -3,10 +3,9 @@
 Edge cases other people have already hit, gathered 2026-07-28 from parser source, decompiled
 product source and maintainer issue threads rather than blog posts.
 
-The point of this file is that the risk in these formats is not parsing difficulty, it is
-**unknown unknowns** — quirks that produce a plausible-looking index containing the wrong
-thing. Where a claim has been checked against this corpus, the result is marked
-**[verified here]** or **[not present here]**.
+The risk in these formats is **unknown unknowns** rather than parsing difficulty: quirks that
+produce a plausible-looking index containing the wrong thing. Where a claim has been checked
+against this corpus, the result is marked **[verified here]** or **[not present here]**.
 
 ---
 
@@ -138,7 +137,7 @@ written against decompiled Claude Code 2.1.88.
 ## Claude desktop — local agent mode
 
 Surveyed 2026-07-30 on this machine. The Cowork and Chat tabs write full transcripts to disk in
-the clear; only the cloud-synced claude.ai conversations are absent. Earlier notes concluded
+the clear, and only the cloud-synced claude.ai conversations are absent. Earlier notes concluded
 "needs export or API" after looking at IndexedDB alone, which is the wrong directory.
 
 - Root is `~/Library/Application Support/Claude/local-agent-mode-sessions/<account>/<org>/`,
@@ -161,7 +160,7 @@ the clear; only the cloud-synced claude.ai conversations are absent. Earlier not
   the titles are in a `.json` that glob never matches. Checked, not assumed: the first guess
   here was "it would import zero", and that was wrong in the reassuring direction.
 - `parent_tool_use_id` is **not** a message-to-message parent pointer — it marks a subagent's
-  messages as belonging to a tool call. There is no DAG here; the file is linear. Feeding it to
+  messages as belonging to a tool call. There is no DAG here, and the file is linear. Feeding it to
   `parent_native_id` would break `on_head_path`, which requires a parent the importer emitted.
 - The working directory also holds `uploads/`, `outputs/` and plugin trees. Only `audit.jsonl`
   is conversation-bearing.
@@ -191,7 +190,7 @@ the clear; only the cloud-synced claude.ai conversations are absent. Earlier not
   cannot be related without heuristics. Treat project membership as unavailable, not as a
   parsing problem to solve.
 - **Attachment binaries are not in the export** — metadata only.
-- `conversations.json` routinely exceeds 100 MB; it is one document, so stream it.
+- `conversations.json` routinely exceeds 100 MB, and it is one document, so stream it.
 - Message shape: `{uuid, name, created_at, updated_at, chat_messages: [{uuid, sender:
   "human"|"assistant", text, created_at, attachments, files}]}`. Note `sender`, not `role`, and
   `human`, not `user`.
@@ -221,7 +220,7 @@ the clear; only the cloud-synced claude.ai conversations are absent. Earlier not
   of an id (ADR 16).
 - **Schedulable**: "every 2 months for 1 year" delivered to **Google Drive**, which is the only
   automatable route any of these three surfaces offers. Email links expire in ~7 days and allow
-  5 downloads; scheduling is unavailable under Advanced Protection.
+  5 downloads. Scheduling is unavailable under Advanced Protection.
 - **Retention bounds the ceiling**: Gemini Apps Activity auto-deletes at 18 months by default.
   Anything older than the retention window was never exportable, so a gap there is not a bug.
 - Google AI Studio is a **different source** with a better route — prompts save as JSON into a

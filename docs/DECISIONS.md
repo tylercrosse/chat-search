@@ -16,7 +16,7 @@ Terms follow [GLOSSARY.md](./GLOSSARY.md). Measurements come from [../poc/RESULT
 
 **Decision.** Capture raw transcript bytes append-only and never rewrite them. Treat `index.db` as a pure function of _(raw archive, importer version)_, safe to delete and rebuild at any time.
 
-**Why.** It converts most downstream decisions from irreversible to reversible — you `rm index.db` instead of writing a migration. A full rebuild is 7s, so this costs nothing in practice. The temptation to skip it is that raw is mostly noise (91% tool traffic); disk is cheaper than the decisions it buys back.
+**Why.** It converts most downstream decisions from irreversible to reversible — you `rm index.db` instead of writing a migration. A full rebuild is 7s, so this costs nothing in practice. The temptation to skip it is that raw is mostly noise (91% tool traffic), but disk is cheaper than the decisions it buys back.
 
 **The invariant that makes this work.** Every column in `index.db` must be a pure function of _(archive, importer version)_. Hold that and any schema change is `rm index.db`, change the importer, rebuild — no migrations, ever.
 
@@ -54,7 +54,7 @@ The last one matters most. Rebuild is ~7s; embedding 30k messages is minutes. If
 
 **Decision.** `index.db` (derived, disposable) and `library.db` (authored, precious, backed up). Authored data is an append-only event log: `{ts, machine, target_id, op, value}`, folded last-write-wins per key and projected into queryable tables at build time.
 
-**Why.** If annotations live in the index, "rebuild the index" means "destroy user data," so you stop rebuilding — which breaks decision 1. The event-log shape also makes multi-machine merge concatenate-and-fold, with no conflict resolution. Costs ~30 lines now; genuinely unpleasant to retrofit once annotations exist.
+**Why.** If annotations live in the index, "rebuild the index" means "destroy user data," so you stop rebuilding — which breaks decision 1. The event-log shape also makes multi-machine merge concatenate-and-fold, with no conflict resolution. Costs ~30 lines now, and is genuinely unpleasant to retrofit once annotations exist.
 
 **Revisit when.** Never, ideally. This one is load-bearing.
 
@@ -104,7 +104,7 @@ Truncation is marked in the stored text with the dropped byte count. A silently 
 
 **Why.** BM25 is built in, there is no server, and Rust/TS/Swift/Python can all read it — which is what makes "open it anywhere" tractable. Measured: query is 1–3 ms regardless of runtime, so the storage layer is not the bottleneck for any surface.
 
-The indexes were `content=''` until 2026-08-01. External content stores no more — the postings are the same and the text is read back from `message`, which every ranking query already joins by rowid — but it makes fts5's auxiliary functions usable against the index, and `highlight()` is how a snippet marks the word that actually matched (chat-search-6eb.30). Two consequences to know: an unconstrained scan of an fts table now returns every row of `message` rather than only the indexed ones, so anything counting postings must go through `MATCH` or the `_docsize` shadow table; and `message.text` is now *the* content, so the indexer's postings and that column must never drift.
+The indexes were `content=''` until 2026-08-01. External content stores no more, since the postings are the same and the text is read back from `message`, which every ranking query already joins by rowid. What it buys is that fts5's auxiliary functions become usable against the index, and `highlight()` is how a snippet marks the word that actually matched (chat-search-6eb.30). Two consequences to know: an unconstrained scan of an fts table now returns every row of `message` rather than only the indexed ones, so anything counting postings must go through `MATCH` or the `_docsize` shadow table; and `message.text` is now *the* content, so the indexer's postings and that column must never drift.
 
 **Rejected — a prefix index (`prefix='2 3 4'`).** Priced 2026-08-01 on the 181k-message / 317 MB index, release, warm, at TUI settings (chat-search-6eb.38). It does exactly what fts5 documents and it does not buy what it was wanted for.
 
@@ -168,7 +168,7 @@ Consequence for the fold: `authored override` is unconditional, so `custom-title
 
 **Decision.** Build change _detection_ — `(path, size, mtime, hash of first 64 KB, importer_version)` — but respond to change with a full rebuild. Tail-append only files touched in the last few minutes, for the live session.
 
-**Why.** Rebuild is 7s and ingestion is I/O-bound, so incremental indexing is pure complexity right now; patching an FTS index through deletes is where the bugs live. The tail path then only ever handles pure append, the easy case.
+**Why.** Rebuild is 7s and ingestion is I/O-bound, so incremental indexing is pure complexity right now. Patching an FTS index through deletes is where the bugs live. The tail path then only ever handles pure append, the easy case.
 
 **Revisit when.** Rebuild exceeds ~60s, or live-session latency becomes a felt problem.
 
@@ -190,7 +190,7 @@ Consequence for the fold: `authored override` is unconditional, so `custom-title
 
 `proposed` · 2026-07-28
 
-**Decision.** Define one JSON request/response contract. Ship it over argv today; the same contract can run over stdin/stdout or a unix socket later without changing client code.
+**Decision.** Define one JSON request/response contract. Ship it over argv today. The same contract can run over stdin/stdout or a unix socket later without changing client code.
 
 **Why.** This is the un-boxing move — it lets the daemon question stay open and makes a core rewrite contained. Measured: the query is 1–3 ms in every runtime and the entire spread between runtimes is process startup, so the seam choice matters more than the language.
 
@@ -340,7 +340,7 @@ layout  = "mirror"
 include = "**/rollout-*.jsonl"
 ```
 
-**Decisive evidence against A.** Within a _single conversation_ the files disagree about their surface: in session `019f760a` the main thread carries `source: "vscode"` while its guardian subagent carries `source: {"subagent": {...}}`. Surface is a **thread** attribute, not a conversation attribute, so it cannot serve as conversation identity — A is not merely awkward, it is incoherent.
+**Decisive evidence against A.** Within a _single conversation_ the files disagree about their surface: in session `019f760a` the main thread carries `source: "vscode"` while its guardian subagent carries `source: {"subagent": {...}}`. Surface is a **thread** attribute, not a conversation attribute, so it cannot serve as conversation identity. That is what makes A incoherent rather than merely awkward.
 
 **Open — work/personal separation.** `codex_work_desktop` (30 rollouts) suggests a separate work account sharing `~/.codex/sessions`. Options: (i) ignore, treat as one source and filter by derived account; (ii) make it a distinct source so it can be excluded from sync or archived to a different root; (iii) exclude at capture entirely. This is the one part of this ADR that _cannot_ be retrofitted, since it changes conversation ids. Worth an explicit call rather than a default.
 
@@ -592,8 +592,7 @@ _E. Content-defined chunking backup tool (borg / restic / kopia)_
 **Decision.** **A** — _accepted 2026-07-28_ — with the archive root configurable and bundling on for fragmented
 sources. Cloning defers the space problem by years at zero loss, which buys time to add B when
 divergence actually starts costing. D is worth adding when the concern becomes _disaster_
-rather than _space_ — those are different problems, and cloning explicitly solves neither the
-second nor the first.
+rather than _space_. Those are different problems, and cloning addresses only the second.
 
 **Rejected — stripping tool output.** Measured above; it would be the only lossy lever and it
 is not needed, because clone + bundle + compress solve the problem losslessly.
@@ -823,6 +822,7 @@ is a hypothetical seam.
 **Revisit when.** A second thing in the reply becomes expensive and optional the way
 `kind_runs` already is. One knob is a knob; two are a sections model arriving one field at a
 time, and at that point the rejected design is the right one.
+
 ---
 
 ## 24. The model is a property of the message; the conversation label is a summary of it

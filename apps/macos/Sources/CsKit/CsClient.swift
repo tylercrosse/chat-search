@@ -172,6 +172,29 @@ public struct CsClient: Sendable {
         return try await decoded(args).value
     }
 
+    /// When this query's answers happened — the distribution, not the page.
+    ///
+    /// A third process beside the search and the rail, for a reason the rail does not have: the
+    /// counting is over the *whole* matching set and this window only ever holds sixty of it.
+    /// `--prefix` because the search beside it is asked that way, and the two readings of a final
+    /// word rank different sets — a drawer under a list has to be describing that list.
+    ///
+    /// **`drag` is the scrubber's half of the grammar.** Passing two instants asks what dragging
+    /// between them writes, and the answer comes back under `Timeline.drag` as finished query
+    /// text. The rest of that reply is thrown away, because it is a picture of the query the drag
+    /// started from — which is the same picture, the bars having never depended on `date:`.
+    /// Nothing on this side spells a `date:` token, which is the whole point.
+    ///
+    /// Unlike `facets` this **does** refuse when there is no index: a rail of zeroes is a
+    /// drawable first-run state and a histogram of nothing is not.
+    public func timeline(_ query: String, drag: (Int, Int)? = nil) async throws -> Timeline {
+        var args = ["timeline", query, "--json", "--prefix"]
+        if let drag { args += ["--drag", "\(drag.0)..\(drag.1)"] }
+        if let db { args += ["--db", db.path] }
+        if let config { args += ["--config", config.path] }
+        return try await decoded(args).value
+    }
+
     /// Record that a search ended in opening `convID`, and get back the line that reopens it.
     ///
     /// One call, because the open and the log event are one moment (docs/TUI-DESIGN.md §6). The

@@ -444,6 +444,8 @@ The third reply, and the facet rail for the one axis a rail cannot enumerate. `c
   "index_state": "ready",
   "from": 1675321200000,
   "until": 1786035600000,
+  "from_date": "2023-02-02",
+  "until_date": "2026-08-13",
   "bucket_days": 8,
   "sources": ["chatgpt-export", "claude-code", "codex", "gemini-cli", "google-takeout"],
   "buckets": [
@@ -494,6 +496,8 @@ an answer and the list below it is showing one.
 | `index_state` | string | never | As the search envelope's. Unlike `cs facets` this **does** refuse when there is no index, because a histogram of nothing is not a drawable state the way a rail of zeroes is. |
 | `from` | integer | never | Epoch millis. The first bucket's start, which is a local midnight. `0` when the index holds nothing dated. |
 | `until` | integer | never | The last bucket's end, half-open. Later than the newest conversation by up to one bucket, because the last bucket is whole rather than clipped. |
+| `from_date` | string | **nullable** | `from` as a local `YYYY-MM-DD`, for labelling that end of the axis. On the wire for the reason `ended_date` is: the local-date bug happened because three clients each derived the day themselves, and a client formatting an instant is a fourth. Null exactly when `buckets` is empty — `0` renders honestly as `1970-01-01`, which is the one wrong label a reader cannot tell from a right one. |
+| `until_date` | string | **nullable** | The same for `until`. |
 | `bucket_days` | integer | never | Civil days per bucket; `0` when there are no buckets. Carried so an axis can be labelled without dividing the span by the bucket count and getting 5.97 days. |
 | `sources` | array | never; may be empty | Source ids in the order every `Bucket.sources` counts them, sorted so a stacked bar does not reshuffle between keystrokes. Only sources the filters keep appear. |
 | `buckets` | array | never; may be empty | Oldest first, abutting, covering the whole axis. Empty exactly when the index holds no dated conversation. |

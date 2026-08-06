@@ -84,6 +84,13 @@ pub struct Timeline {
     /// dated span, not this query's** — see the module docs.
     pub from: i64,
     pub until: i64,
+    /// The same two instants as local days, for labelling the ends of the axis.
+    ///
+    /// On the wire for the reason [`crate::Group::ended_date`] is: the local-date bug happened
+    /// because three clients each derived the day themselves, and a client that formats an
+    /// instant is a fourth. Null exactly when there are no buckets.
+    pub from_date: Option<String>,
+    pub until_date: Option<String>,
     /// How many civil days one bucket covers. Carried so a client can label the axis without
     /// dividing the span by the bucket count and getting 5.97 days.
     pub bucket_days: i64,
@@ -199,6 +206,9 @@ pub fn timeline(
 
     let stops = edges.as_ref().map_or(&[][..], |e| &e.stops);
     let bars = counts.bars(stops, sources.len());
+    // Only when there is an axis. `local_ymd(0)` is a real day — 1970-01-01 — and an empty index
+    // labelled with it is the one wrong answer a client cannot tell from a right one.
+    let day = |at: Option<&i64>| at.copied().and_then(crate::time::local_ymd);
 
     Ok(Timeline {
         v: V,
@@ -207,6 +217,8 @@ pub fn timeline(
         index_state: reader.state.as_str(),
         from: stops.first().copied().unwrap_or(0),
         until: stops.last().copied().unwrap_or(0),
+        from_date: day(stops.first()),
+        until_date: day(stops.last()),
         bucket_days: edges.as_ref().map_or(0, |e| e.days),
         sources,
         buckets: bars,
@@ -739,6 +751,8 @@ mod tests {
         let t = drawn(&reader, "rust");
         assert!(t.buckets.is_empty());
         assert_eq!((t.from, t.until, t.bucket_days), (0, 0, 0));
+        // And not 1970-01-01, which is what an instant of zero honestly renders as.
+        assert_eq!((t.from_date, t.until_date), (None, None));
     }
 
     #[test]

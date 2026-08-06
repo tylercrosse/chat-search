@@ -93,6 +93,11 @@ The one genuinely unusual mark, and the thing most worth designing well. It is a
 strip of an entire conversation on a message-index axis, and it answers: *was my hit in
 something I said, or buried forty messages into a tool run?*
 
+The axis counts the messages a reader is shown, not every message the index holds: a
+successful tool result is not drawn, because the call above it implies it. So a
+conversation the row labels 937 messages is 563 positions wide, and anything placed on
+this axis has to be counted the same way or it lands early.
+
 It currently encodes six things on one axis:
 
 - **kind of message** — you / agent prose / reasoning / tool traffic, run-length encoded

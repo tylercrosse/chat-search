@@ -178,11 +178,24 @@ checking.**
   different. It would also stop being a *map*: positions have to agree with the match
   ticks and the fold model, both of which index messages. Length is already encoded
   where it belongs — `mapBands` varies bar height by `log10(len)` on a count axis.
+- **The runs are cs's, and the axis is the drawn messages** (`me9.23`). `cs search --json`
+  emits `kind_runs` per row, and the ribbon walks it; nothing here run-length encodes a
+  conversation that came out of the index. That moved the denominator, which is the part
+  you can see. The axis was every head-path message and is now the **drawn** ones, so a
+  successful `tool_result` — which the terminal does not draw, because the call implies it
+  — no longer takes a position: a 937-message conversation is 563 positions long. Over a
+  355-conversation export the shares move tool 79.5% → 66.7%, agent 14.5% → 23.5%, user
+  3.4% → 5.6%, and the worst long conversation moves 17 points. The old ribbon was not
+  differently scaled; it was overstating tool traffic against prose on every agent
+  conversation in the corpus. §3.27.
 - **Tool calls carry an act, and the act is drawn.** `look / change / run / steer`, from
   the tool name, which the harnesses spell differently for the same capability (codex
   `exec_command`, claude-code `Bash`). Corpus: run 47,479 · change 9,460 · look 4,502 ·
   steer 1,164. Ribbon runs break on act as well as kind, so a patch landing inside forty
-  exec calls is its own band. A `tool_result` inherits its call's act — one event.
+  exec calls is its own band. A `tool_result` inherits its call's act — one event. It
+  survives the runs becoming cs's because an act only ever *subdivides* a run, never moves
+  a boundary: collapse the subdivisions and the sequence is cs's exactly, which is what
+  the node check asserts on all 355 exported conversations.
 - **Act sub-shades are deliberately narrow** — 1.29× and 1.42× apart, all below
   reasoning's 4.0 — because the primary read has to stay on the main ramp. They say
   "something changed here", they are not independently decodable at 2px. The glyph in the
@@ -609,6 +622,16 @@ published material.
     identical on selected and unselected rows. Measured before fixing; nothing to fix.
 19. **Shipped Library drawing the rail beside it** — repeating, in the same pass, the
     exact inert-control defect the pass existed to fix. Caught in the screenshot.
+27. **The ribbon drew messages the terminal does not.** `export.py` handed over every
+    head-path message and `app.js` banded all of them, so every successful `tool_result`
+    took a position on an axis where `cs` gives it none — two positions per call instead
+    of one, on the kind that is already 66–85% of the volume. Measured when the runs were
+    finally read off `cs search --json` instead: tool **79.5% → 66.7%** of the axis, agent
+    14.5% → 23.5%, one long conversation moving 17 points. Nothing looked broken, which is
+    the point — a plausible shape is the failure mode a second copy of a rule produces, and
+    §6 had recorded the same class of duplication in `app.js` and called it deleted. It was
+    deleted from the *preview*. The ribbon had its own copy, one layer down in the export,
+    where it read as schema rather than as a rule.
 
 ---
 
@@ -715,9 +738,13 @@ That deletes a real duplication: this prototype's `app.js` carried its own copy 
 
 What is still needed to feed this prototype from the real index, in order:
 
-1. **Kind runs in search results.** The ribbon draws user/agent/reason/tool bands positionally,
-   and `cs search --json` carries `match_seqs` but no per-message kinds. `cs show` is the wrong
-   tool at 354 rows — this is a smaller, search-side addition (`me9.19`).
+1. ~~**Kind runs in search results.**~~ Done — `me9.19` emitted them, `me9.23` drew them,
+   2026-08-05. `cs search --json` carries `kind_runs` per row, one call fills the whole
+   corpus in 2.3s, and the export carries it to the ribbon untouched. The band and `drawn`
+   rules travel per message from `cs show --json` in the same pass, which is what §3.27
+   turned out to need. Still open on the same axis: `match_seqs` counts *messages* where
+   the runs count *drawn* messages, so the ticks the prototype places from its own
+   substring search cannot yet be replaced by cs's — `me9.25`.
 2. **The collapsed forms.** `tool_summary` and `recognition_line` are still in `cs-tui`, and
    `export.py`'s `call_detail()` is a second implementation of the first one. Moving them is
    what makes outline mode reproducible by any client (`me9.20`).
@@ -730,9 +757,13 @@ What is still needed to feed this prototype from the real index, in order:
 ## 7. Reproducing the measurements
 
 ```bash
+cargo build --release               # the export reads shape and bands out of the binary
 python3 poc/ui/export.py            # sample + topics + projects + lineages -> real-data.js
 python3 poc/ui/export.py --limit 400 --per-project 30
+python3 poc/ui/export.py --cs ~/.cargo/bin/cs      # or any other build of it
 python3 poc/ui/icons.py --rebuild   # re-inline source marks
+
+node poc/ui/verify-shape.js         # re-measure the ribbon against the runs cs sent
 
 python3 poc/ui/palette.py           # solve every direction's ramp, print as CSS
 python3 poc/ui/palette.py --verify  # re-measure what directions.css actually says
@@ -743,10 +774,25 @@ below 4.5:1, so it is a check and not only a generator. `--verify` reads the sty
 back rather than trusting `DIRECTIONS`, because solving a colour and pasting it into a
 file are two events and only one of them was checked before.
 
+`verify-shape.js` is the same idea for the ribbon: it loads `data.js` and `app.js` into a
+stub DOM, reads the markup `ribbon()` produces for all 355 exported conversations, and
+checks each band boundary against cs's cumulative run lengths *over the drawn count*. The
+sequence check alone was not enough — measure the same runs against every head-path message
+and the colours come out in the right order in the wrong places, which is exactly §3.27 and
+exactly what a screenshot does not show. Deliberately not a proof of provenance: it reads
+the markup, so a local re-encode of cs's per-message bands would still pass.
+
 The sample is stratified three ways — by source, by size, and by project. The third
 stratum exists because source-stratified sampling alone gave 9 projects, six of them with
 four conversations or fewer: enough to draw a list of projects, not enough to exercise
-what goes inside one. Current output: **354 conversations, 8.8 MB, 284 in 33 projects.**
+what goes inside one. Current output: **355 conversations, 55,132 messages of which 34,781
+are drawn, 13.3 MB, 295 in 33 projects**, in 33s — the `cs show` call per conversation is
+most of that, and it is what makes the bands the terminal's rather than this script's.
+
+A conversation the shape map cannot answer for is dropped from the sample rather than
+exported bandless, and the run says how many. Two ways that happens: it is a member of a
+sitting, whose runs span all its members and so are nobody's shape in particular; or it
+holds nothing a reader draws at all.
 
 Ad-hoc corpus queries go through the `sqlite3` CLI against
 `~/.chat-archive/index.db` (read-only). Python's `sqlite3` module could not open that

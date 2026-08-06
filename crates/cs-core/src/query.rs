@@ -93,9 +93,11 @@ impl Facet {
     /// - **`dir:` is a case-insensitive substring**, because a path is not an enum and nobody
     ///   types the whole of one. `dir:chat-search` selects every directory under it, so one token
     ///   lights every one of their chips.
-    /// - **`date:` is equality of the window**, not of the text. `date:week` and `date:<7d` are
-    ///   one selection written two ways, and a rail that compared strings would leave the week
-    ///   chip dark under a query filtering to exactly it.
+    /// - **`date:` is equality of the span**, not of the text. `date:week` and `date:<7d` are one
+    ///   selection written two ways, and a rail that compared strings would leave the week chip
+    ///   dark under a query filtering to exactly it. Two spans are the same when they will still
+    ///   be the same tomorrow, which is why `date:today` and today's own date are *not* one
+    ///   selection: one of them moves at midnight and the other is a decision the reader made.
     pub fn selects(self, value: &str, candidate: &str) -> bool {
         match self {
             Facet::Agent => value == candidate,
@@ -175,8 +177,10 @@ pub enum Age {
 
 /// What a `date:` value selects.
 ///
-/// Named days are whole civil days; everything else is an age measured back from now, so
-/// `date:week` and `date:<1w` are the same query written two ways.
+/// Named days are whole civil days and ages are measured back from now, so `date:week` and
+/// `date:<1w` are the same query written two ways. [`DateSpec::Between`] is the one form that
+/// does not move with the clock: it names instants, which is what a timeline drag produces and
+/// what neither of the other two can say (`chat-search-me9.18`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DateSpec {
     /// One whole civil day, `n` days back from today. `today` is 0, `yesterday` is 1.
@@ -185,6 +189,15 @@ pub enum DateSpec {
     Younger(Age),
     /// Older than this age — `date:>1w`.
     Older(Age),
+    /// An absolute half-open span, `date:2026-07-28..2026-08-02` — and with either end left
+    /// off, `date:2026-07-28..` or `date:..2026-08-02`.
+    ///
+    /// Held as the wall clocks that were typed rather than as instants, because a zone is
+    /// [`DateSpec::window_in`]'s to apply and a spec that resolved at parse time would carry
+    /// the machine it was parsed on. Half-open for the reason [`Window`] is, and with the
+    /// separator and the reading `cs pick --driven` already uses for a span of the query log:
+    /// `2026-08-04..2026-08-05` is the whole of the 4th, and consecutive days tile.
+    Between { from: Option<chrono::NaiveDateTime>, until: Option<chrono::NaiveDateTime> },
 }
 
 /// The spans a facet rail offers, as `(value, label)`, in the order they are drawn.
@@ -209,6 +222,57 @@ pub struct Window {
     pub until: Option<i64>,
 }
 
+impl Window {
+    /// The `date:` value naming this window — [`DateSpec::window_in`] the other way about.
+    ///
+    /// This is the half of a timeline scrubber that is grammar rather than drawing. A drag has
+    /// two instants and needs the text they are typed as, and a client deriving that text itself
+    /// would be a second, partial renderer of this grammar in a language that cannot link this
+    /// crate — the shape of the local-date bug, one client further out. Feed the result to
+    /// [`Query::toggling`] and the filter lands in the box like any other.
+    ///
+    /// Two things it does to the window on the way, both stated because they are lossy:
+    ///
+    /// - **Each edge rounds outward to a whole second**, which is the finest bound this grammar
+    ///   spells. A window under a second wider than the drag is invisible; one narrower would
+    ///   drop a conversation the reader dragged across, and they would have no way to see why.
+    /// - **A bound that lands on a midnight is written as the bare date**, because that is what
+    ///   a reader would have typed and `date:2026-07-28..2026-08-02` is a filter someone can
+    ///   edit where `date:2026-07-28T00:00:00..` is a filter they retype from scratch.
+    ///
+    /// `None` for a window that names nothing — unbounded at both ends, empty, or an edge
+    /// outside chrono's range.
+    pub fn value_in<Tz: chrono::TimeZone>(&self, tz: &Tz) -> Option<String> {
+        const SECOND: i64 = 1000;
+        let from = self.from.map(|ms| ms.div_euclid(SECOND) * SECOND);
+        let until = match self.until {
+            None => None,
+            Some(ms) => Some(ms.checked_add(SECOND - 1)?.div_euclid(SECOND) * SECOND),
+        };
+        let clock = |ms: Option<i64>| match ms {
+            None => Some(None),
+            Some(ms) => Some(Some(crate::time::clock_in(tz, ms)?)),
+        };
+        let (from, until) = (clock(from)?, clock(until)?);
+        // Refused through the spec itself, so that the one window this cannot name is exactly
+        // the one the parser would not have taken back.
+        DateSpec::between(from, until)?;
+        let written = |clock: Option<chrono::NaiveDateTime>| match clock {
+            None => String::new(),
+            Some(clock) => match clock.time() == chrono::NaiveTime::MIN {
+                true => clock.format("%Y-%m-%d").to_string(),
+                false => clock.format("%Y-%m-%dT%H:%M:%S").to_string(),
+            },
+        };
+        Some(format!("{}..{}", written(from), written(until)))
+    }
+
+    /// [`Window::value_in`] against the machine's own zone.
+    pub fn value(&self) -> Option<String> {
+        self.value_in(&chrono::Local)
+    }
+}
+
 impl DateSpec {
     /// Resolve against a clock and a zone. `None` if the arithmetic left chrono's range.
     pub fn window_in<Tz: chrono::TimeZone>(self, tz: &Tz, now_ms: i64) -> Option<Window> {
@@ -224,6 +288,16 @@ impl DateSpec {
             }
             DateSpec::Older(age) => {
                 Some(Window { from: None, until: Some(age.before(tz, now_ms)?) })
+            }
+            // `now_ms` does not appear: this is the one spec that says the same thing tomorrow.
+            // A bound that was typed and cannot be resolved drops the whole window rather than
+            // half of it — half a range is a filter twice the size of the one that was asked for.
+            DateSpec::Between { from, until } => {
+                let at = |clock: Option<chrono::NaiveDateTime>| match clock {
+                    None => Some(None),
+                    Some(clock) => Some(Some(crate::time::wall_clock_in(tz, clock)?)),
+                };
+                Some(Window { from: at(from)?, until: at(until)? })
             }
         }
     }
@@ -246,12 +320,45 @@ impl DateSpec {
             "month" => return Some(DateSpec::Younger(Age::Months(1))),
             _ => {}
         }
+        // `..` before the relative forms, since an absolute bound can hold neither `<` nor `>`
+        // and the two grammars therefore cannot collide.
+        if let Some((from, until)) = value.split_once("..") {
+            let bound = |text: &str| match text {
+                "" => Some(None),
+                text => Some(Some(crate::time::wall_clock(text)?)),
+            };
+            return Self::between(bound(from)?, bound(until)?);
+        }
+        // A lone `YYYY-MM-DD` is the day it names — the spelling every reader tries first, and
+        // the only absolute one that is a window on its own. `2026-08-04T10:00` names an
+        // instant, which is an edge rather than a span, so it is a bound and nothing else.
+        if let Ok(day) = chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+            return Self::between(day.and_hms_opt(0, 0, 0), day.succ_opt()?.and_hms_opt(0, 0, 0));
+        }
         let (rest, wrap): (&str, fn(Age) -> DateSpec) = match value.split_at_checked(1) {
             Some(("<", rest)) => (rest, DateSpec::Younger),
             Some((">", rest)) => (rest, DateSpec::Older),
             _ => return None,
         };
         Age::parse(rest).map(wrap)
+    }
+
+    /// A [`DateSpec::Between`] if the two bounds describe a span, and `None` if they do not.
+    ///
+    /// Two ways they do not, both of which read as a filter while selecting the whole corpus or
+    /// none of it. `date:..` bounds nothing at all, and `date:2026-08-05..2026-08-01` ends before
+    /// it starts — the second is what a drag would produce if a client handed its two edges over
+    /// in the order the mouse visited them, so it is refused here rather than passed to SQL that
+    /// would return nothing and look as though it had worked.
+    fn between(
+        from: Option<chrono::NaiveDateTime>,
+        until: Option<chrono::NaiveDateTime>,
+    ) -> Option<Self> {
+        match (from, until) {
+            (None, None) => None,
+            (Some(from), Some(until)) if until <= from => None,
+            _ => Some(DateSpec::Between { from, until }),
+        }
     }
 }
 
@@ -1094,7 +1201,15 @@ mod tests {
         // prefix of every filter anyone ever types. None of them may panic, and none may
         // silently become a filter that does something other than what the finished token
         // will do — `date:<3` must not filter as though it said `date:<3h`.
-        for finished in ["date:<3h", "date:>12mo", "agent:claude,codex", "dir:!web-app", "date:today"] {
+        for finished in [
+            "date:<3h",
+            "date:>12mo",
+            "agent:claude,codex",
+            "dir:!web-app",
+            "date:today",
+            "date:2026-07-28..2026-08-02",
+            "date:..2026-08-02t14:30",
+        ] {
             for end in 1..=finished.len() {
                 let Some(prefix) = finished.get(..end) else { continue };
                 let q = Query::typeahead(prefix);
@@ -1109,12 +1224,42 @@ mod tests {
 
     #[test]
     fn a_date_value_that_cannot_be_a_date_is_rejected_rather_than_guessed_at() {
-        for text in ["date:nope", "date:", "date:<", "date:>", "date:<h", "date:3h", "date:<3z", "date:<-3h"] {
+        for text in [
+            "date:nope",
+            "date:",
+            "date:<",
+            "date:>",
+            "date:<h",
+            "date:3h",
+            "date:<3z",
+            "date:<-3h",
+            // The absolute forms fail the same way: a bound that is not a wall clock, a span
+            // bounded at neither end, and one whose ends are the wrong way round.
+            "date:..",
+            "date:2026-13-01",
+            "date:nope..2026-08-02",
+            "date:2026-07-28..nope",
+            "date:2026-08-05..2026-08-01",
+            "date:2026-08-05..2026-08-05",
+        ] {
             let q = Query::typeahead(text);
             assert_eq!(q.rejected(), [text], "{text} should be reported, not applied");
             assert!(q.date_windows(1_785_000_000_000).is_empty(), "{text} must not filter");
         }
-        for text in ["date:<3h", "date:>1w", "date:today", "date:yesterday", "date:week", "date:month", "date:<90mo"] {
+        for text in [
+            "date:<3h",
+            "date:>1w",
+            "date:today",
+            "date:yesterday",
+            "date:week",
+            "date:month",
+            "date:<90mo",
+            "date:2026-07-28",
+            "date:2026-07-28..2026-08-02",
+            "date:2026-07-28..",
+            "date:..2026-08-02",
+            "date:2026-07-28t09:30..2026-07-28t17:00",
+        ] {
             let q = Query::typeahead(text);
             assert!(q.rejected().is_empty(), "{text} should be understood");
             assert_eq!(q.date_windows(1_785_000_000_000).len(), 1, "{text} should resolve");
@@ -1669,6 +1814,164 @@ mod tests {
             Query::typeahead(&after).toggling(Facet::Dir, "/Users/T/dev/Web-App"),
             "rust",
             "and back off"
+        );
+    }
+
+    // ---- chat-search-me9.18: the window a drag produces, said in the grammar ----
+
+    /// Named rather than `Local`, for the reason `time`'s tests are: a span that crosses a DST
+    /// boundary has to mean the same thing wherever this runs.
+    const LA: chrono_tz::Tz = chrono_tz::America::Los_Angeles;
+
+    /// A wall clock in Los Angeles during 2026, as the epoch millis the index stores.
+    fn at(month: u32, day: u32, hour: u32, minute: u32) -> i64 {
+        use chrono::TimeZone as _;
+        LA.with_ymd_and_hms(2026, month, day, hour, minute, 0).unwrap().timestamp_millis()
+    }
+
+    /// Midday on 2026-08-05, so that `today` and an absolute span are both askable.
+    fn now() -> i64 {
+        at(8, 5, 12, 0)
+    }
+
+    /// The one window a query's `date:` token resolves to.
+    fn window(text: &str) -> Window {
+        let windows = Query::typeahead(text).date_windows_in(&LA, now());
+        assert_eq!(windows.len(), 1, "{text} names one window");
+        windows[0].0
+    }
+
+    #[test]
+    fn an_absolute_span_is_the_half_open_pair_of_instants_it_names() {
+        // The gap this bead exists for: a scrubber hands over two edges, and until now the
+        // grammar could only say "younger than" and "older than" an age measured from now.
+        // Half-open and `..`-separated because `cs pick --driven` already reads a span of the
+        // query log that way, and two spellings of one idea is how the local-date bug started.
+        let w = window("date:2026-07-28..2026-08-02");
+        assert_eq!(w.from, Some(at(7, 28, 0, 0)));
+        assert_eq!(w.until, Some(at(8, 2, 0, 0)), "the 2nd opens the span it closes");
+    }
+
+    #[test]
+    fn a_lone_date_is_the_day_it_names_and_the_span_that_spells_it() {
+        // The form every reader tries first. It is the same selection as the two-day span, not
+        // merely one that resolves alike, so a chip lit by one is turned off by the other.
+        assert_eq!(window("date:2026-07-28"), window("date:2026-07-28..2026-07-29"));
+        assert!(lit("date:2026-07-28", Facet::Date, "2026-07-28..2026-07-29"));
+        assert_eq!(
+            Query::typeahead("date:2026-07-28 rust").toggling(Facet::Date, "2026-07-28..2026-07-29"),
+            "rust"
+        );
+        // An instant is not a span, so the finer spellings are bounds and nothing else: a lone
+        // one would have to guess whether the reader meant that second or that day.
+        assert_eq!(Query::typeahead("date:2026-07-28t09:30").rejected(), ["date:2026-07-28t09:30"]);
+    }
+
+    #[test]
+    fn an_open_ended_span_bounds_the_edge_it_names_and_leaves_the_other() {
+        // What a drag that reaches the end of the track produces, and the absolute counterpart
+        // of `date:<3h` — which cannot say "since the morning I started" at all.
+        assert_eq!(window("date:2026-07-28.."), Window { from: Some(at(7, 28, 0, 0)), until: None });
+        assert_eq!(window("date:..2026-08-02"), Window { from: None, until: Some(at(8, 2, 0, 0)) });
+    }
+
+    #[test]
+    fn an_absolute_span_says_the_same_thing_tomorrow() {
+        // Why this is a variant rather than a spelling of `date:<Nd`. A range the reader chose
+        // by looking at a timeline is a decision about the corpus, so it must not drift with the
+        // clock — and the relative forms must still drift, or `date:today` would be wrong by
+        // morning. Same query, two clocks a month apart.
+        let absolute = |now| Query::typeahead("date:2026-07-28..2026-08-02").date_windows_in(&LA, now);
+        assert_eq!(absolute(now()), absolute(now() + 30 * 86_400_000));
+        let relative = |now| Query::typeahead("date:today").date_windows_in(&LA, now);
+        assert_ne!(relative(now()), relative(now() + 30 * 86_400_000), "and a named day still moves");
+    }
+
+    #[test]
+    fn a_span_is_measured_in_civil_days_across_a_dst_boundary() {
+        // `time`'s rule, reaching the grammar: Los Angeles springs forward at 02:00 on
+        // 2026-03-08, so that day is 23 hours and the two days from the 7th are 47. A range
+        // resolved as two fixed-width offsets would put both edges an hour out for half a year.
+        let w = window("date:2026-03-07..2026-03-09");
+        assert_eq!(w.until.unwrap() - w.from.unwrap(), 47 * 3_600_000);
+    }
+
+    #[test]
+    fn a_dragged_window_comes_back_as_text_that_names_it() {
+        // The round trip a scrubber depends on, and the reason `Window::value_in` is here rather
+        // than in whichever client draws the timeline: the text is the filter state, so a client
+        // that could not write its drag down would be filtering by something the box never shows.
+        for (from, until) in [
+            (Some(at(7, 28, 0, 0)), Some(at(8, 2, 0, 0))),
+            (Some(at(7, 28, 9, 30)), Some(at(8, 2, 17, 0))),
+            (Some(at(7, 28, 9, 30)), None),
+            (None, Some(at(8, 2, 0, 0))),
+        ] {
+            let dragged = Window { from, until };
+            let value = dragged.value_in(&LA).expect("a bounded window can be written");
+            let spec = DateSpec::parse(&value).expect("and read back");
+            assert_eq!(spec.window_in(&LA, now()), Some(dragged), "{value}");
+
+            // And it survives the box, which is the half a `.parse()` test would miss: the query
+            // text is case-folded before it is read, so the `T` this writes arrives as a `t`.
+            let text = Query::typeahead("rust").toggling(Facet::Date, &value);
+            assert_eq!(Query::typeahead(&text).date_windows_in(&LA, now()), [(dragged, false)]);
+            assert_eq!(Query::typeahead(&text).terms(), ["rust"], "{value} leaked into the terms");
+        }
+    }
+
+    #[test]
+    fn an_edge_on_a_midnight_is_written_as_the_date_alone() {
+        // A filter is only editable if it is legible. `date:2026-07-28..2026-08-02` is a line
+        // someone can change one digit of; `date:2026-07-28T00:00:00..2026-08-02T00:00:00` is a
+        // line they select and retype.
+        let value = |from, until| Window { from, until }.value_in(&LA);
+        assert_eq!(
+            value(Some(at(7, 28, 0, 0)), Some(at(8, 2, 0, 0))).as_deref(),
+            Some("2026-07-28..2026-08-02")
+        );
+        assert_eq!(
+            value(Some(at(7, 28, 9, 30)), None).as_deref(),
+            Some("2026-07-28T09:30:00..")
+        );
+        assert_eq!(value(None, Some(at(8, 2, 0, 0))).as_deref(), Some("..2026-08-02"));
+        // A window naming nothing has no text: unbounded at both ends is not a filter, and one
+        // that ends before it starts is the drag whose edges arrived in mouse order.
+        assert_eq!(value(None, None), None);
+        assert_eq!(value(Some(at(8, 2, 0, 0)), Some(at(7, 28, 0, 0))), None);
+        assert_eq!(value(Some(at(8, 2, 0, 0)), Some(at(8, 2, 0, 0))), None);
+    }
+
+    #[test]
+    fn a_rounded_edge_widens_the_window_rather_than_narrowing_it() {
+        // The grammar's finest bound is the second and a drag lands on a millisecond, so the
+        // text names a window up to a second wider than the one drawn. Outward on purpose: a
+        // conversation dragged across and then filtered out is a bug nobody can see, where a
+        // millisecond of slack at each edge is one nobody can measure.
+        let dragged = Window { from: Some(at(7, 28, 9, 30) + 400), until: Some(at(8, 2, 0, 0) + 1) };
+        let value = dragged.value_in(&LA).unwrap();
+        assert_eq!(value, "2026-07-28T09:30:00..2026-08-02T00:00:01");
+        let back = DateSpec::parse(&value).unwrap().window_in(&LA, now()).unwrap();
+        assert!(back.from.unwrap() <= dragged.from.unwrap(), "the lower edge only ever drops");
+        assert!(back.until.unwrap() >= dragged.until.unwrap(), "and the upper edge only rises");
+    }
+
+    #[test]
+    fn a_dragged_range_replaces_a_standing_date_and_lights_none_of_the_rail() {
+        // A range is a `date:` token like any other, so `Facet::tokens_intersect` already says
+        // what a second one means: it replaces. What the rail does about it is the honest pair
+        // this grammar was already built for — no chip lit, and the All chip off, because
+        // something is filtering and it is not one of the four.
+        let text = Query::typeahead("date:today rust").toggling(Facet::Date, "2026-07-28..2026-08-02");
+        assert_eq!(text, "date:2026-07-28..2026-08-02 rust");
+        for (span, _) in DATE_SPANS {
+            assert!(!lit(&text, Facet::Date, span), "{span} should be dark under an absolute range");
+        }
+        assert!(!Query::typeahead(&text).selection(Facet::Date).is_empty(), "but something is on");
+        assert_eq!(
+            Query::typeahead(&text).toggling(Facet::Date, "2026-07-28..2026-08-02"),
+            "rust",
+            "and the range that is on is the one that turns it off"
         );
     }
 }

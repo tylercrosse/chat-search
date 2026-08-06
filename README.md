@@ -78,6 +78,9 @@ docs/               vocabulary, decisions, architecture, backlog
    which sources have archivers, and what each one contributes to the index. Open it in a
    browser; every figure is measured rather than asserted.
 6. [docs/BACKLOG.md](docs/BACKLOG.md) — deferred work and the MVP definition.
+7. [docs/PULL-REQUESTS.md](docs/PULL-REQUESTS.md) — what a pull request has to carry, and how
+   the TUI and the macOS app photograph themselves so a change to either can be shown rather
+   than described. Applies to agents opening PRs as much as to people.
 
 ## Three ideas worth knowing before reading the code
 

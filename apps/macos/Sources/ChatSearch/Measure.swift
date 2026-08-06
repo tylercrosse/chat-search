@@ -325,6 +325,10 @@ enum Measure {
     /// picture shows: the four keys are `ThemeChoice`'s and not a second set beside them, and two
     /// menus naming one direction collapses to `--theme NAME` — the direction whole, with the side
     /// overrides cleared rather than left behind to contradict it.
+    ///
+    /// The domain is removed afterwards, so `defaults read chat-search-settings-probe` says it does
+    /// not exist. `cfprefsd` leaves an empty plist behind at that name anyway, which is residue
+    /// rather than state — the app's own domain sits as the same empty file when nothing is set.
     @MainActor
     private static func writes() {
         let name = "chat-search-settings-probe"

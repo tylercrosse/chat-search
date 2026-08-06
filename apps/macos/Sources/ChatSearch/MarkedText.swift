@@ -24,13 +24,18 @@ import SwiftUI
 ///   Both arrive with the transcript, which is why the query is not passed in: a re-read against
 ///   the same query produces the same marks and may reuse them, and a re-read against a different
 ///   one arrives with different `terms`.
-/// - **Which direction is drawing**, since a mark bakes in three colour tokens and the markdown
-///   over it bakes in a face and two sizes. Named by `Theme.name`, which is what
-///   `ThemeSettings.choose(light:)` already treats as a direction's identity. Appearance is
-///   deliberately not part of it: every token is one dynamic `NSColor` that picks its own side
-///   where it is drawn, so a light/dark flip repaints these without rebuilding them — and the type
-///   scale does not travel with a side at all, which is `Theme.composed`'s decision and the reason
-///   an unattended sunset cannot relayout a conversation somebody is reading.
+/// - **The theme it was drawn from**, by `Theme.fingerprint` — every authored value in it, and not
+///   the name it goes by. A mark bakes in three colour tokens and the markdown over it bakes in a
+///   face, two sizes and `--ink-3`, and *that list is the problem*: this keyed on `Theme.name`
+///   until `chat-search-me9.8.39` put a watch on the theme file, a reloaded file keeps its name —
+///   the name *is* the file's stem — and the obvious repair, keying on the tokens a mark reads,
+///   went stale one merge later when `chat-search-me9.8.37` set markdown over the same string. A
+///   key that has to be kept in step with `mark` by hand is a key that is wrong the first time
+///   somebody adds an attribute. Appearance is deliberately not part of it: every token is one
+///   dynamic `NSColor` that picks its own side where it is drawn, so a light/dark flip repaints
+///   these without rebuilding them — and the type scale does not travel with a side at all, which
+///   is `Theme.composed`'s decision and the reason an unattended sunset cannot relayout a
+///   conversation somebody is reading.
 ///
 /// The first two are per entry. The last two invalidate every entry at once, which is what makes
 /// a stale mark unreachable rather than merely unlikely.
@@ -68,17 +73,21 @@ final class MarkedText {
 
     /// What every entry is an answer to. Not a key in the ordinary sense — when this changes there
     /// is nothing worth keeping, so the whole table goes rather than being searched.
+    /// One `Int` for the theme rather than the theme itself, because this is built and compared on
+    /// every call and the calls are what `chat-search-me9.8.29` counted: 7,603 of them over one
+    /// pass. `Theme.fingerprint` is digested once, where a key holding the two palettes would
+    /// compare eighty-five authored values on a path that bead took an allocation off.
     private struct Question: Equatable {
         let conv: String
         let terms: [String]
-        let direction: String
+        let drawing: Int
     }
 
     /// The message as it is drawn: off the table when it is there, built and kept when it is not.
     func of(_ block: Block, fold: Fold, in transcript: Transcript, theme: Theme) -> AttributedString
     {
         let question = Question(
-            conv: transcript.convId, terms: transcript.terms, direction: theme.name)
+            conv: transcript.convId, terms: transcript.terms, drawing: theme.fingerprint)
         if answering != question {
             built.removeAll(keepingCapacity: true)
             answering = question

@@ -44,6 +44,28 @@ public struct Theme: Sendable {
     /// allocates, and a row redrawing at 60 Hz asks for a dozen tokens.
     private let resolved: [ColorToken: NSColor]
 
+    /// A digest of every authored value in this theme, for a cache that has to notice any of them
+    /// moving.
+    ///
+    /// `chat-search-me9.8.39` is why it exists. `MarkedText` keyed its table on `name`, which was
+    /// sound while the only way a theme could change was by becoming a different direction — and a
+    /// watched theme file keeps its name across every save, because the name *is* the file's stem.
+    /// The obvious repair, keying on the tokens a mark reads, went stale one merge later: markdown
+    /// (`chat-search-me9.8.37`) set a face and two sizes over the same string, so the list grew,
+    /// and a list that has to be maintained by hand beside the code that reads it is a list that is
+    /// wrong the first time somebody forgets. Every authored value, digested once here, cannot go
+    /// stale that way.
+    ///
+    /// **Digested and not compared**, because the caller compares this thousands of times per
+    /// scroll where it is built once per theme. `resolved` is not in it: it is a function of the
+    /// two palettes, and hashing a cache of a thing beside the thing says nothing new.
+    ///
+    /// **A digest is not an identity**, and the difference is real if remote: two themes that are
+    /// not the same theme could land on one number, and what that costs is a drawer showing marks
+    /// in the previous theme's colours until it is reopened. Nothing that decides what is *drawn*
+    /// may read this — those all ask for the token they want.
+    public let fingerprint: Int
+
     public init(name: String, dark: Palette, light: Palette, type: TypeScale, geometry: Geometry) {
         self.name = name
         self.dark = dark
@@ -54,6 +76,18 @@ public struct Theme: Sendable {
             uniqueKeysWithValues: ColorToken.allCases.map {
                 ($0, Theme.dynamic(light: light[$0], dark: dark[$0]))
             })
+        // Over `allCases` rather than over the dictionaries inside, so the order is the order these
+        // are declared in and not whatever a hash table happened to hold.
+        var hasher = Hasher()
+        hasher.combine(name)
+        for token in ColorToken.allCases {
+            hasher.combine(dark[token])
+            hasher.combine(light[token])
+        }
+        for token in SizeToken.allCases { hasher.combine(type.size(token)) }
+        for token in FaceToken.allCases { hasher.combine(type.design(token)) }
+        for token in MetricToken.allCases { hasher.combine(geometry[token]) }
+        self.fingerprint = hasher.finalize()
     }
 
     /// The token, as a colour that already knows which appearance it is being drawn in.
@@ -363,7 +397,7 @@ public struct Geometry: Sendable {
 /// sRGB bytes, and a value that has been through a colour space is a value those measurements no
 /// longer describe. `palette.py` steps its solve until the *rounded* colour clears the target for
 /// the same reason.
-public struct RGB: Sendable, Equatable {
+public struct RGB: Sendable, Hashable {
     public let red: UInt8
     public let green: UInt8
     public let blue: UInt8

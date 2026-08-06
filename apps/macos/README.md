@@ -31,6 +31,7 @@ swift run -c release chat-search --theme paper
 swift run -c release chat-search --appearance light --theme-light paper --theme-dark terminal
 swift run -c release chat-search --theme-file ~/.config/chat-search/theme.css
 swift run -c release chat-search --write-theme
+swift run -c release chat-search --watch-theme
 ```
 
 `--size` opens the window at a stated size, `--group` opens the list already cut along an axis,
@@ -54,7 +55,9 @@ The theme flags are the ones that are *not* instruments. They choose among the s
 compiled into the binary and which side of one you are looking at, and they stick, which is why
 they are the only flags here that change anything about the next launch. `--theme-file` is the
 exception to the exception: it draws a token set that is not in the binary at all, and it sticks
-without being remembered, because the file is the memory. See [the theme seam](#the-theme-seam).
+without being remembered, because the file is the memory — which the app follows while it runs, so
+saving it repaints the window rather than waiting for the next launch. See [the theme
+seam](#the-theme-seam).
 
 ## What it is made of
 
@@ -756,13 +759,14 @@ gruvbox-derived` differs from `--shot --theme terminal` in colour and in nothing
 Everything above is compiled in. Dialling the look in was therefore edit `styles.css`, run
 `tokens.py`, `swift build`, relaunch — a loop, which is more than there was before the seam, but a
 compile per iteration on exactly the values somebody wants to nudge twenty times in an afternoon.
-A file makes it edit and relaunch:
+A file makes it edit and *see*: the file is read at launch and read again every time it changes,
+so the window under the editor repaints on save.
 
 ```bash
 chat-search --write-theme                       # ~/.config/chat-search/theme.css, from the
                                                 # direction this launch would have drawn
-$EDITOR ~/.config/chat-search/theme.css         # --fs-body: 12.5px → 13px
-chat-search                                     # it is drawn
+chat-search &                                   # leave it up
+$EDITOR ~/.config/chat-search/theme.css         # --fs-body: 13.5px → 14px, save, look
 chat-search --theme-file /tmp/candidate.css --verify-theme    # the readings, before loading it
 chat-search --no-theme-file                     # the shipped direction, file left where it is
 ```
@@ -801,31 +805,149 @@ theme: nightshift · user theme, from /tmp/nightshift.css.
 
 **Unreadable is not unfenced.** A file that will not parse, names a token this build has no name
 for, gives a colour in `rgb()` or a length in `pt`, or is simply missing something, is not a theme
-at all: the app draws the direction it would have drawn, starts normally, and says every reason it
-found rather than the first, each with the line it was on. `Palette`'s precondition treats an
-incomplete set as a programmer error — right for a generated file and fatal for a typed one — so
-the loader validates before it constructs.
+at all: at launch the app draws the direction it would have drawn, starts normally, and says every
+reason it found rather than the first, each with the line it was on. `Palette`'s precondition
+treats an incomplete set as a programmer error — right for a generated file and fatal for a typed
+one — so the loader validates before it constructs. Mid-session the same file does something else,
+and that is [below](#watched-which-is-what-makes-it-edit-and-see).
 
-**A scripted run reads no file unless a flag names one.** `--shot`, `--measure` and `--clipboard`
-draw what the script named them, and a frame that changed because of a file in somebody's home
-directory is a frame of that home directory. Same rule and the same reason as their refusing to
-write the four preference keys. `--theme-file PATH` *is* a script naming it, so that case loads.
+**A scripted run reads no file unless a flag names one, and does not follow one either.** `--shot`,
+`--measure` and `--clipboard` draw what the script named them, and a frame that changed because of
+a file in somebody's home directory is a frame of that home directory. Same rule and the same
+reason as their refusing to write the four preference keys. `--theme-file PATH` *is* a script
+naming it, so that case loads — and it is one question with one answer (`ThemeChoice.file`), so a
+run cannot end up drawing one file and watching another.
 
 **And it is not a fifth preference.** Nothing about it is remembered, because the file is the
 memory — it is there or it is not. The direction and the two side overrides keep resolving
-underneath it, so removing the file draws exactly what was on screen before it arrived.
+underneath it, so a launch with the file gone draws exactly what was on screen before it arrived.
 
-Two things this seam still does **not** do, each filed. Picking a direction used to be the third —
-the flags chose at launch and changing your mind while looking at the window did not — and [the
-settings window](#the-settings-window-at-cmd-comma) is what closed it.
+One thing this seam still does **not** do. Picking a direction used to be the second — the flags
+chose at launch and changing your mind while looking at the window did not — and [the settings
+window](#the-settings-window-at-cmd-comma) is what closed it; watching the file was the third, and
+it is below.
 
-- **Nothing watches the file.** Load is at launch, so it is edit and *relaunch*. Watching it is a
-  different set of problems — SwiftUI invalidation, partial writes, a half-saved file arriving as a
-  theme — and `chat-search-me9.8.10` deliberately did the first half.
 - **Padding is mostly still literal.** The row's rhythm is tokenised because a direction moves it
   and it trades against rows-per-screen. The search bar's, the banner's and the footer's are not —
   they are literal in `styles.css` too — so dialling those is still a view edit, file or no file.
   `chat-search-me9.8.11`.
+
+#### Watched, which is what makes it edit and see
+
+`chat-search-me9.8.10` shipped the load and named the second half as a different set of problems:
+"SwiftUI invalidation, partial writes, a half-saved file arriving as a theme". `chat-search-me9.8.39`
+is that half. Invalidation turned out to be free — `ThemeSettings` is `@Observable` and every view
+reads `\.theme` off the environment, so a reload is one assignment — and the other two are the
+whole of the work.
+
+**An editor does not save once, and does not save the same way twice.** In place is truncate the
+file and write it again: the inode is kept and there is a moment where the file is empty or half a
+palette. Atomically is write a temporary file and `rename` it over: no partial file is ever visible
+and the inode is *replaced*. That second one is what silently kills a watch registered on the file
+— the descriptor stays open on an unlinked inode nobody will ever write to again, so the theme
+reloads once and then never again — and it is vim's default on macOS, which makes "watch the file"
+a watch that works exactly one time.
+
+So both are watched. The **directory** hears entries appear, vanish and get renamed, which is every
+atomic save; the **file** hears writes to an inode already in place, which a directory event does
+not report. The file's descriptor is re-opened after every settled read.
+
+**Events are coalesced, and a file that has not moved is not a reload.** One save is several
+operations and each of them fires, and vim writes a backup, a swap file and a probe file into the
+same directory besides — so the reads are taken 150ms after the events stop, and a read that finds
+the same inode at the same length and mtime does nothing at all.
+
+**The quiet period is not where the safety is.** No interval is long enough for every editor and
+short enough to feel live. What makes a half-written file harmless is the rule below, and the timer
+only decides how often the file gets asked.
+
+**The last theme that loaded whole stays on screen until another one does** (`docs/DECISIONS.md`
+ADR 25, sub-decision). Unreadable, half-written, or deleted: what is drawn does not change, and the
+reasons are said. ADR 25 rule 4's fallback to the shipped direction is what to draw when there is
+nothing else to draw — always the case at launch, never the case mid-session — and doing it here
+would flick the window back to a palette nobody is working on and forward again on every save,
+which is worse than relaunching. It also cannot be avoided by reading more carefully: a file caught
+mid-write and a file with a typo in it are the same file at the moment they are read. The way back
+to a direction is `--no-theme-file` and a relaunch, which is also the way to see one beside what
+you are dialling.
+
+**And the launch line is not said again on every save.** The whole announcement is a thing to read
+once; on a reload the app has already said it, and the window repainting under the editor says the
+rest to somebody who is looking. So a reload says only what it did not say last time — a save that
+clears the fence says nothing, one that breaks something says what broke, and one that breaks it
+again says nothing. A file the launch never drew is the exception and gets the whole announcement,
+because nothing has been said about it yet; that is also what a file *written* while the app is up
+gets, which is the case that makes `chat-search --write-theme` in a second terminal do something.
+
+**One cache had to stop being keyed on the theme's name.** `MarkedText` (below) held the drawer's
+marked text against `Theme.name`, which was right while a theme could only change by being a
+different direction. A reloaded file keeps its name — the name *is* the file's stem — so a save
+that moved `--hit-bg` changed every mark on screen and changed nothing the table could see. It now
+keys on `Theme.fingerprint`, a digest of every authored value; the [reason it is not the list of
+tokens a mark reads](#the-marked-text-built-once-rather-than-once-a-frame) is that the list was
+tried and went stale in one merge.
+
+##### The check, which is a flag for the reason `--verify-theme` is
+
+```bash
+chat-search --watch-theme --db ~/.chat-archive/index.db --bin target/release/cs \
+  --out /tmp/app.png --size 1200x800
+```
+
+Eleven writes and a deletion, in the shapes editors make them, against a file and a directory of
+its own — under `$TMPDIR`, because a watch pointed at `/tmp` would hear every other process on the
+machine and a check that saved over `~/.config/chat-search/theme.css` would cost whoever ran it an
+afternoon. After each it prints what the app is drawing, the inode and length of the file, how many
+messages were re-marked, and what the reload said — which is the only rendering there is of "it
+said nothing". Three of the twelve states are photographed, because two of the claims are about
+colour and one is about the type scale, which is a relayout rather than a repaint.
+
+Six of those twelve, which are the ones that carry the argument. Pasted out of a run, with the two
+sentences too long for this file wrapped and nothing else touched:
+
+```
+  saved in place — truncated and written again, the same inode
+    drawing theme · user theme — --bg #2a1a3a, --ink-3 #7a8b8e, --hit-bg #4a3512, --fs-body 13.50pt
+    563 messages re-marked, inode 342054598, 2974 bytes
+    said nothing
+  saved atomically — a new file renamed over the old one, and the type scale moved
+    drawing theme · user theme — --bg #102030, --ink-3 #7a8b8e, --hit-bg #4a3512, --fs-body 16.00pt
+    563 messages re-marked, inode 342054636, 2971 bytes
+    said nothing
+  saved in two writes 10ms apart — half the file, then all of it
+    drawing theme · user theme — --bg #102030, --ink-3 #7a8b8e, --hit-bg #7a3d00, --fs-body 16.00pt
+    563 messages re-marked, inode 342054636, 2962 bytes
+    said nothing
+  caught between the two writes — half a file on disk
+    drawing theme · user theme — --bg #102030, --ink-3 #7a8b8e, --hit-bg #7a3d00, --fs-body 16.00pt
+    0 messages re-marked, inode 342054636, 1481 bytes
+    said: theme.css: line 46: expected `--token: value;` and found `--fs-hea`.
+    said: still drawing theme — the last file that loaded whole stays on screen until another
+          one does. `--no-theme-file` and a relaunch draw a direction.
+  a typo — `--ink3` for `--ink-3`, which is a name and a hole
+    drawing theme · user theme — --bg #102030, --ink-3 #7a8b8e, --hit-bg #14503c, --fs-body 16.00pt
+    0 messages re-marked, inode 342054636, 2951 bytes
+    said: theme.css: line 20: --ink3 is not a token this build carries. `--write-theme` writes
+          a complete file to start from.
+    said: theme.css: the dark side: no value in force for --ink-3. A theme is drawn entire or not
+          at all, so a file with a hole in it is not one (docs/DECISIONS.md ADR 25).
+  the same typo saved again
+    drawing theme · user theme — --bg #102030, --ink-3 #7a8b8e, --hit-bg #14503c, --fs-body 16.00pt
+    0 messages re-marked, inode 342054636, 2951 bytes
+    said nothing
+```
+
+**The inode moving on the atomic save is the whole reason it is quoted.** A run where that number
+never changes is a run that never exercised the case the directory watch exists for.
+
+**The re-marked count is [the drawer's table](#the-marked-text-built-once-rather-than-once-a-frame)
+answering**, and the two zeros are the interesting ones. A read that failed rebuilt nothing, because
+nothing was redrawn; the same file saved twice rebuilt nothing, because a digest of a theme's values
+does not move when the bytes are re-written unchanged. The 563s are every save that moved something,
+`--bg` included, and that is the stated cost of a key that cannot go stale.
+
+And the last two states are the announcement rule as output: the same broken file twice, and the
+second time it says nothing.
 
 ## The reader
 
@@ -973,11 +1095,31 @@ render time "because locating them means tokenizing the message … and a render
 frame" — so core paid once and the client reintroduced the cost a layer up (`chat-search-me9.8.29`).
 
 `MarkedText` keeps one entry per message, replaced rather than duplicated when its fold toggles,
-and thrown away whole when the conversation, the terms it was marked against, or the direction
-drawing it changes. It hangs off `ReaderModel` beside the folds rather than off the view, for the
-reason the folds are there. **Appearance is deliberately not part of the key**: every token is one
-dynamic `NSColor` that picks its own side where it is drawn, so a light/dark flip repaints these
-without rebuilding any of them, and only a change of *direction* has to.
+and thrown away whole when the conversation, the terms it was marked against, or the theme drawing
+it changes. It hangs off `ReaderModel` beside the folds rather than off the view, for the reason the
+folds are there. **Appearance is deliberately not part of the key**: every token is one dynamic
+`NSColor` that picks its own side where it is drawn, so a light/dark flip repaints these without
+rebuilding any of them.
+
+**The whole theme and not the name it goes by**, which is what this keyed on until
+`chat-search-me9.8.39`. A name was a sound key while the only way a theme could change was by
+becoming a different direction; a [watched file](#watched-which-is-what-makes-it-edit-and-see) keeps
+its name across every save, because the name *is* the file's stem — so a nudge to `--hit-bg` changed
+every mark on screen and changed nothing the table could see.
+
+The obvious repair was to key on the tokens a mark reads, and it is worth recording that it lasted
+one merge: `me9.8.39` wrote `--hit`, `--hit-bg` and `--ink`, and `me9.8.37` landed markdown over the
+same string, which bakes in a face, two sizes and `--ink-3`. **A key that has to be kept in step
+with `mark` by hand is a key that is wrong the first time somebody adds an attribute**, and the
+first time is invisible — a stale entry looks exactly like a correct one. So it is `Theme`'s
+`fingerprint`: a digest of every authored value in the theme, taken once where the theme is built
+rather than compared on a path that runs 7,603 times a pass.
+
+What that costs is stated rather than hidden: a save that moves a token no mark reads throws the
+table away anyway. It is 563 messages rebuilt, which is what opening the drawer already costs, once
+per save at the speed a person saves. Two things it keeps that a revision counter would not — the
+same file saved twice rebuilds nothing, and a read that fails rebuilds nothing — are the two `0`s
+in the [watch's pass](#the-check-which-is-a-flag-for-the-reason---verify-theme-is).
 
 **The clock cannot check this and two counters can**, which is why `--shot` prints them. `builds`
 is what was assembled, `reuses` is what was handed back already assembled, and their sum is the

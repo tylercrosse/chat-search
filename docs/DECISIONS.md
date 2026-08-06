@@ -991,6 +991,38 @@ of it:
    set as a programmer error, which is right for a generated file and fatal for a typed one, so
    the loader validates before it constructs.)
 
+**Sub-decision — the file is watched, and a bad read holds rather than falls back.**
+`chat-search-me9.8.39` made the file reload on save, which is what turns rule 4 from one rule into
+two cases. Rule 4 was written when the only read was at launch, and *at launch there is nothing
+else to draw*: the file is the first thing the app knows about a token set, so a file that is not a
+theme leaves the shipped direction as the only answer. Mid-session there is a third thing — the
+theme already on screen, which loaded whole and was measured — and **that is what stays**:
+
+> The last theme that loaded whole stays on screen until another one does. Unreadable,
+> half-written, or deleted, what is drawn does not change, and the reasons are said.
+
+Three reasons, in the order they decided it. **A save is not atomic in most editors**, so a watch
+reads files that are empty or half a palette — truncate-then-write leaves one for about a
+millisecond — and falling back would flick the whole window to a palette nobody is working on and
+back again on every save, which is worse than the relaunch it replaced. **The two cases cannot be
+told apart** at the moment they are read: a file caught mid-write and a file with a typo in it are
+both a file that is not a theme, so a rule that treats them differently is a rule about a
+distinction that does not exist at the read. And **a timing guarantee is not available** — events
+are coalesced after a quiet period, but no interval is long enough for every editor and short
+enough to feel live, so a rule that leaned on the timer would be a rule that fails on somebody
+else's editor rather than one that holds.
+
+What it costs is that deletion is no longer read live. "The file is the memory — it is there or it
+is not" still holds across launches, and mid-session the way back to a direction is
+`--no-theme-file` and a relaunch. That is the same act as looking at a direction beside what you
+are dialling, so it is a route that already existed rather than one this created.
+
+The announcement follows the same shape: the full launch line is said once per file, and a reload
+says only what it did not say last time — a save that clears the fence says nothing, one that
+breaks something says what broke, and one that breaks it again says nothing. Nagging is what rule 3
+already refuses on the same grounds: the only person who can be nagged here is the one who wrote
+the file.
+
 **Why the class cannot be a field on the theme.** The alternative was letting a theme declare
 itself unfenced. That fails the first time it is used: the themes that fail the fence are exactly
 the themes that would declare the exemption, and a fence that only measures what already passes is

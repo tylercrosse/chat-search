@@ -59,11 +59,27 @@ final class ThemeReload {
         self.settings = settings
         self.url = url
         self.say = say
-        // Seeded with the readings the launch already put on stderr, so that the first save says
-        // what it changed rather than repeating what is on screen. Measured again rather than
-        // carried through the resolved choice: `ThemeCheck.measure` decides nothing and touches no
-        // file, so taking it twice costs less than a field that has to be kept true.
-        said = settings.user.map { ThemeCheck.measure($0, as: .userTheme).failures } ?? []
+        said = Self.alreadySaid(settings, url)
+    }
+
+    /// What the launch already put on stderr about this file, so that the first save says what it
+    /// changed rather than repeating what is on screen.
+    ///
+    /// Both of the two things a launch can have said. For a file it drew, the readings — taken
+    /// again rather than carried through the resolved choice, because `ThemeCheck.measure` decides
+    /// nothing and touches no file, so measuring twice costs less than a field that has to be kept
+    /// true. For a file it could not, the reasons, which means opening a file that was opened a
+    /// moment ago: one read, and it is what makes a broken file saved broken again say nothing.
+    private static func alreadySaid(_ settings: ThemeSettings, _ url: URL) -> [String] {
+        if let user = settings.user { return ThemeCheck.measure(user, as: .userTheme).failures }
+        do {
+            _ = try ThemeFile.load(url)
+            return []
+        } catch let unreadable as ThemeFile.Unreadable {
+            return unreadable.sentences
+        } catch {
+            return []
+        }
     }
 
     /// Begin following the file. Nothing before this point differs from `chat-search-me9.8.10`.
@@ -109,7 +125,7 @@ final class ThemeReload {
         guard let user = settings.user else {
             // The launch never got a theme out of this file either, so what is on screen is the
             // direction it already said it was drawing.
-            tell("still drawing \(settings.layout.name).")
+            tell("still drawing \(settings.theme.name).")
             return
         }
         tell(

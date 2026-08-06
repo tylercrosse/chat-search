@@ -79,11 +79,22 @@ final class MarkedText {
     /// screen is dark, and the entry it built has to go. Three tokens and not the whole palette:
     /// what is cached is text with a ground, a foreground and an underline on it, and a table keyed
     /// on tokens no mark reads would throw itself away when a direction moved its window chrome.
+    ///
+    /// Six stored values rather than an array of them, because this is built on every call and the
+    /// calls are what `chat-search-me9.8.29` counted: 7,603 of them over one pass, and a key that
+    /// allocated would put a heap allocation back on the path that bead took one off.
     private struct Marking: Equatable {
-        let values: [RGB]
+        let hitLight: RGB, hitDark: RGB
+        let groundLight: RGB, groundDark: RGB
+        let inkLight: RGB, inkDark: RGB
 
         init(_ theme: Theme) {
-            values = [ColorToken.hit, .hitBg, .ink].flatMap { [theme.light[$0], theme.dark[$0]] }
+            hitLight = theme.light[.hit]
+            hitDark = theme.dark[.hit]
+            groundLight = theme.light[.hitBg]
+            groundDark = theme.dark[.hitBg]
+            inkLight = theme.light[.ink]
+            inkDark = theme.dark[.ink]
         }
     }
 

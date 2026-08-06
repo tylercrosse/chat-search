@@ -164,7 +164,8 @@ func parse(_ argv: [String]) -> Options {
                                        macOS is doing. Also remembered
                   --theme-file PATH    draw the token set in this file instead of a direction.
                                        Default \(ThemeFile.standardLocation.path)
-                                       when it is there. Measured on load and drawn either way
+                                       when it is there. Measured on load and drawn either way,
+                                       and read again on every save while the app is up
                   --no-theme-file      ignore that file for this run and draw a direction
                   --write-theme        write the theme this launch would draw to the theme
                                        file's path, as the file --theme-file reads, and exit
@@ -269,16 +270,17 @@ if options.verifyTheme {
     }
 }
 
-// `--watch-theme` saves a theme file nine ways and reports what the app drew after each, so the
-// file has to be there before the theme is resolved: this run has to *draw* it for there to be a
-// watch on it to check. Its own file under the temporary directory, for the reason `--verify-theme`
-// measures nothing outside the binary — a check that saved over `~/.config/chat-search/theme.css`
-// would cost whoever ran it an afternoon of nudging. `--theme-file` names somewhere else, and
-// `writeTheme` refuses either way when something is already there.
-// A directory of its own and not a file in the temporary directory, for two reasons: the watch
-// listens to the directory the file sits in, and pointed at `$TMPDIR` it would hear every other
-// process on the machine; and the file's stem is the theme's name, so `theme.css` in a directory
-// nobody else uses is a run whose output says `theme` rather than a pid.
+// `--watch-theme` reports what the app drew after each of eleven writes and a deletion, so its file
+// has to be there before the theme is resolved: this run has to *draw* the file for there to be a
+// watch on it to check.
+//
+// Its own file, for the reason `--verify-theme` measures nothing outside the binary — a check that
+// saved over `~/.config/chat-search/theme.css` would cost whoever ran it an afternoon of nudging —
+// and its own directory rather than a file in `$TMPDIR`, for two more: the watch listens to the
+// directory the file sits in, and pointed at the temporary directory it would hear every other
+// process on the machine; and a theme is named after its file's stem, so `theme.css` somewhere
+// nobody else writes is a run whose output says `theme` rather than a pid. `--theme-file` names
+// another path, and `writeTheme` refuses either way when something is already there.
 if options.watchTheme {
     let path =
         options.themeFile

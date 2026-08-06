@@ -70,6 +70,28 @@ enum ThemeChoice {
         }
     }
 
+    /// What a launch settled on, kept in its parts.
+    ///
+    /// The parts and not only the answer, because `Theme.composed` is one-way: once three
+    /// directions have become "terminal with paper's light" there is no taking that apart again,
+    /// and the settings window (`chat-search-me9.8.21`) has a control standing for three of these
+    /// four fields. `theme` is derived rather than stored, so what is drawn and what the controls
+    /// say cannot drift.
+    struct Choice {
+        /// The direction whose *light* colours the light side wears.
+        var light: Theme
+        /// The direction whose *dark* colours the dark side wears.
+        var dark: Theme
+        /// The direction the type scale and the geometry come from, for both sides. Colour is the
+        /// only thing that travels with a side (`chat-search-me9.8.22`), so this is a fourth
+        /// setting rather than an aspect of the other two, and it belongs to `--theme`.
+        var layout: Theme
+        /// Which side is drawn, whatever macOS is doing.
+        var appearance: Appearance
+
+        var theme: Theme { .composed(light: light, dark: dark, layout: layout) }
+    }
+
     /// The theme to draw, the appearance to draw it in, and the complaints that go with both.
     ///
     /// Order for each setting: what was asked for on the command line, then what was chosen last
@@ -85,7 +107,7 @@ enum ThemeChoice {
         _ asked: Request,
         remember: Bool,
         say: (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
-    ) -> (theme: Theme, appearance: Appearance) {
+    ) -> Choice {
         let store = UserDefaults.standard
         // Read before anything is written, because writing is one of the things that changes it: a
         // `theme` with nothing beside it is a preference written by a build that had one axis.
@@ -177,7 +199,47 @@ enum ThemeChoice {
                     + "this reading so this line stops.")
         }
 
-        return (.composed(light: light, dark: dark, layout: direction), appearance)
+        return Choice(light: light, dark: dark, layout: direction, appearance: appearance)
+    }
+
+    // MARK: - Writing the same four keys from somewhere that is not a flag
+
+    /// Two side menus naming one direction, or nil when they disagree.
+    ///
+    /// The settings window has three controls and there are four settings, so something has to say
+    /// what the two side menus mean for the fourth. They mean `--theme NAME`: both menus on one
+    /// direction is that direction *whole*, which is the only way the window reaches a direction's
+    /// type scale and geometry at all. The alternative — side keys always, layout never — is a
+    /// window where choosing `paper` twice draws paper's colours in `terminal`'s metrics while
+    /// `--theme paper` draws the serif face, so the same choice said two ways gives two results.
+    ///
+    /// Menus that disagree are `--theme-light` and `--theme-dark`: colour per side, and the layout
+    /// direction stays exactly as it was, because nothing on screen asked to change it.
+    static func whole(_ light: Theme, _ dark: Theme) -> Theme? {
+        light.name == dark.name ? light : nil
+    }
+
+    /// Write down which direction each side's colours come from, in the keys the flags write.
+    ///
+    /// No sentence on stderr, where every write above has one. The flags talk because a flag can
+    /// silently do nothing and the failure looks exactly like success; a menu that redraws the app
+    /// under the window has already said it, to somebody who is looking.
+    static func remember(light: Theme, dark: Theme, store: UserDefaults = .standard) {
+        if let whole = whole(light, dark) {
+            store.set(whole.name, forKey: directionKey)
+            // Cleared for the reason `--theme` clears them: "this direction on both sides" and a
+            // leftover side override are two answers to one question.
+            store.removeObject(forKey: lightKey)
+            store.removeObject(forKey: darkKey)
+        } else {
+            store.set(light.name, forKey: lightKey)
+            store.set(dark.name, forKey: darkKey)
+        }
+    }
+
+    /// The same for which side is drawn.
+    static func remember(appearance: Appearance, store: UserDefaults = .standard) {
+        store.set(appearance.rawValue, forKey: appearanceKey)
     }
 
     /// A direction this build carries, or nil having said which ones it does.

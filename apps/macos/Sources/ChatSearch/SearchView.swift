@@ -37,7 +37,7 @@ struct SearchView: View {
         // not handle Return, which is exactly the case where a click has moved focus into the
         // list. When the field has it — the ordinary state — `onSubmit` gets there first and
         // consumes it, so the two are mutually exclusive rather than both firing.
-        .onKeyPress(.return) { model.openSelected(); return .handled }
+        .onKeyPress(.return) { model.activate(); return .handled }
     }
 
     /// `Divider()` draws a system separator, which is a colour this app did not choose. One point
@@ -56,7 +56,7 @@ struct SearchView: View {
         Binding(
             get: { model.reader.conv?.id },
             set: { id in
-                model.selected = id
+                model.cursor = id.map(Cursor.row)
                 model.reader.open(
                     model.conversations.first { $0.id == id }, query: model.query)
             })
@@ -156,7 +156,11 @@ struct SearchView: View {
                 // consumes Return itself and `onSubmit` is the seam it consumes it into. The
                 // arrows have no such seam and no default this app wants, so they are read
                 // directly.
-                .onSubmit { model.openSelected() }
+                // `activate` rather than `openSelected`, because the cursor can now be on a group
+                // head as well as on a row, and Enter means "act on the line the cursor is on"
+                // either way. The arrows have to walk heads for a fold to be reachable at all —
+                // fold everything and there is no row left to stand on.
+                .onSubmit { model.activate() }
                 .onKeyPress(.upArrow) { model.moveSelection(by: -1); return .handled }
                 .onKeyPress(.downArrow) { model.moveSelection(by: 1); return .handled }
         }
@@ -326,11 +330,37 @@ struct SearchView: View {
                 } else {
                     ForEach(model.groups) { group in
                         Section {
-                            ForEach(group.items) { row($0) }
+                            // A folded group draws its head and no rows, which is also exactly
+                            // what `SearchModel.lines` says about it — one fold state, read in
+                            // both places rather than two that can disagree.
+                            if !model.isFolded(group.key) {
+                                ForEach(group.items) { row($0) }
+                            }
                         } header: {
-                            GroupHeader(group: group, axis: model.grouping)
-                                .listRowInsets(EdgeInsets())
-                                .listRowSeparator(.hidden)
+                            // The whole head is the control and it is a `Button`, which is what
+                            // `poc/ui`'s `.pj-head` is too: a glyph at the micro size is a target
+                            // nobody hits twice, and a tap gesture on a section header is a hit
+                            // test this app would then own. The cursor moves here before the fold,
+                            // so a click and an arrow key are never two cursors — which is also
+                            // what leaves `toggleFold` no row to rescue on this path.
+                            Button {
+                                model.cursor = .head(group.key)
+                                model.toggleFold(group.key)
+                                // As on the axis chips: a click anywhere but the field is a click
+                                // that took focus off it, and this app is one box that never gives
+                                // it up.
+                                focused = true
+                            } label: {
+                                GroupHeader(
+                                    group: group, axis: model.grouping,
+                                    folded: model.isFolded(group.key),
+                                    cursored: model.cursor == .head(group.key))
+                            }
+                            // `.plain`, because a stock button paints itself in the system accent
+                            // — a colour chosen somewhere this app cannot see.
+                            .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
                         }
                     }
                 }

@@ -46,6 +46,12 @@ struct Options {
     /// list rebuilds sections on every keystroke where an ungrouped one rebuilds rows, and
     /// `--measure` cannot take that number on a mode it has no way to enter.
     var group = Grouping.none
+    /// Whether the list opens with every group folded. The same kind of affordance as `--group`,
+    /// and needed for the same reason: a folded list draws heads where an open one draws heads and
+    /// rows, so it is a different render and a different picture, and neither `--measure` nor
+    /// `--shot` can reach it by typing. Not a preference — it is not remembered, and the fold a
+    /// person performs by hand is the one that counts.
+    var folded = false
 
     /// Nobody is typing into this run. Both scripted modes stay out of the front, so they can be
     /// run beside whatever a person is actually doing — and out of the query log, because their
@@ -74,6 +80,7 @@ func parse(_ argv: [String]) -> Options {
         // one, for the reason `--size` ignores a malformed value: an instrument that quietly
         // changes what it is measuring is worse than one that ignores you.
         case "--group": if let v = next(), let axis = Grouping(rawValue: v) { o.group = axis }
+        case "--folded": o.folded = true
         case "--verify-theme": o.verifyTheme = true
         // Kept as typed rather than resolved here: a name this build does not carry gets a
         // sentence on stderr from `ThemeChoice`, which is also where the remembered one is read,
@@ -99,6 +106,7 @@ func parse(_ argv: [String]) -> Options {
                   --longest            --shot opens the longest conversation, not the best
                   --size WxH           open the window at this size (default 900x620)
                   --group AXIS         open grouped by none|project|run|source (default none)
+                  --folded             open with every group folded (needs --group)
                 """)
             exit(0)
         default: break
@@ -161,6 +169,11 @@ final class AppHost: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ note: Notification) {
         model.group(by: options.group)
+        // After the axis, because folding is a property of the groups that axis produced. It moves
+        // the default rather than folding what is on screen now, so a group that arrives on a later
+        // keystroke is folded too — otherwise a scripted run would measure a list that unfolded
+        // itself as it typed.
+        if options.folded { model.foldAll(true) }
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: options.size),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],

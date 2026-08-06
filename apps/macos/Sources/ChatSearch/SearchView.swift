@@ -332,26 +332,30 @@ struct SearchView: View {
                                 ForEach(group.items) { row($0) }
                             }
                         } header: {
-                            GroupHeader(
-                                group: group, axis: model.grouping,
-                                folded: model.isFolded(group.key),
-                                cursored: model.cursor == .head(group.key)
-                            )
-                            .listRowInsets(EdgeInsets())
-                            .listRowSeparator(.hidden)
-                            // The whole head is the control, as it is in the prototype's
-                            // `.pj-head`, rather than the twisty alone: a glyph at the micro size
-                            // is a target nobody hits twice. The cursor moves here before the
-                            // fold, so a click and an arrow key are never two cursors — and so
-                            // `toggleFold` has no row to rescue.
-                            .onTapGesture {
+                            // The whole head is the control and it is a `Button`, which is what
+                            // `poc/ui`'s `.pj-head` is too: a glyph at the micro size is a target
+                            // nobody hits twice, and a tap gesture on a section header is a hit
+                            // test this app would then own. The cursor moves here before the fold,
+                            // so a click and an arrow key are never two cursors — which is also
+                            // what leaves `toggleFold` no row to rescue on this path.
+                            Button {
                                 model.cursor = .head(group.key)
                                 model.toggleFold(group.key)
                                 // As on the axis chips: a click anywhere but the field is a click
-                                // that took focus off it, and this app is one box that never
-                                // gives it up.
+                                // that took focus off it, and this app is one box that never gives
+                                // it up.
                                 focused = true
+                            } label: {
+                                GroupHeader(
+                                    group: group, axis: model.grouping,
+                                    folded: model.isFolded(group.key),
+                                    cursored: model.cursor == .head(group.key))
                             }
+                            // `.plain`, because a stock button paints itself in the system accent
+                            // — a colour chosen somewhere this app cannot see.
+                            .buttonStyle(.plain)
+                            .listRowInsets(EdgeInsets())
+                            .listRowSeparator(.hidden)
                         }
                     }
                 }

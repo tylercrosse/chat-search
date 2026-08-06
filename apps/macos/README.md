@@ -19,15 +19,19 @@ Flags, most of which exist so this can be exercised without touching real data:
 swift run -c release chat-search --db /tmp/scratch.db --config /tmp/scratch-config.toml
 swift run -c release chat-search --bin /path/to/cs --limit 30
 swift run -c release chat-search --size 720x480
-swift run -c release chat-search --group project
+swift run -c release chat-search --group project --folded
 swift run -c release chat-search --theme paper
 ```
 
-`--size` opens the window at a stated size and `--group` opens the list already cut along an axis.
-Both are verification affordances rather than preferences — the row has to hold at several widths,
-and a grouped list rebuilds sections where an ungrouped one rebuilds rows, so `--measure` needs a
-way into that mode. A window that always opens at one size, or always ungrouped, makes checking
-either of those a manual drag nobody repeats.
+`--size` opens the window at a stated size, `--group` opens the list already cut along an axis, and
+`--folded` opens every group of it shut. All three are verification affordances rather than
+preferences — the row has to hold at several widths, a grouped list rebuilds sections where an
+ungrouped one rebuilds rows, and a folded one draws heads where an open one draws heads and rows,
+so `--measure` needs a way into each of those modes. A window that always opens at one size, always
+ungrouped, or always open, makes checking any of them a manual drag nobody repeats. `--folded`
+moves the *default* rather than folding what is on screen at the time, so a group arriving on a
+later keystroke is folded too: an instrument that measured a list unfolding itself as it typed
+would not be measuring anything.
 
 `--theme` is the one that is *not* an instrument. It picks one of the four directions compiled into
 the binary and it sticks, which is why it is the only flag here that changes anything about the
@@ -477,14 +481,39 @@ a readable column has no number in it. `cacheDisplay(in:to:)` renders the view h
 bitmap with no window server and no screen-recording grant, so it runs from a script and on a
 machine nobody is sitting at.
 
-It writes eight frames. The first is the drawer as it opens; the next two are the minimap's
+It writes eleven frames. The first is the drawer as it opens; the next two are the minimap's
 relationship checks — the drawer is driven half a document, then the map is dragged to 75% — and
 the fourth is after typing on with the conversation still open, which is the state a list-driven
-selection closes without being asked to. The last four are one per grouping axis and Library. Each
-relationship frame prints where the transcript ended up and where the box went; on the corpus's
-longest conversation that is messages 0–8 at rest, 300–330 after the fling and 1810–1818 after the
-drag, run to run. The grouped frames print group and residue counts beside them, which caught a
-group head clipping `39` to `3` and a residue head eliding `no working directory` to `n…y`.
+selection closes without being asked to. The last seven are two per grouping axis, open and folded,
+plus Library. Each relationship frame prints where the transcript ended up and where the box went;
+on the corpus's longest conversation that is messages 0–8 at rest, 300–330 after the fling and
+1810–1818 after the drag, run to run. The grouped frames print group and residue counts beside them,
+which caught a group head clipping `39` to `3` and a residue head eliding `no working directory` to
+`n…y`.
+
+**The fold's other half has no picture, so the same pass drives it.** `chat-search-me9.8.15` is two
+claims — a group folds, and a folded group cannot hold the cursor — and only the first shows up in
+a PNG. So for each axis the pass puts the cursor on a row, shuts the group around it, then walks
+every line from the top by the key an arrow sends and counts the rows it reached that nobody can
+see. It switches axis and back too, because clearing the accordion on a switch is the third thing
+that bead promised. On `borrow checker`, 58 rows:
+
+```
+fold, by project: 1 of 12 shut, 31 lines the cursor can reach
+  folding under the cursor moved it to the head: true
+  rows reached inside a folded group: 0 of 39 hidden
+  after switching axis and back: 0 folded
+```
+
+with `run` at 51 lines over 17 hidden and `source` at 4 lines over 56. It is a printed pass rather
+than a test for the reason [`--verify-theme` is a flag](#why---verify-theme-and-not-a-test): the
+Command Line Tools SDK carries neither `Testing` nor `XCTest`.
+
+**What this cannot drive is the pointer.** The pass calls the fold where a click would, so what it
+checks is everything downstream of the gesture and not the gesture itself — the mirror of the
+minimap pass, whose keyboard half has no pointer to drive it and says so. That is why the head is a
+`Button` rather than a tap gesture on a section header: a hit test nobody can script is one to leave
+to the framework.
 
 **`--longest` opens the biggest conversation the query returned rather than the best one.** The
 map's hard case is length, no query puts the corpus's 2,431-message conversation first, and a
@@ -608,15 +637,16 @@ wire, and every label in the app would then carry the year suffix that compariso
 suppress. Inheriting a calendar is how a client ends up deciding a calendar question for itself,
 which is the shape of the bug this paragraph is about.
 
-The group head is `poc/ui`'s `.pj-head` minus two cells. **No twisty**, because these do not fold
-(below). **No source badges**: the prototype puts a strip of tiny source icons on every header, and
-with no asset catalog and no SF Symbol for a vendor the honest version here would be colour alone,
-which `poc/ui/NOTES.md` §7 rules out — the source is in every row underneath anyway. What is left
-is the name, a `cross-tool` tag where a run used more than one, the count, the day span and a
-12-bar sparkline of when. The reader pane leaves that column ~400pt at the window's floor, so the
-cells give way in a stated order: the count never loses a digit, the name elides in the middle
-where a path survives it, and **the day span leaves whole rather than eliding**, because `Oct 8 ’2…`
-is a worse cell than an empty one.
+The group head is `poc/ui`'s `.pj-head` minus one cell. **No source badges**: the prototype puts a
+strip of tiny source icons on every header, and with no asset catalog and no SF Symbol for a vendor
+the honest version here would be colour alone, which `poc/ui/NOTES.md` §7 rules out — the source is
+in every row underneath anyway. What is left is the twisty, the name, a `cross-tool` tag where a run
+used more than one, the count, the day span and a 12-bar sparkline of when. The reader pane leaves
+that column ~400pt at the window's floor, so the cells give way in a stated order: the twisty and
+the count never move — the twisty holds a fixed cell so the name starts at the same x folded and
+open, and a count that lost a digit would be a wrong number rather than an elided one — the name
+elides in the middle where a path survives it, and **the day span leaves whole rather than
+eliding**, because `Oct 8 ’2…` is a worse cell than an empty one.
 
 **Counts are over the rows in hand.** The prototype prints corpus-true counts on a project row
 (`114 · 30 here`) because it groups an export of the whole index; nothing on this wire carries the
@@ -624,14 +654,70 @@ size of a `cwd` or a run, so the key line above the list states the set — `12 
 hand` — rather than a header implying a number the client does not have. The residue count sits
 beside it in `--hit`, with the sentence that explains it on hover.
 
-Four things this does not do:
+**A grouped list does not ask `cs` for more rows than an ungrouped one**, and the fold is why it
+does not have to. The other way to make grouping worth more is a bigger window — raise `--limit`,
+or have the grouped path quietly ask for a few hundred rows and show the top of each group — and
+both spend the answer's latency on rows nobody asked to see. A larger window would also need a
+count on the wire to stay honest, since `12 groups · 58 rows in hand` would become `12 groups · 500
+rows in hand` and say less rather than more. Folding buys the same headroom out of rows already
+paid for. The corpus-true count is a question of its own: `chat-search-me9.8.23`.
 
-- **The sections do not fold.** The prototype folds every axis and opens nothing, which is right at
-  corpus scale — thirteen headers carrying count, span and sparkline are a project index, and one
-  open group buries the other twelve. This groups the `--limit` window of a ranked answer, so a
-  fold would hide the answer behind its own headers; and the prototype's own note says the fold
-  left it leaning on a keyboard affordance it never wired. Both land together or neither does:
-  `chat-search-me9.8.15`.
+### The fold, and the keyboard that had to come with it
+
+A group folds — click its head, or press <kbd>⏎</kbd> with the cursor on it — and **the list opens
+with every group open**. That default is a statement about this window rather than about grouping.
+`poc/ui` opens every axis folded and is right to: it groups a corpus-scale export, where thirteen
+heads carrying a count, a span and a sparkline are a project index and one open group buries the
+other twelve. This groups the `--limit` window of a ranked answer, 60 rows, so folding by default
+would hide the answer behind its own heads on every keystroke. **The trade flips when that window
+grows** — either because `--limit` is raised or because grouping learns to ask for more rows than
+the list shows — which is why the default is one boolean on the model and not an assumption spread
+through the view. `--folded` already flips it.
+
+`chat-search-me9.8.4` shipped the sections without a fold *and named the reason it could not ship
+one alone*: the prototype's own note says the fold left it leaning on a keyboard affordance nobody
+had wired — "the footer offers <kbd>→</kbd> to expand and no key is bound" (`poc/ui/NOTES.md` §5).
+So the two land together. The cursor moves through `SearchModel.lines`, which is **every line the
+list draws, in the order it draws them**: a head per group and, under each open one, its rows.
+A folded group contributes its head and nothing else, and that is the only place in the class where
+the fold is honoured — there is no second piece of arithmetic that has to remember what is on the
+screen, so a cursor inside a shut section is not a bug that was fixed but a state that cannot be
+constructed. The one gesture that could strand it — clicking a head with the cursor already inside
+that group — moves it to the head, which is both the line still on screen and the line that opens
+the group again.
+
+**A head is a place the cursor can rest, because it has to be.** Fold everything and there is no
+row left to stand on; the key that opens one back up has to be pressed somewhere. So Enter means
+"act on the line the cursor is on": a conversation opens, a group head folds.
+
+**And it is Enter rather than the prototype's <kbd>→</kbd>**, which is not a shortage of keys. The
+only focused view in this window is the query box — that is the TUI's arrangement and the whole
+reason arrows move a cursor in the list beside it — so a key this app binds is a key the box stops
+getting. Left and right are how a caret moves through a query that is a *grammar*: `agent:codex`,
+`after:2026-01`, a quoted `dir:` with a space in it (`chat-search-me9.8.16`). Taking them for the
+accordion would buy a fold by breaking the editing of the thing being folded. Enter already belongs
+to the list rather than to the field, so the fold costs nothing that was in use.
+
+The footer says what Enter would do whenever the cursor is on a head, and how many groups are shut
+(`12 groups by project · 12 folded`). That is the same defect `poc/ui/NOTES.md` §5 complains about,
+approached from the other side: a footer that draws a key nobody wired and a fold no footer
+mentions are the same mistake. What the head itself does *not* change when it folds is anything it
+says — the count, the day span and the sparkline are drawn shut exactly as they are open, because a
+folded group and a group that is not there have to look different.
+
+**Switching axes clears the accordion** rather than restoring it, which is the prototype's rule and
+its reasoning: groups are *ranked*, so the set you left open is rarely the set at the top when you
+come back. Clicking the axis already in force is inert, so the reset is a consequence of switching
+and never a surprise. Nothing else clears it — a keystroke that narrows the list until a group is
+empty and a keystroke that brings it back leave the fold alone, because a list rearranging under a
+cursor that never asked it to is worse than a stale fold.
+
+The cost of folding, stated: on `borrow checker` the `source` axis has two groups, so shut it is
+two heads and a lot of empty column. That is honest about the axis rather than a fault of the fold,
+and `--shot` now captures every axis shut as well as open so it is a thing you look at.
+
+Three things this does not do:
+
 - **A group head does not offer to narrow to itself.** The prototype's does, by writing `dir:` into
   its query state. Here the text a click produces is `cs facets`'s to compose — a client
   assembling tokens itself is the second, partial parser docs/TUI-DESIGN.md §5 costs out — and
@@ -784,6 +870,25 @@ inside the machine's own noise, and both runs are slower than the table above be
 higher. What is not noise is that main-thread lag stayed at p50 0.6 ms with 0–2 missed vsyncs in
 both — so whatever regathering 60 rows and rebuilding a dozen sections costs on every keystroke, it
 is not dropped frames.
+
+**A folded list is cheaper, and not by enough to be a reason.** The same pair again with
+`chat-search-me9.8.15`'s fold in, back to back at load 6.0 and 5.4 — `--group project`, then
+`--group project --folded`, which draws twelve heads and no rows at all:
+
+| phrase | p50 by project | p50 by project, folded |
+| --- | ---: | ---: |
+| `borrow checker` | 173.3 | 164.4 |
+| `ratatui preview` | 99.9 | 80.4 |
+| `sqlite fts5` | 148.5 | 135.9 |
+| `launchd` | 84.7 | 66.9 |
+
+All four go down, which is the direction to expect when a keystroke lays out twelve heads instead
+of twelve heads and sixty rows — and every gap is smaller than the spread the two runs above showed
+against each other, so one pair going the same way four times is a hint rather than a finding. It
+is recorded because the *absence* of a cost matters more than the size of a saving: main-thread lag
+was p50 0.6 ms with 0 missed vsyncs in all eight runs, so folding is not something the list has to
+be protected from, and the default being open is a judgement about reading rather than about
+frames.
 
 ## Known
 

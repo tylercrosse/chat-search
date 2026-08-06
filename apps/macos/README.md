@@ -1285,11 +1285,19 @@ the size column left on every Takeout row that scrolled past. `forks` sits betwe
 the age for the mirror-image reason: `age` is anchored to the trailing edge either way, and the
 directory is the cell built to stretch, so it is the one that lends the mark its three characters.
 
+**And they cost the directory, at a width narrow enough.** `scripts/shot.sh` at its documented
+1200×800, reader open: the path fell from `~/dev/projects/chat-search` to `~…ch`. At 1500pt nothing
+moves. So the fixed cells now add up to more than a narrow list has, and `cwd` — the only flexible
+one — absorbs the whole overrun, which at four characters has discarded the leaf as surely as the
+tail-elision `docs/TUI-DESIGN.md` §2 forbids. `chat-search-wa8` is the bead. The answer there is a
+cell that yields rather than a narrower model column: 14 characters would cost a fifth of the rows
+their whole label to buy the path two.
+
 **The agent badge is the word, not an icon, and that is a re-measure rather than a disagreement.**
 The mockup dropped the word because its list column was a fixed 706px and the word cost the 66px
-`cwd` needed to stop collapsing. This row does not spend that: with no ribbon it costs about 130pt
-less, so at the window's 720pt floor `cwd` still gets ~360pt against the mockup's 17-character
-budget. It is also the only channel there is — no asset catalog means no per-source
+`cwd` needed to stop collapsing. This row still does not spend that — the ribbon is the 200px it
+has not spent — but it is no longer the comfortable margin it was before the two cells above
+landed. It is also the only channel there is — no asset catalog means no per-source
 icon, and SF Symbols has no glyph for a vendor — so the row carries colour and text where the
 mockup carried shape and colour. Text is the channel that survives greyscale.
 

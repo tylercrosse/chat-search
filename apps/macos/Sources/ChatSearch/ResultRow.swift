@@ -12,10 +12,13 @@ import SwiftUI
 /// so the two trades that column forced were re-measured rather than inherited.
 ///
 /// **The agent badge is the word, not an icon.** The mockup dropped the word to buy `cwd` back the
-/// 66px it needed at 706. This row does not spend that: with no ribbon it costs about 130pt less
-/// than the mockup's, so at the window's 720pt floor there is ~360pt left for the directory and
-/// the gutter between the clusters, against a mockup that could afford the path 17 characters.
-/// Even once the ribbon lands the directory keeps ~24 of its 44. The word is also the
+/// 66px it needed at 706. This row does not spend that, and with no ribbon it is still cheaper
+/// than the mockup's — but since `model` and `forks` landed it is no longer cheap, and the
+/// directory is what pays. Measured on the live index with the reader open: at a 1500pt window
+/// the path is untouched, at 1200pt it falls from 26 characters to 4. That is the width at which
+/// the fixed cells exceed the list, and `chat-search-wa8` is the bead for it — the answer is
+/// a cell that yields, not a narrower model column, since 16 characters is where the corpus's own
+/// distribution turns. The word is also the
 /// only channel left, since a package with no asset catalog has no
 /// per-source icon and SF Symbols has no glyph for a vendor; `poc/ui/NOTES.md` §7 asks for three
 /// redundant channels and this row has two, colour and text, rather than the mockup's shape and

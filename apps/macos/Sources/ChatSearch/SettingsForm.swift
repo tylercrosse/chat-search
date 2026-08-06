@@ -51,13 +51,13 @@ struct SettingsForm: View {
             Picker("Light theme", selection: side(\.light, choose: settings.choose(light:))) {
                 directions
             }
+            .disabled(settings.user != nil)
             Picker("Dark theme", selection: side(\.dark, choose: settings.choose(dark:))) {
                 directions
             }
+            .disabled(settings.user != nil)
 
-            caption(
-                "Colour only — the type scale and the spacing come from \(settings.layout.name), "
-                    + "on both sides.")
+            caption(sides)
         }
         .formStyle(.grouped)
         .frame(width: 420)
@@ -76,6 +76,25 @@ struct SettingsForm: View {
         ForEach(Theme.directions, id: \.name) { direction in
             Text("\(direction.name) · \(ThemeClass.direction.label)").tag(direction.name)
         }
+    }
+
+    /// What the two menus under it amount to, which is not the same sentence while a token set off
+    /// disk is in force.
+    ///
+    /// Disabled rather than absent, and disabled rather than listing the user theme as a seventh
+    /// entry: a user theme is drawn whole or not at all (ADR 25 rule 3), so it is not a thing a
+    /// *side* can be, and a menu that offered it per side would offer the merge the rule forbids.
+    /// What is left is a pair of menus that are still choosing something real — what comes back
+    /// when the file is gone — and a caption that says so, which is the state this window would
+    /// otherwise be lying about.
+    private var sides: String {
+        guard let user = settings.user else {
+            return "Colour only — the type scale and the spacing come from \(settings.layout.name), "
+                + "on both sides."
+        }
+        return "\(user.name) · \(ThemeClass.userTheme.label) is what is on screen, read from "
+            + "\(settings.userFile?.path ?? "a file"). These two choose what comes back when that "
+            + "file is gone."
     }
 
     /// What is on screen right now, which is not always what was asked for.

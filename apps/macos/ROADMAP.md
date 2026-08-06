@@ -19,7 +19,7 @@ measured. This is the map above it.
 
 ## Built
 
-Seventeen beads closed between 2026-07-29 and 2026-08-06, in four groups. They are groups rather
+Eighteen beads closed between 2026-07-29 and 2026-08-06, in four groups. They are groups rather
 than sprints: the epic's one hard ordering rule is that **the shell lands before anything fans
 out**, because "five agents told to build the app produce five incompatible skeletons — window,
 client state, transport and error handling all invented independently."
@@ -38,9 +38,10 @@ fold plus the keyboard that had to come with it (`me9.8.15`).
 then several directions in one binary (`me9.8.9`), the decision about whether a named theme may
 fail the fenced measurements (`me9.8.12`), Gruvbox and Solarized ported on those terms
 (`me9.8.17`), appearance and direction split into two axes (`me9.8.22`), and a settings window
-(`me9.8.21`). The seam holds: switching is one `.environment(\.theme, theme)` at the root, and
-six directions come out of one binary with nothing under `Sources/ChatSearch` differing between
-them.
+(`me9.8.21`), and a token set read off a file at launch (`me9.8.10`). The seam holds: switching
+is one `.environment(\.theme, theme)` at the root, six directions come out of one binary with
+nothing under `Sources/ChatSearch` differing between them, and the seventh does not have to be in
+the binary at all.
 
 **4 · The instruments.** The minimap and its scroll relationship (`me9.8.18`), the bottom drawer's
 timeline and scrubber (`me9.8.20`), the main menu (`me9.8.24`), and a `dir:` parsing bug
@@ -60,7 +61,6 @@ graph TD
     G28["me9.8.28<br/>Liquid Glass?"]
     G27["me9.8.27<br/>macOS 15 floor"]
     G29["me9.8.29<br/>per-frame AttributedString"]
-    G10["me9.8.10<br/>runtime tokens"]
     G41["me9.41<br/>Density → Band"]
   end
 
@@ -95,7 +95,7 @@ graph TD
   G28 --> G30 --> G31 --> G32
   G31 --> G33
   G27 --> G33
-  G10 --> G34 --> G35 --> G42 --> G43
+  G34 --> G35 --> G42 --> G43
   G33 --> G43
   G29 --> G36
   G41 --> G36
@@ -149,7 +149,7 @@ files two or more open beads want:
 | `ReaderView.swift`, `BlockRow` | `me9.8.29`, `me9.8.36`, `me9.8.37` |
 | `Rail.swift` | `me9.8.35`, `me9.42`, `me9.43` |
 | `cs-core/src/blocks.rs` | `me9.41`, `me9.45`, `qyn` |
-| `poc/ui/tokens.py`, `Tokens.swift` | `me9.8.10`, `me9.8.34` |
+| `poc/ui/tokens.py`, `Tokens.swift` | `me9.8.34` |
 
 ### Waiting on other epics
 

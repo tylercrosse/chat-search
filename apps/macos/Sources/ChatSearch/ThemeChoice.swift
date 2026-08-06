@@ -22,6 +22,13 @@ import Foundation
 /// appearance flip happens at sunset with nobody watching, so it may change what the window looks
 /// like and may not change where the words are.
 ///
+/// ## And a fifth thing, which is not a setting
+///
+/// A token set read off a file (`chat-search-me9.8.10`) is not remembered anywhere, because the
+/// file *is* the memory: it is there or it is not. When it is, it supersedes the three settings
+/// above rather than joining them — whole or not at all, ADR 25 — and they keep resolving
+/// underneath so that deleting the file draws exactly what was on screen before it arrived.
+///
 /// ## Why a flag is the affordance
 ///
 /// This app has no bundle, no Dock icon and no menu bar: it is launched by
@@ -65,6 +72,16 @@ enum ThemeChoice {
         var dark: String?
         var appearance: String?
 
+        /// Where to look for a token set off disk. Always a path — the standard location when no
+        /// flag named one — because "there is no file there" is a thing this has to be able to say.
+        var file: URL = ThemeFile.standardLocation
+        /// Whether `--theme-file` named it. The difference decides whether an absent file is worth
+        /// a sentence: at the standard location it is this app's ordinary state, and named on a
+        /// command line it is a flag that did nothing.
+        var fileNamed = false
+        /// `--no-theme-file`, and the run that is about to write one. Both want the directions.
+        var ignoreFile = false
+
         var isEmpty: Bool {
             direction == nil && light == nil && dark == nil && appearance == nil
         }
@@ -86,10 +103,26 @@ enum ThemeChoice {
         /// only thing that travels with a side (`chat-search-me9.8.22`), so this is a fourth
         /// setting rather than an aspect of the other two, and it belongs to `--theme`.
         var layout: Theme
+        /// A token set read off a file somebody wrote, when there is one, and it supersedes all
+        /// three fields above rather than joining them.
+        ///
+        /// Whole or not at all, which is `docs/DECISIONS.md` ADR 25 rule 3: a user theme is drawn
+        /// as authored, entire, and never merged with a direction. So it cannot be a side — a user
+        /// theme's light half beside a direction's dark half is exactly the palette nobody designed
+        /// that the rule is about, and the mixing above stays closed under the fence because both
+        /// of its halves are still directions.
+        ///
+        /// The three below it are resolved and remembered anyway, so removing the file draws
+        /// exactly what was on screen before it arrived.
+        var user: Theme?
+        /// Which file that came out of, for the one surface that has to name it — the settings
+        /// window, where the two side menus go quiet while it is in force and owe an explanation
+        /// somebody can act on. The theme's own name is the file's stem and not its path.
+        var userFile: URL?
         /// Which side is drawn, whatever macOS is doing.
         var appearance: Appearance
 
-        var theme: Theme { .composed(light: light, dark: dark, layout: layout) }
+        var theme: Theme { user ?? .composed(light: light, dark: dark, layout: layout) }
     }
 
     /// The theme to draw, the appearance to draw it in, and the complaints that go with both.
@@ -199,7 +232,79 @@ enum ThemeChoice {
                     + "this reading so this line stops.")
         }
 
-        return Choice(light: light, dark: dark, layout: direction, appearance: appearance)
+        let user = userTheme(asked, instead: direction.name, scripted: !remember, say)
+        return Choice(
+            light: light, dark: dark, layout: direction, user: user,
+            userFile: user == nil ? nil : asked.file, appearance: appearance)
+    }
+
+    // MARK: - The token set that is not compiled in
+
+    /// A theme read off disk, measured and announced — or nil, having said why not.
+    ///
+    /// Resolved last, after the three directions above it, for one reason: a file that turns out
+    /// not to be a theme owes the sentence "drawing terminal instead", and until the directions are
+    /// settled there is nothing to name there.
+    ///
+    /// - Parameter scripted: `--measure`, `--shot` and `--clipboard`, which read *no* file unless a
+    ///   flag named one. Same rule and the same reason as the four preferences they refuse to
+    ///   write: a scripted run draws what the script named it, and a picture that changed because
+    ///   of a file in somebody's home directory is a picture of that home directory. A flag naming
+    ///   the file is the script naming it, so that case loads.
+    private static func userTheme(
+        _ asked: Request, instead direction: String, scripted: Bool, _ say: (String) -> Void
+    ) -> Theme? {
+        guard !asked.ignoreFile else { return nil }
+        if scripted, !asked.fileNamed {
+            if FileManager.default.isReadableFile(atPath: asked.file.path) {
+                say(
+                    "theme file: \(asked.file.path) is not loaded — a scripted run draws what its "
+                        + "flags name, the same reason it writes none of the four preferences. "
+                        + "`--theme-file PATH` is how a script asks for one.")
+            }
+            return nil
+        }
+
+        let theme: Theme
+        do {
+            theme = try ThemeFile.load(asked.file)
+        } catch {
+            guard let unreadable = error as? ThemeFile.Unreadable else { return nil }
+            // An absent file at the standard location is this app's ordinary state and says
+            // nothing. Every other way of not being a theme is said out loud, because the person
+            // who wrote the file is the only one who can fix it and the only one who will look.
+            if case .missing = unreadable, !asked.fileNamed { return nil }
+            unreadable.sentences.forEach(say)
+            say("drawing \(direction) instead.")
+            return nil
+        }
+
+        // A file called `paper.css` beside a direction called `paper` is not an error and not a
+        // collision — nothing resolves a user theme by name — but two things on one screen with
+        // one name is worth one sentence.
+        if Theme.direction(named: theme.name) != nil {
+            say(
+                "the theme file is called \(theme.name), which is also a direction this build "
+                    + "carries. The file is what is drawn.")
+        }
+
+        // Always measured, by ThemeCheck and not by a second copy of these rules, and drawn
+        // whatever the readings say (docs/DECISIONS.md ADR 25). The failures are whole sentences
+        // on stderr rather than the table `--verify-theme` prints: nobody who has just launched an
+        // app has a table in front of them, and there is no modal and no banner because the only
+        // person who can be nagged here is the one who wrote the file.
+        let report = ThemeCheck.measure(theme, as: .userTheme)
+        say("theme: \(theme.name) · \(ThemeClass.userTheme.label), from \(asked.file.path).")
+        guard !report.holds else {
+            say("  It clears the same fence a shipped direction has to.")
+            return theme
+        }
+        report.failures.forEach { say("  \($0)") }
+        say(
+            "  Drawn anyway, because you loaded it and it is your screen — what that costs is "
+                + "docs/DECISIONS.md ADR 25. `--theme-file \(asked.file.path) --verify-theme` "
+                + "prints the whole table.")
+        return theme
     }
 
     // MARK: - Writing the same four keys from somewhere that is not a flag

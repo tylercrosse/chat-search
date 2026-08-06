@@ -29,6 +29,8 @@ swift run -c release chat-search --no-timeline
 swift run -c release chat-search --settings
 swift run -c release chat-search --theme paper
 swift run -c release chat-search --appearance light --theme-light paper --theme-dark terminal
+swift run -c release chat-search --theme-file ~/.config/chat-search/theme.css
+swift run -c release chat-search --write-theme
 ```
 
 `--size` opens the window at a stated size, `--group` opens the list already cut along an axis,
@@ -45,8 +47,9 @@ unfolding itself as it typed would not be measuring anything.
 
 The theme flags are the ones that are *not* instruments. They choose among the six directions
 compiled into the binary and which side of one you are looking at, and they stick, which is why
-they are the only flags here that change anything about the next launch. See
-[the theme seam](#the-theme-seam).
+they are the only flags here that change anything about the next launch. `--theme-file` is the
+exception to the exception: it draws a token set that is not in the binary at all, and it sticks
+without being remembered, because the file is the memory. See [the theme seam](#the-theme-seam).
 
 ## What it is made of
 
@@ -521,6 +524,13 @@ equally fenced when ADR 25 says only one of them is.
 redraws under the window as each control moves, which is the only preview worth having, and the
 whole of it is one observed value going back into `\.theme`.
 
+**And both menus go quiet while a token set off disk is in force**, with the caption saying which
+file and that they are choosing what comes back when it is gone. Disabled rather than absent, and
+disabled rather than listing the user theme as a seventh entry: a user theme is drawn *whole* (ADR
+25 rule 3), so it is not a thing a side can be, and a menu offering it per side would offer exactly
+the half-a-palette-from-each merge the rule forbids. See [a token set off
+disk](#a-token-set-off-disk).
+
 **Both menus on one direction means that direction whole.** There are four settings and three
 controls: nothing on the window stands for where the type scale and the geometry come from. So the
 two side menus agreeing is read as `--theme NAME` — that direction on both sides, side keys cleared
@@ -567,6 +577,13 @@ Every direction and not just the default, because measuring only the default wou
 palette least likely to be wrong — it is the one somebody is looking at — and leave the other five
 offered and checked by nobody. One miss anywhere fails the run, and the verdict names which
 direction missed: "FAILED" over six palettes says nothing about which one to go and re-solve.
+
+**Every direction, and nothing outside the binary.** A file at `~/.config/chat-search/theme.css`
+is never part of this run, because a gate that read `$HOME` would pass or fail on whose machine it
+ran. `--theme-file X --verify-theme` measures that file instead and is a different question —
+somebody checking a candidate before they load it — so it prints the same table with `user theme`
+beside the name and `UNFENCED` instead of `FAILED`. The status reports the readings and never the
+policy: 1 for a token set that missed, 2 for a file that is not a token set at all.
 
 It exists for the reason `palette.py --verify` exists. Solving a colour and writing it down are
 two events, and generating adds a third — so what ships is now two steps from what was solved,
@@ -644,17 +661,80 @@ Neither sets a type, radius or rhythm token. A colour port cannot move rows-per-
 density argument every other direction has to make does not arise, and `--shot --theme
 gruvbox-derived` differs from `--shot --theme terminal` in colour and in nothing else.
 
-Two things this seam does **not** do yet, each filed. Picking one used to be the third — the flags
-chose at launch and changing your mind while looking at the window did not — and
-[the settings window](#the-settings-window-at-cmd-comma) is what closed it.
+### A token set off disk
 
-- **Nothing loads at runtime.** Dialling in type and spacing is edit, regenerate, rebuild, relaunch.
-  Reading a token set from a file would make it edit and relaunch — and that file is the user-theme
-  class, so it is measured on load, drawn regardless, and a file that cannot be *read* falls back to
-  the shipped direction rather than being drawn unfenced. `chat-search-me9.8.10`.
+Everything above is compiled in. Dialling the look in was therefore edit `styles.css`, run
+`tokens.py`, `swift build`, relaunch — a loop, which is more than there was before the seam, but a
+compile per iteration on exactly the values somebody wants to nudge twenty times in an afternoon.
+A file makes it edit and relaunch:
+
+```bash
+chat-search --write-theme                       # ~/.config/chat-search/theme.css, from the
+                                                # direction this launch would have drawn
+$EDITOR ~/.config/chat-search/theme.css         # --fs-body: 12.5px → 13px
+chat-search                                     # it is drawn
+chat-search --theme-file /tmp/candidate.css --verify-theme    # the readings, before loading it
+chat-search --no-theme-file                     # the shipped direction, file left where it is
+```
+
+**It is CSS custom properties, and that was the decision.** TOML would have matched `cs`'s own
+config and that is the whole of its case. These values are *already* authored as custom properties
+— in `poc/ui/styles.css`, in `poc/ui/directions.css`, in `ColorToken`'s raw values — so CSS is the
+one syntax where a line moves between the mockup, the generator and this file without being
+rewritten, and where the name in an error message is the name in all three. TOML would have needed
+a table of its own keys against these, which is the translation table the raw values exist to
+avoid. What it costs is a scanner in `ThemeFile.swift`, and that is bounded because it is not a CSS
+engine: `:root` is the dark side with the type scale and the spacing, `:root.light` is the light
+side, and anything else is a sentence with a line number on it.
+
+**The file has to be complete, and `--write-theme` is what makes that affordable.** ADR 25 rule 3
+says a user theme is drawn as authored and entire, never merged with a direction to patch what
+missed — half a palette from each is a palette nobody designed. So a file with a hole in it is not
+a theme. Asking that of a hand-typed file would be cruel, so the app writes one: 82 declarations,
+every value already solved by `palette.py` and compiled in. It refuses to overwrite, because the
+file it would replace is somebody's afternoon.
+
+**It is measured, and drawn either way.** That is ADR 25 and this bead decides none of it. The
+readings come from `ThemeCheck` and not a second copy of the rules; the misses go to stderr as
+whole sentences with no modal and no banner, because the only person who can be nagged here is the
+one who wrote the file. What it costs when a palette is unfenced is bounded — nothing in this
+client is encoded in colour alone — except the ribbon, which is 2px with no second channel, and is
+the honest cost.
+
+```
+theme: nightshift · user theme, from /tmp/nightshift.css.
+  nightshift, dark: quiet tier on the page is 1.95:1, under the 4.5 AA floor for text this size
+  nightshift, dark: quiet tier on the drawer is 1.69:1, under the 4.5 AA floor for text this size
+  Drawn anyway, because you loaded it and it is your screen — what that costs is
+  docs/DECISIONS.md ADR 25. `--theme-file /tmp/nightshift.css --verify-theme` prints the whole table.
+```
+
+**Unreadable is not unfenced.** A file that will not parse, names a token this build has no name
+for, gives a colour in `rgb()` or a length in `pt`, or is simply missing something, is not a theme
+at all: the app draws the direction it would have drawn, starts normally, and says every reason it
+found rather than the first, each with the line it was on. `Palette`'s precondition treats an
+incomplete set as a programmer error — right for a generated file and fatal for a typed one — so
+the loader validates before it constructs.
+
+**A scripted run reads no file unless a flag names one.** `--shot`, `--measure` and `--clipboard`
+draw what the script named them, and a frame that changed because of a file in somebody's home
+directory is a frame of that home directory. Same rule and the same reason as their refusing to
+write the four preference keys. `--theme-file PATH` *is* a script naming it, so that case loads.
+
+**And it is not a fifth preference.** Nothing about it is remembered, because the file is the
+memory — it is there or it is not. The direction and the two side overrides keep resolving
+underneath it, so removing the file draws exactly what was on screen before it arrived.
+
+Two things this seam still does **not** do, each filed. Picking a direction used to be the third —
+the flags chose at launch and changing your mind while looking at the window did not — and [the
+settings window](#the-settings-window-at-cmd-comma) is what closed it.
+
+- **Nothing watches the file.** Load is at launch, so it is edit and *relaunch*. Watching it is a
+  different set of problems — SwiftUI invalidation, partial writes, a half-saved file arriving as a
+  theme — and `chat-search-me9.8.10` deliberately did the first half.
 - **Padding is mostly still literal.** The row's rhythm is tokenised because a direction moves it
   and it trades against rows-per-screen. The search bar's, the banner's and the footer's are not —
-  they are literal in `styles.css` too — so dialling those is still a view edit.
+  they are literal in `styles.css` too — so dialling those is still a view edit, file or no file.
   `chat-search-me9.8.11`.
 
 ## The reader

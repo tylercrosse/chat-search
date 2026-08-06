@@ -64,7 +64,7 @@ const V: u32 = 1;
 ///
 /// The count is the picture's resolution and therefore a property of a drawing surface, not of
 /// the corpus — but it lives here rather than in each client for the reason every other shared
-/// number does. At the 1,280 days this archive spans it makes a bucket six days wide, and at a
+/// number does. At the 1,280 days this archive spans it makes a bucket eight days wide, and at a
 /// 900 pt window it makes a bar about five points wide, which is the mockup's mark.
 pub const BUCKETS: usize = 180;
 
@@ -97,14 +97,21 @@ pub struct Timeline {
     /// this corpus's 4,426, and carried for the reason `DirFacet.undirected` is: a picture that
     /// silently drops what it cannot place is a picture claiming to be everything.
     pub undated: usize,
-    /// Of everything the bars draw, how many are inside the `date:` window — the number the
-    /// bars themselves refuse to say, because they are drawn with the window left out.
+    /// Of everything the bars draw, how many are inside the `date:` window — the number the bars
+    /// themselves refuse to say, because they are drawn with the window left out. Free text
+    /// ignored, like the bars: this is "how much was going on then".
     ///
     /// Equal to the sum of `conversations` when the query names no window.
     pub in_range: usize,
-    /// The same for `matches`. **This is the search's own `total`** for the same query, counted
-    /// through the same predicate, which is a claim a test holds to.
-    pub with_a_match: usize,
+    /// How many conversations the query selects with `limit` ignored, which is "how much of it
+    /// this query found" and is the *same number* [`crate::Answer::total`] settles to, spelled
+    /// the same way for the same reason.
+    ///
+    /// Counted here rather than read off the search because the two are two processes and can
+    /// land a keystroke apart, and a drawer disagreeing with the footer above it is the failure
+    /// this whole module exists to avoid. That they agree is a claim a test holds to, and it is
+    /// the pin that keeps this predicate and `count_matching`'s from drifting.
+    pub total: usize,
     /// The window the query's `date:` tokens resolve to, or null when it names none — and also
     /// null when the only one it names is negated, because the complement of a window is not a
     /// rectangle and drawing it as one would misplace it exactly.
@@ -205,7 +212,7 @@ pub fn timeline(
         buckets: bars,
         undated: counts.undated,
         in_range: counts.in_range,
-        with_a_match: counts.matched_in_range,
+        total: counts.total_in_range,
         window: selected(query, opts.now_ms),
         all: AllChip {
             selected: query.selection(Facet::Date).is_empty(),
@@ -340,7 +347,7 @@ struct Counts {
     by_source: Vec<Vec<usize>>,
     undated: usize,
     in_range: usize,
-    matched_in_range: usize,
+    total_in_range: usize,
 }
 
 impl Counts {
@@ -351,7 +358,7 @@ impl Counts {
             by_source: Vec::new(),
             undated: 0,
             in_range: 0,
-            matched_in_range: 0,
+            total_in_range: 0,
         }
     }
 
@@ -437,7 +444,7 @@ fn hits(conn: &Connection, ask: &Ask, counts: &mut Counts) -> rusqlite::Result<(
         // Nothing was ranked, so nothing "landed" anywhere — but the rows are still an answer,
         // and the list below is showing them. `in_range` covers that; a `matches` series copied
         // off the bars above it would claim a search happened.
-        counts.matched_in_range = counts.in_range;
+        counts.total_in_range = counts.in_range;
         return Ok(());
     }
     let table = ask.opts.field.table();
@@ -469,7 +476,7 @@ fn hits(conn: &Connection, ask: &Ask, counts: &mut Counts) -> rusqlite::Result<(
         // A group survives the window when any of its records is inside it, which is what the
         // predicate does when it is a `WHERE` rather than a column.
         if row.get::<_, Option<i64>>(1)?.unwrap_or(0) != 0 {
-            counts.matched_in_range += 1;
+            counts.total_in_range += 1;
         }
         let (Some(ended), Some(edges)) = (ended, ask.edges) else { continue };
         counts.matches[edges.bucket(ended)] += 1;
@@ -710,7 +717,7 @@ mod tests {
             let mut answer = crate::answer(&reader, &query, &opts()).unwrap();
             answer.settle(&reader).unwrap();
             let t = timeline(&reader, &query, &opts(), BUCKETS, None).unwrap();
-            assert_eq!(t.with_a_match, answer.total, "{text}");
+            assert_eq!(t.total, answer.total, "{text}");
         }
     }
 
@@ -743,5 +750,67 @@ mod tests {
         let window = t.window.expect("a span is a span however it was spelled");
         assert!(window.from.is_some());
         assert_eq!(window.until, None);
+    }
+}
+
+/// What a drawer costs the keystroke it is drawn on.
+///
+/// Measured the same way and for the same reason as [`crate::search`]'s own cost tests: best of
+/// seven with the floor taken, against the real index, because the thing being guarded is a
+/// shape that only goes wrong at corpus scale.
+///
+/// The budget is the search beside it. `chat-search-me9.22` measured keystroke→frame at 30–40 ms
+/// p50 with one process per character, and a drawer is a second process on the same keystroke —
+/// so what matters is not that this is fast but that it stays within the same order as the
+/// counting pass the search already pays for.
+#[cfg(test)]
+mod cost {
+    use super::*;
+    use rusqlite::Connection;
+
+    #[test]
+    #[ignore = "needs a real index; set CS_INDEX to an index.db"]
+    fn a_drawer_costs_about_what_counting_the_same_set_costs() {
+        let Ok(path) = std::env::var("CS_INDEX") else { return };
+        let conn = Connection::open(path).expect("readable index");
+        let reader = Reader { conn, state: crate::IndexState::Ready };
+        let opts = || SearchOptions { limit: 60, ..SearchOptions::new(crate::time::now_ms()) };
+
+        let floor = |run: &mut dyn FnMut()| {
+            (0..7)
+                .map(|_| {
+                    let t0 = std::time::Instant::now();
+                    run();
+                    t0.elapsed().as_secs_f64() * 1000.0
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+
+        let mut worst: f64 = 0.0;
+        println!("   count  timeline   ratio   bars   query");
+        // The blank query first — the frame the window opens on — then the prefixes that leave
+        // a total unsettled, which are the expensive half of everything this touches.
+        for text in ["", "borrow checker", "rust", "ind", "con", "the"] {
+            let query = Query::typeahead(text);
+            let counting = floor(&mut || {
+                if query.is_searchable() {
+                    std::hint::black_box(
+                        crate::search::count_matching(&reader.conn, &query, &opts()).unwrap(),
+                    );
+                }
+            });
+            let drawing = floor(&mut || {
+                std::hint::black_box(timeline(&reader, &query, &opts(), BUCKETS, None).unwrap());
+            });
+            let t = timeline(&reader, &query, &opts(), BUCKETS, None).unwrap();
+            let ratio = drawing / counting.max(0.01);
+            println!("{counting:8.1} {drawing:9.1} {ratio:7.1} {:6}   {text}", t.buckets.len());
+            worst = worst.max(drawing);
+        }
+        println!("worst drawer: {worst:.1} ms");
+        // One order with the count beside it. A regression into a per-row subquery or a sort of
+        // every posting — which is what the first draft of the hits pass was — lands far outside
+        // this, and it lands there only on the broad prefixes nothing smaller reproduces.
+        assert!(worst < 120.0, "drawing the timeline took {worst:.1} ms");
     }
 }

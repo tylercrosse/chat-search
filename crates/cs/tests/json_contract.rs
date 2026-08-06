@@ -165,6 +165,18 @@ impl Fixture {
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
         serde_json::from_slice(&out.stdout).unwrap()
     }
+
+    fn timeline(&self, query: &str, extra: &[&str]) -> Value {
+        let out = Command::new(env!("CARGO_BIN_EXE_cs"))
+            .args(["timeline", query, "--json"])
+            .args(["--db", self.db().to_str().unwrap()])
+            .args(["--config", self.config().to_str().unwrap()])
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        serde_json::from_slice(&out.stdout).unwrap()
+    }
 }
 
 impl Drop for Fixture {
@@ -366,6 +378,58 @@ fn a_one_shot_search_reports_a_settled_total_rather_than_a_floor() {
         browse["total"].as_u64() > answer["total"].as_u64(),
         "the fixture no longer holds a conversation the term misses"
     );
+}
+
+#[test]
+fn the_timeline_emits_exactly_the_keys_the_contract_documents() {
+    // The third client seam, pinned the same way as the other two. `cs facets` is not, which is
+    // the difference worth naming rather than copying: a rail is chips carrying opaque strings,
+    // and this reply is *numbers a client does arithmetic on* — a key that moved or a bar that
+    // stopped being counted the documented way draws a wrong picture rather than failing.
+    let f = Fixture::new();
+
+    let envelope = documented("## The timeline");
+    assert_eq!(keys(&f.timeline(TERM, &[])), envelope.keys().cloned().collect::<BTreeSet<_>>());
+
+    let bucket = documented("## `Bucket`");
+    let drawn = f.timeline(TERM, &[]);
+    let bars = drawn["buckets"].as_array().unwrap();
+    assert!(!bars.is_empty(), "the fixture has dated conversations and so has an axis");
+    for bar in bars {
+        assert_eq!(keys(bar), bucket.keys().cloned().collect::<BTreeSet<_>>());
+    }
+
+    for key in keys_where(&envelope, |n| n == Nullability::Never) {
+        assert!(!drawn[&key].is_null(), "timeline.{key} is documented never null and was null");
+    }
+    // Both nullable keys, null here and not null below — the half that stops the document
+    // describing a state the code stopped producing.
+    assert!(drawn["window"].is_null(), "this query names no date:");
+    assert!(drawn["drag"].is_null(), "and nothing was dragged");
+}
+
+#[test]
+fn a_drag_comes_back_as_query_text_rather_than_as_a_token_to_splice() {
+    // The scrubber's whole contract. A client hands over two instants and gets the finished
+    // line; nothing on this side assembles a `date:` token, which is what keeps
+    // `Window::value_in`'s rounding and midnight rules in one place.
+    let f = Fixture::new();
+    const DAY: i64 = 86_400_000;
+    let (a, b) = (1_700_000_000_000i64, 1_700_000_000_000i64 + 30 * DAY);
+    let dragged = f.timeline(TERM, &["--drag", &format!("{a}..{b}")]);
+
+    let drag = &dragged["drag"];
+    assert!(!drag.is_null(), "a drag was asked about");
+    assert!(drag["value"].as_str().unwrap().contains(".."), "a half-open span, spelled");
+    let rewritten = drag["query"].as_str().unwrap();
+    assert!(rewritten.contains("date:"), "the filter is in the text: {rewritten:?}");
+    assert!(rewritten.contains(TERM), "and the free text is left where it was");
+
+    // And the round trip: put that text back in the box and the window comes back out of it,
+    // which is the proof there is no filter state living beside the query.
+    let after = f.timeline(rewritten, &[]);
+    assert_eq!(after["window"]["value"], drag["value"]);
+    assert!(!after["window"]["from"].is_null() && !after["window"]["until"].is_null());
 }
 
 #[test]

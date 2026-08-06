@@ -279,6 +279,11 @@ enum Measure {
         guard let opened = reader.conv, let transcript = reader.transcript else { return }
         let drawn = transcript.drawnMessages
         let query = model.query
+        // Two other beads' claims are read off these further down, and this pass rebuilds every
+        // message four times over by design. Snapshot, report the difference as a number of its
+        // own, and put them back — see `MarkedText.restoreCounters`.
+        let wasBuilt = (reader.markedText.builds, reader.markedText.reuses)
+        let wasDrawn = MinimapBands.renders
         print("  presets, over \(drawn.count) drawn messages of \(opened.convId):")
 
         for preset in Fidelity.Preset.allCases {
@@ -334,6 +339,14 @@ enum Measure {
         }
         reader.apply(.read)
         try? await Task.sleep(for: .milliseconds(400))
+
+        // What the whole pass cost, which is the one number here that is about the machine rather
+        // than about the model: four presets, an override, and a conversation opened and closed.
+        print("    the pass itself: \(reader.markedText.builds - wasBuilt.0) messages built and "
+            + "\(MinimapBands.renders - wasDrawn) canvas renders, put back before the next pass "
+            + "reads either counter")
+        reader.markedText.restoreCounters(builds: wasBuilt.0, reuses: wasBuilt.1)
+        MinimapBands.renders = wasDrawn
     }
 
     /// The scrubber, driven from both ends — and the three claims about it that a PNG cannot make.

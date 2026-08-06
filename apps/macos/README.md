@@ -1126,6 +1126,7 @@ presets, over 1479 drawn messages of claude-code:4579afb5-…:
   one message opened by hand: it is expanded while its user knob says brief, 1 override in hand
   cleared: it is collapsed again
   opened claude-code:5b4f1d3c-… with segments in force: the knobs are where they were left
+  the pass itself: 1868 messages built and 7 canvas renders, put back before the next pass reads either
 ```
 
 The first of the three is the drift check on the one rule this client spells twice. The second is
@@ -1134,6 +1135,14 @@ unambiguous. The third is the absence of `defaultZoomFor`, driven with a preset 
 answer — a reader that re-derived the knobs from each transcript would land somewhere else and the
 line would say so. None of the three is visible in a PNG, and the first two are the kind of thing
 that stops being true quietly.
+
+**And then it puts two counters back.** Turning a knob rebuilds every message on purpose — that is
+what a fold change *is* — so this pass leaves `MarkedText`'s counters and `MinimapBands.renders`
+reading exactly like the regressions they exist to detect, and the minimap pass below them reads
+both. It restores them rather than the passes downstream having to know it ran, and reports the
+difference as a number of its own, which is the only thing here that measures the machine rather
+than the model: four presets, an override and a conversation opened and shut cost 1,868 rebuilt
+messages and 7 canvas renders on the corpus's longest conversation.
 
 **`--longest` opens the biggest conversation the query returned rather than the best one.** The
 map's hard case is length, no query puts the corpus's 2,431-message conversation first, and a

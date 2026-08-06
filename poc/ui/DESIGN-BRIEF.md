@@ -151,16 +151,18 @@ differently:
 Reported, not prescribed:
 
 - **Type** — system sans for UI, system mono for anything tabular, five sizes
-  (13 / 12.5 / 11.5 / 10 / 9px). The faces were never chosen; they are defaults.
+  (14 / 13.5 / 12.5 / 11 / 10px). The faces were never chosen; they are defaults.
 - **Colour** — teal and slate, two full themes. Three meanings are currently reserved
   and used consistently: amber for a match, red for a failure, teal for selection. The
   *consistency* is worth keeping; the hues are not.
 - **Shape** — small radii (mostly 4–6px), hairline borders at low contrast, no shadows
   except one floating overlay, no cards or elevation in the list.
 - **Layout** — at a 1560px window: rail 252px, list 706px, drawer 602px (about a
-  78-character measure), ribbon 200px, row 66px. These are current facts. A different
-  split, a different information hierarchy, or a different number of panes are all fair
-  game.
+  78-character measure), ribbon 200px. The row is the one figure here no stylesheet
+  states — a row's height is a line box's opinion — so `directions.html` measures it off
+  the rendered page and that is where to read it; it was 66px until the type scale went
+  up a point in `chat-search-me9.8.34`. These are current facts. A different split, a
+  different information hierarchy, or a different number of panes are all fair game.
 
 ---
 

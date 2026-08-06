@@ -54,7 +54,7 @@ public enum ThemeCheck {
         (.kTool, 2.20), (.kReason, 4.00), (.kUser, 7.20), (.kAgent, 13.00),
     ]
 
-    /// The AA floor for text at 9–13px. Every tier that carries information is measured, not only
+    /// The AA floor for text at 10–14px. Every tier that carries information is measured, not only
     /// the one the brief happens to name: a direction that fixes `--ink-3` and breaks
     /// `--k-tool-ink` has held one token, not the finding.
     static let floors: [(String, ColorToken, ColorToken, Double)] = [

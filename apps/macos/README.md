@@ -576,7 +576,7 @@ and neither step is checked by anything that reads Swift.
 
 A theme is not a list of hexes here. Half of one is *solved*: the four message kinds have to sit
 on an even luminance ramp against the ribbon track, because hue is the channel that degrades
-fastest at the ~2px those bands are drawn at, and the quiet tier has to clear 4.5:1 at 9–11px.
+fastest at the ~2px those bands are drawn at, and the quiet tier has to clear 4.5:1 at 10–12px.
 So the path for a palette is to add its hues to `DIRECTIONS` in `poc/ui/palette.py`, let that
 solve the eight fenced tokens, write the rest into `directions.css`, and name it on the `tokens.py`
 line above — at which point the app offers it to `--theme` and the gate measures it, both because

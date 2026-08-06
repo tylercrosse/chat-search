@@ -405,9 +405,12 @@ checking.**
   saturated — while carrying the least discriminating information: inside a project all
   twenty rows show the identical badge. Colour now lives on the icon alone; shape, hue
   and word remain three redundant channels, only the frame is gone.
-- **Five type sizes, not ten.** 13 / 12.5 / 11.5 / 10 / 9. There had been ten, with 313
+- **Five type sizes, not ten.** 14 / 13.5 / 12.5 / 11 / 10. There had been ten, with 313
   of ~380 text nodes crammed into 10 / 9.5 / 9 — three steps inside one pixel, doing
-  different jobs, which reads as drift rather than hierarchy.
+  different jobs, which reads as drift rather than hierarchy. The five were solved at
+  13 / 12.5 / 11.5 / 10 / 9 and every one of them read a point small against macOS's own
+  13pt body, which is what a scale solved only against itself does; `chat-search-me9.8.34`
+  moved all five up a point and left the steps alone.
 - **`--ink-3` is 4.6:1 in both themes.** It was 3.64 in dark and **2.90 in light**, at
   9–11px, on a tier carrying date spans, group counts, section labels, the stat line and
   the footer. That is real information below the AA floor for text that size.

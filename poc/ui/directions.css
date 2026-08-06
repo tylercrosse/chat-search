@@ -68,11 +68,11 @@
 .dir-paper {
   --ui: "Iowan Old Style", "Hoefler Text", Palatino, Georgia, serif;
 
-  --fs-head:  13px;
-  --fs-body:  13px;
-  --fs-sub:   11.5px;
-  --fs-meta:  10px;
-  --fs-micro: 9px;
+  --fs-head:  14px;
+  --fs-body:  14px;
+  --fs-sub:   12.5px;
+  --fs-meta:  11px;
+  --fs-micro: 10px;
 
   /* Set type does not have rounded corners. */
   --r-1: 0;
@@ -182,11 +182,11 @@
 .dir-blueprint {
   --ui: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 
-  --fs-head:  12.5px;
-  --fs-body:  12px;
-  --fs-sub:   11px;
-  --fs-meta:  9.5px;
-  --fs-micro: 8.5px;
+  --fs-head:  13.5px;
+  --fs-body:  13px;
+  --fs-sub:   12px;
+  --fs-meta:  10.5px;
+  --fs-micro: 9.5px;
 
   --r-1: 0;
   --r-2: 0;

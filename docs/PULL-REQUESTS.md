@@ -79,9 +79,10 @@ apps/macos/.build/release/chat-search --shot \
   --out /tmp/app.png --size 1200x800
 ```
 
-Writes eleven frames — the reader, scrolled, scrubbed, typed-on, each of the three grouping axes
-open and folded, and the library — plus minimap geometry and main-thread frame lag. `--settings`,
-`--theme`, `--folded`, `--group` and `--longest` reach the states a script otherwise cannot.
+Writes fifteen frames — the reader, one per fidelity preset, scrolled, scrubbed, typed-on, each of
+the three grouping axes open and folded, and the library — plus minimap geometry, main-thread frame
+lag, and the three claims about the fidelity model that no frame makes. `--settings`, `--theme`,
+`--folded`, `--group` and `--longest` reach the states a script otherwise cannot.
 
 `Measure.capture` draws the view hierarchy through `cacheDisplay`, so there is no window server
 involved. That is why it works from a background session with nothing granted to it, and it is the

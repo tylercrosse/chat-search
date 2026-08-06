@@ -45,11 +45,6 @@ nobody repeats. `--folded` moves the *default* rather than folding what is on sc
 so a group arriving on a later keystroke is folded too: an instrument that measured a list
 unfolding itself as it typed would not be measuring anything.
 
-Two of them have a key that does the same thing while the app is running, and the relationship is
-the same in both cases — the flag opens in a state, the key moves between them: `--no-timeline` and
-Cmd-T, `--group` and ⌘1 to ⌘4. Both keys are on [the menu bar](#the-menu-bar), which is the only
-place in this window a key can be bound without the query box losing it.
-
 The theme flags are the ones that are *not* instruments. They choose among the six directions
 compiled into the binary and which side of one you are looking at, and they stick, which is why
 they are the only flags here that change anything about the next launch. `--theme-file` is the
@@ -118,21 +113,13 @@ directory beneath it, because `dir:` is a substring match. Every one of those ru
 `cs_core::query` with the grammar, so this side is three shapes and no rules
 (`chat-search-1ld`).
 
-**A section head is its label and nothing else.** `poc/ui` puts what the section is a facet of at
-the right margin of the head — `agent: · config ∪ index` beside `SOURCES` — and a browser column
-is not 232pt. Twelve points of padding either side leaves about 208, which holds roughly 28
-characters of the micro face at 1.4 tracking, and those two strings are 30: the meta wrapped under
-its own label and every populated section read as two competing lines rather than one head. It is
-on hover now, which is the trade the group key above the list already makes for the same reason
-(`chat-search-me9.8.35`).
-
 They are ordered by *coverage* rather than by how interesting the facet is, which is `poc/ui`'s
 ordering: `ended_at` answers for every conversation, a source for every conversation, a `cwd` for
 a quarter of them. The `dir:` section says both halves of that last number — it draws the busiest
-12 of 128 directories, which its head says on hover, and its final line is the 3,303 conversations
-that record none at all. Only the agent sources have a working directory, so `dir:` cannot reach a
-ChatGPT conversation, and a section that showed only the directories would read as a complete
-account of where the work happened. Its chips are paths rather than project names: deriving one collapsed seven unrelated
+12 of 128 directories, and its final line is the 3,303 conversations that record none at all.
+Only the agent sources have a working directory, so `dir:` cannot reach a ChatGPT conversation,
+and a section that showed only the directories would read as a complete account of where the work
+happened. Its chips are paths rather than project names: deriving one collapsed seven unrelated
 directories onto a single label, which is why `chat-search-6eb.26` was closed.
 
 A directory whose click cannot be written is not offered at all. No `dir:` token can carry a path
@@ -230,11 +217,11 @@ do a thing the keyboard cannot reach at all* (the drawer, below).
 ```
 chat-search                 Edit                      View                 Window
   About chat-search           Undo             ⌘Z       Hide Timeline ⌘T     Close      ⌘W
-  Settings…            ⌘,     Redo            ⇧⌘Z       ┈ Group              Minimize   ⌘M
-  Quit chat-search     ⌘Q     Cut              ⌘X       ✓ None        ⌘1
-                              Copy             ⌘C         Project     ⌘2
-                              Paste            ⌘V         Run         ⌘3
-                              Select All       ⌘A         Source      ⌘4
+  Settings…            ⌘,     Redo            ⇧⌘Z                            Minimize   ⌘M
+  Quit chat-search     ⌘Q     Cut              ⌘X
+                              Copy             ⌘C
+                              Paste            ⌘V
+                              Select All       ⌘A
 ```
 
 **Edit is the one with a use in the ordinary path.** The search box is where you paste a path or a
@@ -267,32 +254,6 @@ flips**, which is Finder's arrangement for the status bar. `MainMenu` holds no m
 `AppHost.validateMenuItem` writes *Hide* or *Show* at validation — the callback that runs both
 before the menu is drawn and before the key fires, so the verb cannot be read stale.
 
-**And under it the axis, which is that same argument at four states rather than two.** The four
-chips above the query box were a click and nothing else — the drawer's complaint, one control over
-— and `chat-search-me9.8.40` was filed rather than folded into the bead above precisely because a
-toggle is one item and one verb where an axis is a *set*: four items, four keys, and a mark saying
-which of them you are in. That is a radio group, macOS has one shape for it, and it is Finder's
-`View ▸ as Icons ⌘1 · as List ⌘2 · as Columns ⌘3 · as Gallery ⌘4` — the digits, in the menu that
-says what the one list looks like. This window has one list and one axis cutting it, so the shape
-arrives without adaptation: a section header, then `None ⌘1`, `Project ⌘2`, `Run ⌘3`, `Source ⌘4`.
-
-**The digits are free, and the app that would have wanted them is being scrapped.** Cmd-1 upward is
-a tab or a place in most apps; there are no tabs here, and the only other candidate — the
-Search/Library switch, mouse-only in exactly the same way — is what `chat-search-me9.8.30` removes.
-Finder splits those two questions the same way in any case: the digits say how the list is cut, and
-a *place* is `⇧⌘` and a letter.
-
-Neither the words nor the digits are a second list of axes beside the chips. The titles are
-`Grouping`'s own, capitalised, and the digit is the axis's position in `allCases` — so an axis added
-to the enum arrives on the bar with the next digit and no edit to `MainMenu`. The mark is written
-where the drawer's verb is, in `AppHost.validateMenuItem`, and it is written on all four every time
-rather than moved from the one that had it: `--group project` at launch and a click on a chip both
-change the axis without the menu being open, and a menu that disagreed with the screen about which
-axis is in force would be worse than one that offered no keys at all. **`topic` is on the chips and
-not here**, which is the same rule cutting the other way — the chip is dashed because there is no
-taxonomy on this wire to switch to, and an item whose key reaches nothing is what this bar exists
-not to have.
-
 **Window is what the app owes its second window.** Cmd-comma opens the settings panel and until now
 only the mouse could dismiss it — a window reached by a key and left by a click, which is the same
 asymmetry as a text field you can type into and not copy out of, one window over. `performClose:`
@@ -311,7 +272,7 @@ says this app has a capability it does not have, and says it in the one place pe
 | Zoom, Bring All to Front | no key equivalent between them, which puts them outside the rule — the green button is the affordance for one and there is nothing for the other to gather |
 | the window list | what `NSApp.windowsMenu` would fill in, and its job is finding a window lost behind others; there are two here and Cmd-comma already raises the second |
 | Hide Others, Show All | both act on *other* applications, so neither is a key this app owes anybody, and Show All has no key equivalent to deliver |
-| the fifth chip, `topic` | the other four are on `View` and this one is not, for the reason it is drawn dashed rather than live: there is no taxonomy on this wire to switch to, so the item would be a key that reaches nothing. `chat-search-me9.8.40` |
+| the grouping axis | it passes the rule — the four chips are mouse-only in exactly the way the drawer was — and it is left off anyway, because an axis is four states rather than a toggle, and four items with four keys is an argument worth making on its own rather than smuggling in beside one. `chat-search-me9.8.40` |
 
 **And Hide, which was on this menu until the pass measured it.** Cmd-H is the most reflexive key on
 this platform after Cmd-Q, so it arrived on exactly the argument that carried Quit. Then
@@ -358,7 +319,7 @@ was taken back twice.
 ```
 the menu with an empty box:
   Edit: Undo [grey], Redo [grey], Cut [grey], Copy [grey], Paste, Select All, Writing Tools, …
-  View: Hide Timeline, ✓None, Project, Run, Source
+  View: Hide Timeline
 ⌘A → matched true, selected 27 of 27 characters
 ⌘C → field "dir:chat-search agent:codex" · query "…" · pasteboard "dir:chat-search agent:codex"
 ⌘X → field "" · query "" · pasteboard "dir:chat-search agent:codex"
@@ -367,17 +328,12 @@ the menu with an empty box:
 ⇧⌘Z → field "dir:chat-search agent:codex" · query "…"
 the menu with the phrase selected:
   Edit: Undo, Redo Cut, Cut, Copy, Paste, Select All, …
-  View: Hide Timeline, ✓None, Project, Run, Source
+  View: Hide Timeline
 ⌘H, which this bar deliberately does not carry → matched false, the app is hidden: false
   NSApp.hide(nil) called directly → the app is hidden: true
 ⌘M → matched true, the window is in the Dock: true
 ⌘T → matched true, the drawer is open: false, the item now reads "Show Timeline"
 ⌘T again → matched true, the drawer is open: true, the item now reads "Hide Timeline"
-⌘1 → matched true, the axis is none with 0 group(s), and the item checked is None — pressed on the axis already in force, which moves nothing
-⌘2 → matched true, the axis is project with 13 group(s), and the item checked is Project
-⌘3 → matched true, the axis is run with 1 group(s), and the item checked is Run
-⌘4 → matched true, the axis is source with 2 group(s), and the item checked is Source
-⌘1 again → matched true, the axis is none, where this run found it
 ```
 
 **Cmd-T is pressed twice**, and that is the shape of a toggle rather than thoroughness: one press
@@ -386,17 +342,6 @@ shut. The second press is what says it is a switch. It also puts the drawer back
 found it, which is the courtesy the pasteboard gets two paragraphs down. The title beside each is
 read after asking the menu to validate, since the verb is written at validation and reading it
 without asking would report the one the bar was built with.
-
-**All four digits are pressed, because the axis is a radio group and not four switches.** What has
-to be true is that the axis arrives *and* that exactly one item carries the mark afterwards: a press
-that regrouped the list while leaving the checkmark where it was would be the menu contradicting the
-screen, and it is the one way this can be wrong while every key still reports `matched true`. So the
-mark is read back beside the axis and the group count each time, through `update()` for the reason
-the verb is. ⌘1 is pressed first and the list is already ungrouped, which is what makes the first
-line the statement that a key on the axis in force moves nothing — the chip has always been inert
-the same way. The run ends by pressing the digit of the axis it started on, the courtesy the drawer
-and the pasteboard both get. The counts are what a two-token query leaves in hand, not corpus
-numbers: 13 directories, one 12h run, two sources.
 
 The bar is read **twice**, with an empty box and with the phrase selected, because half these items
 are *supposed* to be grey in the first reading — a Copy that offered itself with nothing selected
@@ -838,7 +783,7 @@ one you were looking for.
 | --- | --- | --- |
 | is this message drawn at all? | `drawn` | it was already worked out twice, in Rust and in the prototype's JavaScript |
 | which band is it? | `band` | `system` prose is the agent's side, and a call and its result are one stretch — two decisions that are easy to get wrong and impossible to notice wrong |
-| how does it fold? | `fold` | the fold is what makes a 900-message agent session legible; two clients folding differently is two different conversations |
+| how does it fold **by default**? | `fold` | the fold is what makes a 900-message agent session legible; two clients folding differently is two different conversations. The reader may then move it — see [the four knobs](#the-four-knobs) — because what somebody has opened is session state and core says so |
 | may a match claim it ranked? | `mark_kind` | a `reasoning` hit carries no postings, so marking it like a prose hit states something false in the one place a reader went to check |
 
 The last one is drawn as a *form* rather than a hue — a filled `--hit-bg` ground for a match that
@@ -862,10 +807,104 @@ Three departures from `poc/ui`'s drawer:
   and it is not on the wire yet, so a collapsed tool call reads as its raw argument. Honest, and
   not pretty. `chat-search-me9.20`.
 
-Not built, and each for a reason rather than for time: **outline mode**, which needs the same
-collapsed forms (`chat-search-me9.20`), and the mockup's **fidelity chips, segment summaries and
-work summary**, which need facts — segments, topics, touched files — that nothing on the wire
-carries. The **minimap** was in that list until `chat-search-me9.8.18`; it is below.
+Not built, and for a reason rather than for time: the mockup's **work summary**, which needs facts
+— topics, touched files — that nothing on the wire carries. The **minimap** was in that list until
+`chat-search-me9.8.18` and the **fidelity chips** until `chat-search-me9.8.36`; both are below.
+
+### The four knobs
+
+One fidelity for a whole corpus is one fidelity too few. A 2,553-message Codex session and a
+seven-message ChatGPT thread arrived on the same screen at the same density, and the only gesture
+against that was opening messages one at a time — `poc/ui/NOTES.md` costs that at "211 toggles on a
+211-message conversation".
+
+`poc/ui` had already iterated the control five times with the rejected arrangements written down,
+so `chat-search-me9.8.36` is a port and the paragraphs below are mostly its reasons rather than
+new ones.
+
+**Four knobs, over `cs_core::blocks::Band`.** You, agent, reasoning, tools — the same four the spine
+beside the text is coloured by, the minimap encodes as width and `ThemeCheck` fences on a ~1.8×
+luminance ramp. The vocabulary is not new, which is the point: nobody has to learn a fifth
+categorisation to use the control, and `me9.41` re-keyed `Density` onto exactly these so that
+`{ user: expanded, agent: collapsed }` became sayable at all — both are `prose`, so the old
+kind-keyed table could not say it.
+
+**Three levels: off, brief, full.** The wire has two. `hidden` is the client's, and stays the
+client's, for the reason the fold override does: core answers how much of a message to show and
+refuses to hold what a reader has done with the answer.
+
+**Two axes on one chip, deliberately.** Hiding a band is "is it on screen"; brief against full is
+"how much of it". Conflating them is why every arrangement of this control felt wrong — with a
+single three-cycle, one of the six transitions always costs two clicks. So the chip's body cycles
+off → brief → full → off, which is the path you actually walk (peek at the tools, read them, put
+them away), and its dot toggles visibility outright and restores whatever detail that band last
+had. Label, state and dot live in **one box**, because the 2×2 grid that preceded it put `you`'s
+control nearer to `agent`'s *label* than `agent`'s own control was: proximity pointed at the wrong
+thing on every read, and that was most of the fiddliness rather than the cycling. The state is a
+word and not a glyph — `○ ◐ ●` is a legend you have to learn, on an 18pt target.
+
+**Four presets, and no all-buttons.** There were three plus `expand all` and `collapse all`, of
+which two were the same command — `outline` set every kind to collapsed and so did `collapse all` —
+while `full` was *not* full, since it left reasoning and tools collapsed, and `expand all` was.
+
+| preset | what it says | on the corpus's longest conversation, 1,479 drawn messages |
+| --- | --- | --- |
+| `segments` | runs summarised | 84 rows, 41 of them summaries · 43 full, 345 brief, 1,091 off |
+| `outline` | one line per message | 1,479 rows · 0 full, 1,479 brief |
+| `read` | prose in full, the rest brief | 1,479 rows · 388 full, 1,091 brief |
+| `everything` | all of it | 1,479 rows · 1,479 full |
+
+Two of those four are `Density`'s two named points spelled in Swift: `read` is `Density::Full` and
+`outline` is `Density::Outline`. **That is the one rule this client spells twice**, so it is the one
+place the two can drift, and `--shot` checks it rather than leaving it to a comment — it reports
+`read` against the `fold` on every drawn block, 1,479 of 1,479 today. The other two have no
+counterpart and cannot: `everything` needs a level `Density` has no reason to name, and `segments`
+needs `hidden`, which is not a fold at all.
+
+**The drawer opens at `read`, which is what the wire already said.** The prototype opens at
+`segments` and then corrects per conversation with `defaultZoomFor`, and that is the one piece of
+this model deliberately left behind: it is broken there, and its prose > 0.5 test is ~87% predicted
+by the source badge already on the row — chatgpt 0.88, claude-code 0.30, codex 0.23 — so it is close
+to a source rule wearing a content costume. Without it, `segments` on a seven-message ChatGPT thread
+draws a summary line after every single turn, which is the defect `poc/ui/NOTES.md` names when it
+says the segment fold "is for agentic runs and actively harms conversational ones". So the drawer
+opens where the wire points and `segments` is one click away.
+
+**Opening another conversation does not move the knobs.** They are the reader's, not the
+conversation's; the per-message overrides and the open segments are the conversation's and go with
+it. `--shot` drives that too, because the absence of `defaultZoomFor` is invisible in every frame.
+
+#### Segments, and why this file is meant to be deleted
+
+`Segment` is a steer and the run it caused, summarised as `→ 12 calls · 2 failed · asked you 1×` —
+richer than a count, which is the difference between "something happened here" and "this is where
+it went wrong". A closed segment carries a `●` when the query matched inside it, and the drawer
+opens on that summary rather than on the message behind it, because a scroll to a row `List` does
+not have is a scroll that silently does not happen.
+
+**It is computed client-side, which is wrong, and it is filed.** The run rule belongs in core for
+the reason every rule in this neighbourhood does — the row's ribbon and this transcript draw the
+same conversation, and two derivations of "where does a run start" is the local-date bug's shape.
+`chat-search-me9.45` is that bead; when it lands, `Segments.swift` goes and the reader reads the
+answer. Until then, three things in it are this client's guesses and are labelled as such in the
+source: a run breaks on a user turn *and on a change of thread* (without the second, every subagent
+lands in whatever segment happened to be open, and where sidechains appear at all they average 52%
+of the conversation); calls are counted off `band` rather than `kind`, which works only because a
+successful `tool_result` is never drawn, so the drawn tool traffic is the calls plus the failures;
+and "asked you" is agent prose ending in a question mark, which is 4.6% of assistant prose in this
+corpus.
+
+#### What the knobs cost the minimap
+
+The map's scrub targets used to be the messages core draws. A band switched off leaves rows `List`
+no longer has, so a drag would have resolved onto a message and scrolled nowhere — silently, which
+is the worst way for a gesture to fail. `MinimapLayout` now takes the ids that have a row *right
+now*, which is also what dims the bands the knobs took away: dim rather than drop, so the scrollbar
+goes on describing the whole conversation while a knob takes two thirds of it off the screen.
+
+That merges two dims into one. A successful tool result and a band you switched off are drawn at
+the same 0.22, because they say the same thing to somebody looking at the map — there is a message
+here and you are not being shown it.
 
 ### The marked text, built once rather than once a frame
 
@@ -1037,12 +1076,13 @@ a readable column has no number in it. `cacheDisplay(in:to:)` renders the view h
 bitmap with no window server and no screen-recording grant, so it runs from a script and on a
 machine nobody is sitting at.
 
-It writes eleven frames, and one line before any of them: what a row costs and how many of them
+It writes fifteen frames, and one line before any of them: what a row costs and how many of them
 the window holds, read off the list while nothing is open — [the row](#the-row) is where that
-reading is explained. The first frame is the drawer as it opens; the next two are the minimap's
-relationship checks — the drawer is driven half a document, then the map is dragged to 75% — and
-the fourth is after typing on with the conversation still open, which is the state a list-driven
-selection closes without being asked to. The last seven are two per grouping axis, open and folded,
+reading is explained. The first frame is the drawer as it opens; the next four are one per
+[preset](#the-four-knobs); the two after those are the minimap's relationship checks — the drawer
+is driven half a document, then the map is dragged to 75% — and the eighth is after typing on with
+the conversation still open, which is the state a list-driven selection closes without being asked
+to. The last seven are two per grouping axis, open and folded,
 plus Library. Each relationship frame prints where the transcript ended up and where the box went;
 on the corpus's longest conversation that is messages 0–8 at rest, 300–330 after the fling and
 1810–1818 after the drag, run to run. The grouped frames print group and residue counts beside them,
@@ -1072,6 +1112,45 @@ checks is everything downstream of the gesture and not the gesture itself — th
 minimap pass, whose keyboard half has no pointer to drive it and says so. That is why the head is a
 `Button` rather than a tap gesture on a section header: a hit test nobody can script is one to leave
 to the framework.
+
+**The fidelity model has the same shape: four pictures, and three claims no picture makes.** So the
+preset pass prints those three beside the frames. On the corpus's longest conversation:
+
+```
+presets, over 1479 drawn messages of claude-code:4579afb5-…:
+  segments   84 rows, 41 of them run summaries · 43 full, 345 brief, 1091 off
+    of those, 39 name calls, 9 failures, 10 questions, 7 carry the match dot
+    the fullest of them reads: → 5 calls · 1 failed · asked you 1×
+  outline    1479 rows, 0 of them run summaries · 0 full, 1479 brief, 0 off
+  read       1479 rows, 0 of them run summaries · 388 full, 1091 brief, 0 off
+  everything 1479 rows, 0 of them run summaries · 1479 full, 0 brief, 0 off
+  read is `Density::Full` spelled in Swift, and agrees with the fold on the wire for 1479 of 1479
+  one message opened by hand: it is expanded while its user knob says brief, 1 override in hand
+  cleared: it is collapsed again
+  opened claude-code:5b4f1d3c-… with segments in force: the knobs are where they were left
+  the pass itself: 1868 messages built and 7 canvas renders, put back before the next pass reads either
+```
+
+The two indented lines are the other thing a frame cannot carry: it shows four summaries and the
+transcript holds forty-one, so the counts say how many of them are richer than a bare number and
+the fullest one is printed verbatim. A corpus where no run ever failed or asked anything would let
+"calls, failures and questions rather than a count" pass untested, and this is what says it did not.
+
+The first of the three checks below them is the drift check on the one rule this client spells
+twice. The second is
+"a per-message override beats the band", driven against `outline` so that one message going full is
+unambiguous. The third is the absence of `defaultZoomFor`, driven with a preset the wire does not
+answer — a reader that re-derived the knobs from each transcript would land somewhere else and the
+line would say so. None of the three is visible in a PNG, and the first two are the kind of thing
+that stops being true quietly.
+
+**And then it puts two counters back.** Turning a knob rebuilds every message on purpose — that is
+what a fold change *is* — so this pass leaves `MarkedText`'s counters and `MinimapBands.renders`
+reading exactly like the regressions they exist to detect, and the minimap pass below them reads
+both. It restores them rather than the passes downstream having to know it ran, and reports the
+difference as a number of its own, which is the only thing here that measures the machine rather
+than the model: four presets, an override and a conversation opened and shut cost 1,868 rebuilt
+messages and 7 canvas renders on the corpus's longest conversation.
 
 **`--longest` opens the biggest conversation the query returned rather than the best one.** The
 map's hard case is length, no query puts the corpus's 2,431-message conversation first, and a
@@ -1190,15 +1269,6 @@ question was answered once (`chat-search-me9.22`) and sections do not un-answer 
 | `source` | `source` | archetype is ~87% predicted by it |
 | `topic` | — | drawn, and not offered |
 
-**The four are also ⌘1 to ⌘4**, on `View ▸ Group`, with a checkmark on the one in force
-(`chat-search-me9.8.40`). Same order, and the same `SearchModel.group(by:)` the chips call — one
-control with two affordances rather than two controls, so switching from the menu clears the
-accordion and places the cursor exactly as clicking does. The chips were a click and nothing else
-until then, in a window whose one focused view is the query box; [the menu bar](#the-menu-bar) is
-where a key can be bound that the box does not lose, and it is the same route the drawer took.
-`topic` is not on it, because a dashed chip and a menu item that reaches nothing are not the same
-kind of honest.
-
 **The residue group is the point of this bead.** `cwd` is 100% on codex and claude-code and 0% on
 chatgpt and gemini-cli, so a project grouping that quietly kept only the rows it could place drops
 two thirds of the corpus and looks complete doing it. Every axis that can fail to place a row has a
@@ -1290,12 +1360,10 @@ accordion would buy a fold by breaking the editing of the thing being folded. En
 to the list rather than to the field, so the fold costs nothing that was in use.
 
 There is a third way out of that argument now and it does not change this one: a menu resolves its
-keys outside the responder chain, which is how the drawer got Cmd-T (`chat-search-me9.8.26`) and the
-axis ⌘1 to ⌘4 (`chat-search-me9.8.40`). It is no use to the fold. A menu item is a single act with
-no idea where the cursor is, and *fold the group the cursor is on* is a sentence about a line — so
-Enter, which is already delivered to the list, is still the only thing that can say it. The axis
-went the other way for exactly that reason: `group by project` names no line, so nothing has to know
-where the cursor is to obey it.
+keys outside the responder chain, which is how the drawer got Cmd-T (`chat-search-me9.8.26`). It
+is no use to the fold. A menu item is a single act with no idea where the cursor is, and *fold the
+group the cursor is on* is a sentence about a line — so Enter, which is already delivered to the
+list, is still the only thing that can say it.
 
 The footer says what Enter would do whenever the cursor is on a head, and how many groups are shut
 (`12 groups by project · 12 folded`). That is the same defect `poc/ui/NOTES.md` §5 complains about,
@@ -1306,10 +1374,10 @@ folded group and a group that is not there have to look different.
 
 **Switching axes clears the accordion** rather than restoring it, which is the prototype's rule and
 its reasoning: groups are *ranked*, so the set you left open is rarely the set at the top when you
-come back. Clicking the axis already in force — or pressing its key — is inert, so the reset is a
-consequence of switching and never a surprise. Nothing else clears it — a keystroke that narrows the
-list until a group is empty and a keystroke that brings it back leave the fold alone, because a list
-rearranging under a cursor that never asked it to is worse than a stale fold.
+come back. Clicking the axis already in force is inert, so the reset is a consequence of switching
+and never a surprise. Nothing else clears it — a keystroke that narrows the list until a group is
+empty and a keystroke that brings it back leave the fold alone, because a list rearranging under a
+cursor that never asked it to is worse than a stale fold.
 
 The cost of folding, stated: on `borrow checker` the `source` axis has two groups, so shut it is
 two heads and a lot of empty column. That is honest about the axis rather than a fault of the fold,

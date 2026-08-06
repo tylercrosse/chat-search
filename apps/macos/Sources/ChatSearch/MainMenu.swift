@@ -20,9 +20,7 @@ import AppKit
 ///   a button and nothing else, in a window whose only focused view is the query box — so there was
 ///   no view to bind a key on that would not be taking that key away from the box. A menu is
 ///   outside the responder chain and therefore outside that argument, which is what makes
-///   `View ▸ Hide Timeline` possible where an arrow pair was not. `chat-search-me9.8.26`. The
-///   grouping axis was the same complaint one control over and it is now the same answer, at four
-///   states instead of two: `⌘1` to `⌘4` under the same menu. `chat-search-me9.8.40`.
+///   `View ▸ Hide Timeline` possible where an arrow pair was not. `chat-search-me9.8.26`.
 ///
 /// The rule cuts the other way just as hard, which is the half worth writing down. Every item a
 /// template would put here and this one does not — Zoom, Bring All to Front, the window list, Hide
@@ -52,16 +50,13 @@ enum MainMenu {
     /// is titled exactly that because AppKit matches the name when it decides where to insert the
     /// input-method items it owns (see `Bar.suppressInputMethodItems`).
     ///
-    /// Every item of this app's own is aimed at one object, which is `AppHost`: it is the only
+    /// Both of this app's own items are aimed at one object, which is `AppHost`: it is the only
     /// thing in the process that holds both the windows and the model.
-    static func build(
-        target: AnyObject, settings: Selector, timeline: Selector, group: Selector
-    ) -> NSMenu {
+    static func build(target: AnyObject, settings: Selector, timeline: Selector) -> NSMenu {
         let bar = NSMenu()
         for (title, menu) in [
             ("", application(openSettings: target, action: settings)), ("Edit", edit()),
-            ("View", view(target: target, toggleTimeline: timeline, group: group)),
-            ("Window", window()),
+            ("View", view(toggleTimeline: target, action: timeline)), ("Window", window()),
         ] {
             let item = NSMenuItem()
             item.title = title
@@ -157,8 +152,7 @@ enum MainMenu {
         return menu
     }
 
-    /// The two things this window does that no key could reach, and the only items on this bar
-    /// whose action is this app's own — everything else here resolves into AppKit.
+    /// One item, and the first thing on this bar that is an act of this app's rather than AppKit's.
     ///
     /// The bottom drawer opens and shuts from a button in its own corner and from nowhere else,
     /// which made it mouse-only — and `chat-search-me9.8.20` filed that as unfixable from where it
@@ -181,53 +175,17 @@ enum MainMenu {
     /// reading `Hide`, which `--no-timeline` makes momentarily wrong and the first validation
     /// corrects before anybody can see it.
     ///
-    /// **And the axis, which is the same argument at four states rather than two.**
-    /// `chat-search-me9.8.40` held it back from the bead above for exactly that reason: a toggle is
-    /// one item and one verb, where an axis is a *set* — four items, four keys, and a mark saying
-    /// which of them you are in. That is a radio group, and macOS has one shape for it, which is
-    /// Finder's `View ▸ as Icons ⌘1 · as List ⌘2 · as Columns ⌘3 · as Gallery ⌘4`: the digits, in
-    /// the menu that says what the one list looks like. This window has one list and one axis
-    /// cutting it, so the shape fits without adaptation.
-    ///
-    /// **The digits are free here, and the app that would have wanted them is being scrapped.**
-    /// Cmd-1 upward is a tab or a place in most apps; there are no tabs here, and the only other
-    /// candidate — the Search/Library switch, which is mouse-only in the same way — is what
-    /// `chat-search-me9.8.30` removes. Finder splits those two questions the same way anyway: the
-    /// digits say how the list is cut, and a *place* is `⇧⌘` and a letter.
-    ///
-    /// The titles are `Grouping`'s own words, capitalised, and the digit is the axis's position in
-    /// `allCases`. Neither is a second list of axes to keep in step with the chips: an axis added to
-    /// the enum arrives here with the next digit and no edit to this file, which is the same rule
-    /// that keeps the chip row honest (`SearchView.groupControl`).
-    private static func view(target: AnyObject, toggleTimeline: Selector, group: Selector)
-        -> NSMenu
-    {
+    /// **What is not on it, and it is one thing.** The grouping control is mouse-only in exactly the
+    /// way the drawer was, and a View menu is now the place it could live — but the axis is four
+    /// states rather than a toggle, and four items with four keys is a different argument that
+    /// wants making on its own. `chat-search-me9.8.40`.
+    private static func view(toggleTimeline target: AnyObject, action: Selector) -> NSMenu {
         let menu = NSMenu()
-        let hide = NSMenuItem(title: "Hide Timeline", action: toggleTimeline, keyEquivalent: "t")
+        let item = NSMenuItem(title: "Hide Timeline", action: action, keyEquivalent: "t")
         // Explicit, for the reason `Settings…` is: this goes to the application's delegate, which
         // is not a link in the chain a `nil` target walks.
-        hide.target = target
-        menu.addItem(hide)
-
-        menu.addItem(.separator())
-        // A section header rather than four items each restating "Group by", which is the chip
-        // row's own arrangement — one `GROUP` label, then the four words — and it costs nothing:
-        // a header is inert, so it is not an item that greys out and not a key that reaches
-        // nothing. macOS 14, which is this package's floor.
-        menu.addItem(.sectionHeader(title: "Group"))
-        for (position, axis) in Grouping.allCases.enumerated() {
-            // `capitalized` and not `localizedCapitalized`: this is the canonical mapping, which is
-            // what a title built out of an identifier wants — the words are the enum's `rawValue`
-            // and a locale has no business changing them.
-            let item = NSMenuItem(
-                title: axis.label.capitalized, action: group, keyEquivalent: "\(position + 1)")
-            item.target = target
-            // Which axis this item is, carried on the item rather than decoded from its title: the
-            // title is a display string and `AppHost` has to answer *this item, or not* on every
-            // validation.
-            item.representedObject = axis
-            menu.addItem(item)
-        }
+        item.target = target
+        menu.addItem(item)
         return menu
     }
 

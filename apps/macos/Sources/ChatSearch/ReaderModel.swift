@@ -21,10 +21,48 @@ final class ReaderModel {
     private(set) var failure: String?
     private(set) var loading = false
 
-    /// Folds the reader set by hand. They beat the wire's default and are dropped with the
-    /// conversation, because which messages someone has opened is session state — which is
+    /// How much of each band is drawn — the four knobs, and the whole of what a reader has asked
+    /// for. See `Fidelity`.
+    ///
+    /// **Not reset when a conversation opens**, which is the one behaviour the prototype has and
+    /// this does not. Its `defaultZoomFor` moved the knobs under you on every selection, and a
+    /// control that changes itself while you are looking at it is a control you stop trusting;
+    /// `Fidelity.opening` has the rest of that argument. Nothing else about the reader survives an
+    /// open, because everything else is about the conversation and this is about the reader.
+    private(set) var fidelity = Fidelity.opening
+
+    /// What each knob was last set to while it was on, so the dot can put it back.
+    ///
+    /// The other half of "visibility and detail are two axes": the dot hides a band and restores
+    /// the *detail* it had, which is the escape a pure cycle cannot give you. Seeded with the
+    /// prototype's own seed rather than with the opening preset — this is what a band returns to
+    /// after having been switched off, and for tools and reasoning that is `brief` even though the
+    /// drawer opened with them there.
+    private var lastLevel: [Knob: Level] = [
+        .user: .expanded, .agent: .collapsed, .reasoning: .collapsed, .tool: .collapsed,
+    ]
+
+    /// Levels the reader set on one message by hand. They beat the band's knob and are dropped with
+    /// the conversation, because which messages someone has opened is session state — which is
     /// exactly why `cs_core::blocks` answers the default and refuses to model this.
-    private var overrides: [String: Fold] = [:]
+    private var overrides: [String: Level] = [:]
+
+    /// The conversation cut into a steer and the run it caused, laid out once per transcript.
+    /// Client-side and temporary — see `Segment`.
+    private(set) var segments: [Segment] = []
+
+    /// Which of those the reader has opened. Keyed on position within this conversation, and
+    /// therefore dropped with it.
+    private var openSegments: Set<Int> = []
+
+    /// What the transcript draws, in order: the rows the knobs have left standing.
+    ///
+    /// Stored rather than computed, for the reason `MarkedText` exists one layer along
+    /// (`chat-search-me9.8.29`): a computed property on a `View` is re-evaluated whenever SwiftUI
+    /// feels like asking, and this walks every message in the conversation. It changes when the
+    /// transcript, the knobs, an override or an open segment change, and those are four methods
+    /// rather than four frames.
+    private(set) var rows: [ReaderRow] = []
 
     /// Every drawn message as an `AttributedString`, built once instead of once per body
     /// evaluation. Held here rather than on the view for the reason the folds are: a computed
@@ -89,6 +127,9 @@ final class ReaderModel {
         transcript = nil
         failure = nil
         overrides.removeAll()
+        openSegments.removeAll()
+        segments = []
+        rows = []
         // The map and the position go with the conversation. Rows of the old one never report
         // themselves gone — `List` is handed a new array rather than emptied — so a set that
         // survived would draw a viewport box over a conversation those messages are not in.
@@ -120,10 +161,74 @@ final class ReaderModel {
         load(query: query)
     }
 
-    /// The wire's default for this message unless the reader has said otherwise.
-    func fold(of block: Block) -> Fold { overrides[block.id] ?? block.fold }
+    // MARK: - The four knobs
 
-    func toggle(_ block: Block) { overrides[block.id] = fold(of: block).toggled }
+    /// This message's band knob, unless the reader has said otherwise about this message.
+    func level(of block: Block) -> Level {
+        overrides[block.id] ?? fidelity.level(of: block.band)
+    }
+
+    /// How much of the message to draw wherever a row for it exists at all.
+    ///
+    /// `hidden` reads as `collapsed` rather than as `expanded`, which is the prototype's rule and
+    /// matters in exactly one place: the only way a hidden message gets a row is a segment somebody
+    /// opened, and opening a segment is a request to see what is in it — not a request to have four
+    /// hundred lines of a file dropped on the screen by a knob still set to off.
+    func fold(of block: Block) -> Fold { level(of: block).fold ?? .collapsed }
+
+    /// A message the reader clicked. Two-valued on purpose: hiding is what the knobs are for, and
+    /// a click on a message that is on screen cannot have meant "take it away".
+    func toggle(_ block: Block) {
+        overrides[block.id] = fold(of: block) == .expanded ? .collapsed : .expanded
+        restack()
+    }
+
+    /// How many messages this reader has answered for by hand. What the control offers to undo.
+    var overrideCount: Int { overrides.count }
+
+    func clearOverrides() {
+        overrides.removeAll()
+        restack()
+    }
+
+    /// The chip's body: off → brief → full → off, or the other way with shift held.
+    func cycle(_ knob: Knob, back: Bool = false) {
+        let next = fidelity[knob].cycled(back: back)
+        fidelity[knob] = next
+        if next != .hidden { lastLevel[knob] = next }
+        restack()
+    }
+
+    /// The chip's dot: hide the band outright, or bring it back at the detail it last had.
+    func toggleVisible(_ knob: Knob) {
+        if fidelity[knob] == .hidden {
+            fidelity[knob] = lastLevel[knob] ?? .collapsed
+        } else {
+            lastLevel[knob] = fidelity[knob]
+            fidelity[knob] = .hidden
+        }
+        restack()
+    }
+
+    func apply(_ preset: Fidelity.Preset) {
+        fidelity = preset.fidelity
+        for knob in Knob.allCases where fidelity[knob] != .hidden {
+            lastLevel[knob] = fidelity[knob]
+        }
+        restack()
+    }
+
+    /// Whether this segment is open. Closed is the point of the mode; open is one click.
+    func isOpen(_ segment: Segment) -> Bool { openSegments.contains(segment.index) }
+
+    func toggle(_ segment: Segment) {
+        if openSegments.contains(segment.index) {
+            openSegments.remove(segment.index)
+        } else {
+            openSegments.insert(segment.index)
+        }
+        restack()
+    }
 
     /// The message as the drawer draws it: marked, and folded the way this reader has it.
     ///
@@ -131,6 +236,64 @@ final class ReaderModel {
     /// and it carries the other half of what a marked message is an answer to — see `MarkedText`.
     func marked(_ block: Block, in transcript: Transcript, theme: Theme) -> AttributedString {
         markedText.of(block, fold: fold(of: block), in: transcript, theme: theme)
+    }
+
+    /// The row to open a conversation at: the first one that carries a match, summary rows
+    /// included.
+    ///
+    /// A summary counts because in segment mode the match may be inside a run that is shut, and
+    /// scrolling to a row that does not exist is scrolling nowhere. The dot on that summary is what
+    /// says the match is behind it.
+    var firstMarkedRow: ReaderRow.ID? {
+        rows.first {
+            switch $0 {
+            case .message(let block): !block.marks.isEmpty
+            case .summary(let segment): segment.marked
+            }
+        }?.id
+    }
+
+    /// Which rows the transcript has, given the knobs, the overrides and the open segments.
+    ///
+    /// Also where the minimap is re-laid, and it has to be: `List` can only be scrolled to a row it
+    /// has, so a map whose scrub targets were the messages core draws would resolve a drag onto a
+    /// message a hidden band took off the screen — and the scroll would silently do nothing.
+    private func restack() {
+        guard let transcript else {
+            rows = []
+            minimap = MinimapLayout()
+            return
+        }
+        rows = fidelity.summarisesRuns ? summarised() : listed(transcript.drawnMessages)
+        var shown = Set<String>()
+        for row in rows {
+            if case .message(let block) = row { shown.insert(block.id) }
+        }
+        minimap = MinimapLayout(transcript.messages, shown: shown)
+    }
+
+    private func listed(_ blocks: [Block]) -> [ReaderRow] {
+        blocks.filter { level(of: $0) != .hidden }.map { ReaderRow.message($0) }
+    }
+
+    /// The same messages with each run replaced by a line saying what it did.
+    private func summarised() -> [ReaderRow] {
+        var out: [ReaderRow] = []
+        for segment in segments {
+            if let steer = segment.steer, level(of: steer) != .hidden {
+                out.append(.message(steer))
+            }
+            // A steer with nothing after it is not a segment worth a summary line.
+            guard !segment.items.isEmpty else { continue }
+            out.append(.summary(segment))
+            // Opening a segment reveals what the knobs hid — every item, not only the ones a
+            // visible band would have left. Respecting the knobs here would make opening a run of
+            // tool calls with tools off do nothing, which is the one gesture the mode exists for.
+            if openSegments.contains(segment.index) {
+                out.append(contentsOf: segment.items.map { ReaderRow.message($0) })
+            }
+        }
+        return out
     }
 
     // MARK: - The scroll relationship
@@ -151,13 +314,13 @@ final class ReaderModel {
 
     /// A drag on the minimap, as a fraction of its height.
     func scrub(to fraction: Double) {
-        guard let id = minimap.drawnId(atFraction: fraction), id != lastScrubbed else { return }
+        guard let id = minimap.shownId(atFraction: fraction), id != lastScrubbed else { return }
         request(id)
     }
 
     func endScrub() { lastScrubbed = nil }
 
-    /// One drawn message up or down — the minimap's adjustable action, and the only way to move
+    /// One message with a row up or down — the minimap's adjustable action, and the only way to move
     /// it without a pointer.
     ///
     /// Stepped from the message this last asked for, as long as that message is still on screen,
@@ -171,7 +334,7 @@ final class ReaderModel {
         let requested: String? = scrollRequest?.id
         let anchor = requested.flatMap { onScreen.contains($0) ? $0 : nil }
             ?? minimap.firstOnScreen(of: onScreen)
-        guard let id = minimap.drawnId(steppingFrom: anchor, by: delta) else { return }
+        guard let id = minimap.shownId(steppingFrom: anchor, by: delta) else { return }
         request(id)
     }
 
@@ -202,14 +365,20 @@ final class ReaderModel {
                 // would be an answer about whatever was open before.
                 guard !Task.isCancelled, self.conv?.id == id else { return }
                 self.transcript = transcript
-                self.minimap = MinimapLayout(transcript.messages)
+                // Over the drawn messages and not over all of them: a successful tool result is
+                // not a row anywhere, so counting it into a run would say the agent did more than
+                // a reader can be shown.
+                self.segments = Segment.over(transcript.drawnMessages)
                 self.failure = nil
+                self.restack()
             } catch is CancellationError {
                 return
             } catch {
                 guard !Task.isCancelled, self.conv?.id == id else { return }
                 self.transcript = nil
+                self.segments = []
                 self.failure = ReaderModel.describe(error)
+                self.restack()
             }
             self.loading = false
             self.inFlight = nil
@@ -239,4 +408,31 @@ final class ReaderModel {
             String(describing: error)
         }
     }
+}
+
+/// One line of the transcript, which is a message or is a statement about several.
+///
+/// The summary is not a message and never acquires an id that could be mistaken for one: the
+/// conversation does not contain it, `cs show` has never heard of it, and the day the run rule
+/// moves into core (`chat-search-me9.45`) what arrives will be a fact about a stretch of messages
+/// rather than a thirty-first message.
+enum ReaderRow: Identifiable, Sendable {
+    case message(Block)
+    case summary(Segment)
+
+    var id: String {
+        switch self {
+        case .message(let block): ReaderRow.id(ofMessage: block.id)
+        case .summary(let segment): "segment:\(segment.index)"
+        }
+    }
+
+    /// The row id a message has, for the two callers that hold a message id and need to reach the
+    /// row drawn from it.
+    ///
+    /// Prefixed rather than passed through, because the two id spaces are unrelated: a message id
+    /// is opaque and nothing says a conversation cannot hold one that reads like `segment:3`. This
+    /// is the only conversion, so a caller that forgets it fails to compile rather than scrolling
+    /// to a row that is not there.
+    static func id(ofMessage id: String) -> String { "message:\(id)" }
 }

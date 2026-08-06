@@ -46,6 +46,18 @@ final class MarkedText {
     private(set) var builds = 0
     private(set) var reuses = 0
 
+    /// Put the counters back where a pass found them.
+    ///
+    /// `--shot` drives several things in one run and only one of them is a claim about a scroll.
+    /// Turning the fidelity knobs rebuilds every message on purpose — that is what a fold change
+    /// *is* — so a pass that does it would leave these reading like the regression they exist to
+    /// detect. The pass that disturbs them scopes itself instead of the passes downstream having
+    /// to know about it. Never called by anything a person can reach.
+    func restoreCounters(builds: Int, reuses: Int) {
+        self.builds = builds
+        self.reuses = reuses
+    }
+
     private struct Entry {
         let fold: Fold
         let text: AttributedString

@@ -245,8 +245,8 @@ pub struct Group {
     pub cwd: Option<String>,
     /// The model of the last message that named one, resolved in the indexer's rollup — a
     /// summary of `message.model` rather than a fact about the conversation (ADR 24). `null`
-    /// for 1,300 of 4,426, which is every Google Takeout row plus 20 that never reached an
-    /// assistant turn.
+    /// for 1,300 of 4,426: every Google Takeout row, whose export records no model, plus 20
+    /// elsewhere that named none.
     pub model: Option<String>,
     /// **Opaque ordering.** Results arrive best-first; a client never re-sorts on this and never
     /// parses it. Today it is damped BM25 divided by a recency factor, and the ranking is

@@ -991,8 +991,8 @@ pub(crate) struct Group {
     /// conversations that hold no messages, which is a third state and not a fork count.
     ///
     /// The sitting's opener's, not the sitting's sum: an activity-log fold is one linear chat
-    /// read back out of N records, and adding their thread counts would report eight forks on
-    /// a Gemini conversation that never branched.
+    /// read back out of N records, so adding their thread counts would report a record count as
+    /// a fork count on a Gemini conversation that never branched.
     pub thread_count: i64,
     /// Working directory the conversation ran in, for sources that have one.
     ///
@@ -1007,8 +1007,8 @@ pub(crate) struct Group {
     /// ended on. A client drawing it is drawing the last model used and should not imply more.
     ///
     /// `None` for 1,300 of 4,426 — every one of the 1,280 Google Takeout rows, whose export
-    /// records no model at all, plus 20 conversations across the other sources that never got
-    /// as far as an assistant turn.
+    /// records no model at all, plus 20 elsewhere: 12 that hold no assistant turn and 8 whose
+    /// assistant turns declared nothing.
     ///
     /// The opener's where a row is a sitting, for the same reason [`Group::thread_count`] is;
     /// on this corpus that is always `None` either way.
@@ -1159,9 +1159,10 @@ pub(crate) fn recent(
     let sql = format!(
         "SELECT c.id, c.source, c.title, {ended}, {turns}, c.native_id,
                 c.deleted_upstream_at, {msgs}, {prose}, c.cwd,
-                -- Not `sittings::total`: those four columns are sums over a fold, and neither
-                -- of these is a sum. A string has nothing to add up, and adding thread counts
-                -- would call a Gemini sitting eight forks. Both are the opening record's.
+                -- Not `sittings::total`: that rolls four columns up over a fold, and neither of
+                -- these rolls up. A string has nothing to add, and adding thread counts would
+                -- report a Gemini sitting's record count as a fork count. Both are the
+                -- opening record's.
                 c.thread_count, c.model
          FROM conversation c
          {join}

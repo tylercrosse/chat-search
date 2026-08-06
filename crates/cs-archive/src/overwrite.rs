@@ -48,6 +48,14 @@ pub enum Loss {
     /// a fresh config records searches, so overwriting one that switched it off starts writing
     /// to `queries.jsonl` again behind somebody who deliberately stopped it.
     QueryLog(bool),
+    /// Comment lines, which a `Config` has never seen: the file is written by
+    /// `toml::to_string_pretty`, which serialises values and nothing else.
+    ///
+    /// The smallest loss here and the one most likely to be the point. The reference config on
+    /// the machine this was built for carries twenty lines explaining why the Takeout globs lead
+    /// with `**/` and why the ChatGPT block points at a directory rather than at an export —
+    /// reasons that took a survey to establish and that nothing else records.
+    Comments(usize),
 }
 
 /// Why detection has no entry for a source, which is most of how bad dropping it would be.
@@ -71,7 +79,11 @@ pub enum Unreproducible {
 ///
 /// Empty means the write is reversible by re-running detection, which is the only case `cs init`
 /// lets through.
-pub fn losses(existing: &Config, fresh: &Config) -> Vec<Loss> {
+///
+/// `existing_text` is the file `existing` was parsed from, and it is a second parameter rather
+/// than an oversight: a `Config` is values, and the prose beside them is authored too. Passing
+/// the empty string asks only about the values.
+pub fn losses(existing: &Config, existing_text: &str, fresh: &Config) -> Vec<Loss> {
     // Destructured rather than read field by field, so a setting added to `Config` later cannot
     // slip past unexamined: this stops compiling until somebody has decided whether losing the
     // new field is worth refusing over. The whole bug was a field nobody thought about at the
@@ -105,7 +117,23 @@ pub fn losses(existing: &Config, fresh: &Config) -> Vec<Loss> {
             Some(_) => {}
         }
     }
+
+    // Last, because it is the smallest of them and the report reads worst-first.
+    let comments = comment_lines(existing_text);
+    if comments > 0 {
+        losses.push(Loss::Comments(comments));
+    }
     losses
+}
+
+/// Lines that are wholly a comment.
+///
+/// Counted at the start of a trimmed line rather than anywhere in it, which undercounts: a `#`
+/// after a value is a comment too, and telling one from a `#` inside a glob needs the parser
+/// this deliberately does not have. Undercounting is the safe direction — the number decides
+/// how loudly to say "there is prose here", and only zero decides anything at all.
+fn comment_lines(text: &str) -> usize {
+    text.lines().filter(|l| l.trim_start().starts_with('#')).count()
 }
 
 /// Which register an id belongs to, given that detection did not produce it.
@@ -158,7 +186,7 @@ mod tests {
         // The case `--force` still exists for. Both configs name `codex` the same way, so the
         // write is the same file plus whatever detection has since found.
         let detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
-        assert!(losses(&existing(|_| {}), &detected).is_empty());
+        assert!(losses(&existing(|_| {}), "", &detected).is_empty());
     }
 
     #[test]
@@ -167,7 +195,7 @@ mod tests {
         // was written is added, and adding is not a loss.
         let sparse = fresh(vec![]);
         let detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
-        assert!(losses(&sparse, &detected).is_empty());
+        assert!(losses(&sparse, "", &detected).is_empty());
     }
 
     #[test]
@@ -178,7 +206,7 @@ mod tests {
         let cfg = existing(|c| c.sources.push(src("chatgpt-export", "/home/exports")));
         let detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
         assert_eq!(
-            losses(&cfg, &detected),
+            losses(&cfg, "", &detected),
             [Loss::Source(src("chatgpt-export", "/home/exports"), Unreproducible::ServerSide)]
         );
     }
@@ -190,7 +218,7 @@ mod tests {
         let cfg = existing(|c| c.sources.push(src("gemini-cli", "/home/.gemini/tmp")));
         let detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
         assert_eq!(
-            losses(&cfg, &detected),
+            losses(&cfg, "", &detected),
             [Loss::Source(src("gemini-cli", "/home/.gemini/tmp"), Unreproducible::Absent)]
         );
     }
@@ -200,7 +228,7 @@ mod tests {
         let cfg = existing(|c| c.sources.push(src("some-other-agent", "/home/.other")));
         let detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
         assert_eq!(
-            losses(&cfg, &detected),
+            losses(&cfg, "", &detected),
             [Loss::Source(src("some-other-agent", "/home/.other"), Unreproducible::Unknown)]
         );
     }
@@ -212,7 +240,7 @@ mod tests {
         let cfg = existing(|c| c.sources[0].path = PathBuf::from("/Volumes/ext/.codex/sessions"));
         let detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
         assert_eq!(
-            losses(&cfg, &detected),
+            losses(&cfg, "", &detected),
             [Loss::Repointed {
                 existing: src("codex", "/Volumes/ext/.codex/sessions"),
                 detected: src("codex", "/home/.codex/sessions"),
@@ -226,7 +254,7 @@ mod tests {
         // Reverting it is silent partial capture, which is the failure that looks like success.
         let cfg = existing(|c| c.sources[0].include.push("**/*.jsonl.zst".into()));
         let detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
-        assert!(matches!(losses(&cfg, &detected)[..], [Loss::Repointed { .. }]));
+        assert!(matches!(losses(&cfg, "", &detected)[..], [Loss::Repointed { .. }]));
     }
 
     #[test]
@@ -234,7 +262,7 @@ mod tests {
         let cfg = existing(|c| c.archive_root = PathBuf::from("/Volumes/ext/chat-archive"));
         let detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
         assert_eq!(
-            losses(&cfg, &detected),
+            losses(&cfg, "", &detected),
             [Loss::ArchiveRoot(PathBuf::from("/Volumes/ext/chat-archive"))]
         );
     }
@@ -245,13 +273,13 @@ mod tests {
         // somebody saying "keep this" in the only vocabulary `cs init` has.
         let cfg = existing(|c| c.machine_alias = Some("laptop".into()));
         let mut detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
-        assert_eq!(losses(&cfg, &detected), [Loss::MachineAlias("laptop".into())]);
+        assert_eq!(losses(&cfg, "", &detected), [Loss::MachineAlias("laptop".into())]);
 
         detected.machine_alias = Some("laptop".into());
-        assert!(losses(&cfg, &detected).is_empty());
+        assert!(losses(&cfg, "", &detected).is_empty());
         // A different alias is a rename somebody typed, not something being taken from them.
         detected.machine_alias = Some("desktop".into());
-        assert!(losses(&cfg, &detected).is_empty());
+        assert!(losses(&cfg, "", &detected).is_empty());
     }
 
     #[test]
@@ -260,7 +288,29 @@ mod tests {
         // is the one event that can turn it back on without anybody asking for it.
         let cfg = existing(|c| c.log_queries = false);
         let detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
-        assert_eq!(losses(&cfg, &detected), [Loss::QueryLog(false)]);
+        assert_eq!(losses(&cfg, "", &detected), [Loss::QueryLog(false)]);
+    }
+
+    #[test]
+    fn prose_beside_the_values_is_a_loss_of_its_own() {
+        // A config `cs init` could otherwise rewrite safely, annotated. The values survive the
+        // round trip through `toml::to_string_pretty` and the reasons do not, and the reasons
+        // are the half that cost somebody an afternoon.
+        let cfg = existing(|_| {});
+        let detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
+        let text = "# unpacked here because the volume is bigger\narchive_root = \"/home/.chat-archive\"\n";
+        assert_eq!(losses(&cfg, text, &detected), [Loss::Comments(1)]);
+        assert!(losses(&cfg, "archive_root = \"/home/.chat-archive\"\n", &detected).is_empty());
+    }
+
+    #[test]
+    fn a_hash_inside_a_value_is_not_mistaken_for_prose() {
+        // Undercounting is the safe direction, and this is the case that decides it: a glob or a
+        // path may hold a `#`, and refusing over one would make the refusal mean nothing.
+        let cfg = existing(|_| {});
+        let detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
+        assert!(losses(&cfg, "  include = [\"**/#drafts/*.json\"]\n", &detected).is_empty());
+        assert_eq!(comment_lines("   # indented prose is still prose\n"), 1);
     }
 
     #[test]
@@ -273,6 +323,6 @@ mod tests {
             c.sources.push(src("chatgpt-export", "/home/exports"));
         });
         let detected = fresh(vec![src("codex", "/home/.codex/sessions")]);
-        assert_eq!(losses(&cfg, &detected).len(), 3);
+        assert_eq!(losses(&cfg, "", &detected).len(), 3);
     }
 }

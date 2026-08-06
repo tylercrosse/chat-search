@@ -917,12 +917,111 @@ fn scan(config_path: &PathBuf, only: Option<&str>, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn init(config_path: &PathBuf, machine_alias: Option<String>, force: bool) -> Result<()> {
-    if config_path.exists() && !force {
-        anyhow::bail!("{} already exists (use --force to overwrite)", config_path.display());
+/// Why `cs init` will not write over the config that is already there (chat-search-a7k.30).
+///
+/// Rendered into a string rather than printed like the two reports above it, because this one
+/// *is* the error. It has to leave a nonzero exit behind, and a refusal whose reason went to
+/// stdout while its exit code went to a script is a refusal that gets read as a success.
+fn refusal(losses: &[cs_archive::Loss], config_path: &Path, fresh: &Config) -> String {
+    use cs_archive::overwrite::{Loss, Unreproducible};
+
+    // Path, layout and globs, because any of the three can be the edit. Two of these lines sit
+    // one above the other and the eye has to find the difference between them.
+    let describe = |s: &cs_archive::Source| {
+        format!("{}  {:?}  {:?}", s.path.display(), s.layout, s.include)
+    };
+
+    let mut lines = vec![format!(
+        "refusing to overwrite {}: it names things `cs init` cannot write again, and --force\n\
+         deletes them rather than keeping them.\n",
+        config_path.display()
+    )];
+    for loss in losses {
+        match loss {
+            Loss::Source(s, why) => lines.push(format!(
+                "  dropped        {:<15} {} — {}",
+                s.id,
+                s.path.display(),
+                match why {
+                    Unreproducible::ServerSide =>
+                        "no detection can find this surface, now or ever (ADR 21)",
+                    Unreproducible::Absent => "that directory is not on this machine today",
+                    Unreproducible::Unknown => "this build ships no candidate for that id",
+                }
+            )),
+            Loss::Repointed { existing, detected } => {
+                lines.push(format!("  rewritten      {:<15} {}", existing.id, describe(existing)));
+                lines.push(format!("                 {:<15} {}", "would become", describe(detected)));
+            }
+            Loss::ArchiveRoot(root) => lines.push(format!(
+                "  archive root   {} — a fresh config looks in {}",
+                root.display(),
+                fresh.archive_root.display()
+            )),
+            Loss::MachineAlias(alias) => lines.push(format!(
+                "  machine alias  {alias} — pass --machine-alias {alias} to restate it"
+            )),
+            Loss::QueryLog(_) => lines.push(
+                "  query log      off — a fresh config records searches again".to_string(),
+            ),
+            Loss::Comments(n) => lines.push(format!(
+                "  comments       {n} line{} — the file is written from values, and a value \
+                 carries no reason",
+                if *n == 1 { "" } else { "s" }
+            )),
+        }
     }
+
+    lines.push(format!(
+        "\n  \
+         `cs init` writes what detection finds on this disk, and none of the above is something\n  \
+         it can find. An export is unpacked wherever somebody put it and the config is the only\n  \
+         record of where (ADR 21); an edited path or glob is a decision, and a decision cannot\n  \
+         be re-derived. Nothing in the archive is at risk — an id is permanent, so re-adding a\n  \
+         block resumes capture (ADR 16) — but nobody re-adds a block they were never told had\n  \
+         gone.\n\
+         \n  \
+         The file is untouched. `cs archive --dry-run` lists what detection found that it does\n  \
+         not name, with blocks to paste. To start over anyway, move it aside:\n\
+         \n      \
+         mv {p} {p}.bak",
+        p = config_path.display()
+    ));
+    lines.join("\n")
+}
+
+fn init(config_path: &PathBuf, machine_alias: Option<String>, force: bool) -> Result<()> {
     let mut cfg = Config::default();
     cfg.machine_alias = machine_alias;
+
+    if config_path.exists() {
+        // Read before written, which `--force` did not do at all: it built a default config and
+        // saved it, so a hand-added export block was deleted by a command whose output said
+        // nothing about it (chat-search-a7k.30). A config that does not parse is refused for
+        // the same reason under a different sentence — it may name a source nothing can
+        // rediscover, and an unreadable file is the one case where this cannot say which.
+        let existing = Config::load(config_path).with_context(|| {
+            format!(
+                "reading {} — it is already there, and until it parses this cannot say what \
+                 overwriting it would delete. Move it aside if you want a fresh one.",
+                config_path.display()
+            )
+        })?;
+        // Read a second time, because `Config::load` owns the tilde expansion and the id
+        // validation that make the comparison below meaningful, and throws away the bytes that
+        // say why any of it is there. Both readings are needed and the file is a few hundred
+        // bytes.
+        let text = std::fs::read_to_string(config_path)
+            .with_context(|| format!("reading {}", config_path.display()))?;
+        let losses = cs_archive::overwrite::losses(&existing, &text, &cfg);
+        if !losses.is_empty() {
+            anyhow::bail!(refusal(&losses, config_path, &cfg));
+        }
+        if !force {
+            anyhow::bail!("{} already exists (use --force to overwrite)", config_path.display());
+        }
+    }
+
     cfg.save(config_path).with_context(|| format!("writing {}", config_path.display()))?;
 
     let m = machine::load_or_create(&cfg.archive_root, cfg.machine_alias.as_deref())

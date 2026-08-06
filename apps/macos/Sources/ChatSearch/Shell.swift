@@ -108,7 +108,19 @@ struct Shell: View {
                         + (model.settled ? "\(model.total)" : "\(model.total)+"))
                     .foregroundStyle(theme.color(.ink2))
                 if model.grouping != .none {
-                    Text("\(model.groups.count) groups by \(model.grouping.label)")
+                    // The folded count sits with the group count rather than replacing it: a
+                    // folded group is still a group, and a screen of eleven heads has to be able
+                    // to say whether it is eleven groups or eleven groups with nine of them shut.
+                    Text(
+                        "\(model.groups.count) groups by \(model.grouping.label)"
+                            + (model.foldedGroups > 0 ? " · \(model.foldedGroups) folded" : ""))
+                }
+                // What Enter would do where the cursor is, and only when that is not what Enter
+                // has always done. The prototype drew `→` here and wired nothing
+                // (`poc/ui/NOTES.md` §5); wiring a key and drawing nothing is the same defect
+                // from the other side.
+                if let hint = model.cursorHint {
+                    Text(hint).foregroundStyle(theme.color(.ink2))
                 }
                 Spacer()
                 // Kept because it costs nothing: `cs` measures its own query time and the client

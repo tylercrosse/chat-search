@@ -5,19 +5,18 @@ import SwiftUI
 /// The head of one group: its name, how many rows are under it, when they happened, and the shape
 /// of that in time.
 ///
-/// `poc/ui`'s `.pj-head` is the layout — name, tags, count, span, sparkline — with two of its
-/// cells deliberately absent here:
+/// `poc/ui`'s `.pj-head` is the layout — twisty, name, tags, count, span, sparkline — with one of
+/// its cells deliberately absent here:
 ///
-/// - **No twisty, because these do not fold.** The prototype folds every axis because it groups a
-///   corpus-scale export, where thirteen open headers are a project index and one open group
-///   buries the other twelve. This groups the `--limit` window of a ranked answer, so folding
-///   would hide the answer behind its own headers — and the prototype's own note says the fold
-///   left it leaning on a keyboard affordance it never wired (`poc/ui/NOTES.md` §2, §5). Filed as
-///   the row window grows: `chat-search-me9.8.15`.
 /// - **No source badges.** The prototype puts a strip of tiny source icons on every header. There
 ///   is no asset catalog in this package and SF Symbols has no glyph for a vendor
 ///   (`chat-search-me9.8.2`), so the honest version here would be colour alone — which
 ///   `poc/ui/NOTES.md` §7 rules out. The source is in every row underneath.
+///
+/// The head is a control as well as a label: clicking it folds the group, and so does Enter with
+/// the cursor on it (`chat-search-me9.8.15`). What the fold does *not* change is anything the head
+/// says — the count, the span and the sparkline are drawn folded exactly as they are open, because
+/// a folded group and a group that is not there have to look different.
 ///
 /// Nothing here names a colour, a size or a face; every one is a token off `\.theme`
 /// (`chat-search-me9.8.8`). The source hue is read from `Display.sourceHue`, the row's own
@@ -25,10 +24,25 @@ import SwiftUI
 struct GroupHeader: View {
     let group: ConversationGroup
     let axis: Grouping
+    /// Whether the rows under this head are drawn. The head is drawn either way.
+    let folded: Bool
+    /// Whether the keyboard cursor is standing on this head, which is a place it could not be
+    /// before there was a fold to reach.
+    let cursored: Bool
     @Environment(\.theme) private var theme
 
     var body: some View {
         HStack(spacing: theme.metric(.rowGap)) {
+            // `poc/ui`'s `.tw`: one triangle that rotates rather than two glyphs that swap, so the
+            // mark stays continuous through the state change. Its cell is a fixed width — the
+            // prototype spends a 14px grid track on the same thing — because the only thing this
+            // cell has to guarantee is that the name starts at the same x folded and open.
+            Image(systemName: "chevron.right")
+                .font(theme.font(.micro))
+                .foregroundStyle(theme.color(.ink3))
+                .rotationEffect(.degrees(folded ? 0 : 90))
+                .frame(width: 9)
+
             Text(name)
                 .font(theme.font(.body, .mono, weight: .semibold))
                 .foregroundStyle(theme.color(group.hue ?? (group.isResidue ? .ink2 : .ink)))
@@ -79,7 +93,12 @@ struct GroupHeader: View {
         // A section header in a plain `List` scrolls over the rows above it, so it needs a ground
         // of its own — `--panel`, the same one the rail and the footer stand on. The prototype's
         // header is transparent because a web list does not float it.
-        .background(theme.color(.panel))
+        //
+        // Under the cursor it takes `--sel-bg`, the same mark a row under the cursor takes: the
+        // cursor is one cursor whether it is standing on a conversation or on the head of a group,
+        // and drawing it two ways would say it was two things.
+        .background(theme.color(cursored ? .selBg : .panel))
+        .contentShape(Rectangle())
         .overlay(alignment: .bottom) {
             Rectangle().fill(theme.color(.rule)).frame(height: 1)
         }

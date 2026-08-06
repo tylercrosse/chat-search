@@ -2,6 +2,20 @@ import CsKit
 import Observation
 import QuartzCore
 
+/// One line the list draws, and therefore one place the cursor can be.
+///
+/// Ungrouped this is the rows and nothing else, which is all the cursor has ever moved through.
+/// Grouped it is a group head followed by its rows — and followed by nothing when that group is
+/// folded, which is the whole of how a folded section is kept from holding the cursor. A head is a
+/// place the cursor can rest because it has to be: fold everything and there is no row left to
+/// stand on, and the key that opens one back up has to be pressed somewhere.
+enum Cursor: Equatable {
+    /// A conversation, by `Conversation.id`.
+    case row(String)
+    /// The head of a group, by `ConversationGroup.key`.
+    case head(String)
+}
+
 /// What the window knows: a query, the answer to it, and what the index said about itself while
 /// answering.
 ///
@@ -45,9 +59,26 @@ final class SearchModel {
     /// the grouped one would open the row above or below the one under it.
     private(set) var grouping: Grouping = .none
     private(set) var groups: [ConversationGroup] = []
-    /// Which row Enter would open. An id rather than an index: the list is replaced wholesale on
-    /// every keystroke, and a position means a different conversation each time it is.
-    var selected: String?
+    /// Whether a group nobody has touched is drawn folded.
+    ///
+    /// False, and that is a statement about *this* window rather than about grouping. `poc/ui`
+    /// opens every axis folded and is right to: it groups a corpus-scale export, where thirteen
+    /// heads carrying a count, a span and a sparkline are a project index and one open group buries
+    /// the other twelve (`poc/ui/NOTES.md` §2). This groups the `--limit` window of a ranked answer
+    /// — 60 rows — so folding by default would hide the answer behind its own heads on every
+    /// keystroke. The trade flips when that window grows, which is why the default is one boolean
+    /// here rather than an assumption spread through the view: `--folded` already flips it.
+    private(set) var foldsByDefault = false
+    /// The groups drawn against that default, by `ConversationGroup.key`.
+    ///
+    /// Not pruned to the groups that currently exist. A keystroke can narrow the list until a group
+    /// has no rows in it and the next one bring it back, and a fold that forgot itself in between
+    /// would be a list rearranging under a cursor that never asked it to.
+    private var toggled: Set<String> = []
+    /// Which line Enter would act on — a conversation to open, or a group head to fold. An id
+    /// rather than an index: the list is replaced wholesale on every keystroke, and a position
+    /// means a different conversation each time it is.
+    var cursor: Cursor?
     /// What the last open attempt said, or nil if it opened. Cleared by the next keystroke,
     /// because a message about a conversation is stale the moment the list is not that list.
     private(set) var openFailure: String?
@@ -156,7 +187,7 @@ final class SearchModel {
         self.health = health
         conversations = []
         unappliedFilters = []
-        selected = nil
+        cursor = nil
         regroup()
     }
 
@@ -165,29 +196,121 @@ final class SearchModel {
     func group(by axis: Grouping) {
         guard axis != grouping else { return }
         grouping = axis
+        // Switching axes clears the accordion rather than restoring it (`poc/ui/NOTES.md` §2):
+        // groups are *ranked*, so the set you left open is rarely the set at the top when you come
+        // back — and a key from the axis you left cannot name a group on the axis you arrived at
+        // anyway. Clicking the axis already in force returns above, so the reset is a consequence
+        // of switching and never a surprise.
+        toggled.removeAll()
         regroup()
+        place()
     }
 
-    /// The rows in the order they are drawn, which is the order the cursor moves in.
+    /// The conversation under the cursor, or nil when the cursor is on a group head.
+    var selected: String? {
+        guard case .row(let id) = cursor else { return nil }
+        return id
+    }
+
+    /// Whether this group is drawn folded.
+    func isFolded(_ key: String) -> Bool { foldsByDefault != toggled.contains(key) }
+
+    /// How many groups are folded, which the footer says because a folded group and a group that
+    /// is not there look the same from above it.
+    var foldedGroups: Int { groups.filter { isFolded($0.key) }.count }
+
+    /// Fold or unfold one group, and take the cursor with it.
     ///
-    /// Ungrouped that is the ranking. Grouped it is the same rows gathered — `project` and
-    /// `source` preserve the ranking, `run` re-orders by time because a run cannot be found any
-    /// other way — and either way this is what the screen shows, which is what an arrow key means.
-    var rows: [Conversation] {
-        grouping == .none ? conversations : groups.flatMap(\.items)
+    /// Folding the group the cursor is standing in would leave it on a row that is no longer drawn
+    /// — the one state a fold must not be able to produce, because the next Enter would then open a
+    /// conversation nobody can see. The head is where it goes: the line that is still on the screen,
+    /// and the line that opens the group again.
+    func toggleFold(_ key: String) {
+        if toggled.contains(key) { toggled.remove(key) } else { toggled.insert(key) }
+        guard isFolded(key), case .row(let id) = cursor else { return }
+        let holdsCursor = groups.first(where: { $0.key == key })?
+            .items.contains(where: { $0.id == id })
+        if holdsCursor == true { cursor = .head(key) }
+    }
+
+    /// Fold or unfold everything, which is the state `--folded` opens in.
+    ///
+    /// It moves the default rather than folding each group in turn, so a group that arrives on a
+    /// later keystroke is in the same state as the ones already on screen. An instrument that
+    /// measured a folded list for the first phrase and a half-folded one for the second would not
+    /// be measuring anything.
+    func foldAll(_ folded: Bool) {
+        foldsByDefault = folded
+        toggled.removeAll()
+        place()
+    }
+
+    /// Every line the list draws, in the order it draws them — which is the order an arrow key
+    /// moves through.
+    ///
+    /// Ungrouped that is the ranking and nothing else. Grouped it is a head per group and, under
+    /// each open one, the same rows gathered: `project` and `source` preserve the ranking, `run`
+    /// re-orders by time because a run cannot be found any other way. **A folded group contributes
+    /// its head and nothing more**, which is the single place the fold has to be honoured — there
+    /// is no other arithmetic in this class that has to remember what is on the screen.
+    var lines: [Cursor] {
+        guard grouping != .none else { return conversations.map { .row($0.id) } }
+        return groups.flatMap { group in
+            isFolded(group.key)
+                ? [Cursor.head(group.key)]
+                : [Cursor.head(group.key)] + group.items.map { Cursor.row($0.id) }
+        }
     }
 
     private func regroup() {
         groups = grouping.groups(of: conversations)
     }
 
+    /// Put the cursor on a line the list actually draws.
+    ///
+    /// A narrowed query can take the cursor's row out of the answer, and a fold can take it off the
+    /// screen; either way a cursor pointing at something the list does not draw is a cursor that
+    /// opens the wrong conversation on Enter. Fall back to the first line, which is where it
+    /// started.
+    private func place() {
+        let lines = self.lines
+        if let cursor, lines.contains(cursor) { return }
+        cursor = lines.first
+    }
+
     /// Move the cursor. Wraps at neither end, so holding a key does not roll off the bottom and
     /// come back somewhere unexpected.
     func moveSelection(by delta: Int) {
-        let rows = self.rows
-        guard !rows.isEmpty else { return }
-        let here = rows.firstIndex { $0.id == selected } ?? 0
-        selected = rows[min(max(here + delta, 0), rows.count - 1)].id
+        let lines = self.lines
+        guard !lines.isEmpty else { return }
+        let here = cursor.flatMap { lines.firstIndex(of: $0) } ?? 0
+        cursor = lines[min(max(here + delta, 0), lines.count - 1)]
+    }
+
+    /// What Enter does, which is a question about what the cursor is on: a conversation opens, a
+    /// group head folds or unfolds.
+    ///
+    /// One key rather than the prototype's `→`, and not because a second binding would be
+    /// expensive. The only focused view in this window is the query box, so a key this app binds is
+    /// a key the box stops getting — and left and right are how a caret moves through a query that
+    /// is a grammar (`agent:codex`, a quoted `dir:` with a space in it). Enter is already the
+    /// list's rather than the field's, so the fold costs nothing that was being used.
+    func activate() {
+        switch cursor {
+        case .row: openSelected()
+        case .head(let key): toggleFold(key)
+        case nil: break
+        }
+    }
+
+    /// What Enter would do where the cursor is, when that is not what it has always done.
+    ///
+    /// `poc/ui/NOTES.md` §5's complaint about the prototype is a footer that drew a key nobody had
+    /// wired. A fold the keyboard can reach and no footer mentions is the same defect from the
+    /// other side, so the one line that is new — the cursor standing on a group head — says so.
+    var cursorHint: String? {
+        guard case .head(let key) = cursor else { return nil }
+        return isFolded(key) ? "⏎ opens this group" : "⏎ folds this group"
     }
 
     /// Open the selected conversation where it lives.
@@ -262,12 +385,7 @@ final class SearchModel {
         // Before the cursor is placed: grouped, the first row on the screen is the first row of
         // the first group, which is not `conversations.first` on the one axis that re-orders.
         regroup()
-        // A filter that narrows the list can take the cursor's row out of it, and a cursor
-        // pointing at something the list no longer contains is a cursor that opens the wrong
-        // conversation on Enter. Fall back to the best row, which is the one it started on.
-        if selected == nil || !conversations.contains(where: { $0.id == selected }) {
-            selected = rows.first?.id
-        }
+        place()
         // The keystroke is not finished until a frame carries it. Hand the start time to the
         // display link, which is the only thing that knows when that was.
         frames?.pendingSince = started

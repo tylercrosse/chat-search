@@ -176,6 +176,20 @@ enum Measure {
             print("  by \(axis.rawValue) → \(model.groups.count) groups over "
                 + "\(model.conversations.count) rows, \(residue) in the residue")
             print("  \(file) \(capture(window, to: file))")
+
+            // And the same axis shut, which is the picture the fold was argued from and against.
+            // `poc/ui/NOTES.md` §2 states the cost of folding in exactly these terms — `source`
+            // has four groups, so folded it is four rows and a lot of empty column — and whether
+            // that reads as an index or as an empty screen is a question about a picture rather
+            // than a number. The row count is printed beside it because a folded list cannot say
+            // how much is behind it, which is the other half of the same question.
+            model.foldAll(true)
+            try? await Task.sleep(for: .milliseconds(400))
+            let shut = path.replacingOccurrences(of: ".png", with: "-by-\(axis.rawValue)-folded.png")
+            print("  by \(axis.rawValue), folded → \(model.foldedGroups) heads hiding "
+                + "\(model.conversations.count) rows, cursor on \(describe(model.cursor))")
+            print("  \(shut) \(capture(window, to: shut))")
+            model.foldAll(false)
         }
         model.group(by: .none)
 
@@ -321,6 +335,16 @@ enum Measure {
             return "(\(png.count) bytes)"
         } catch {
             return "(\(error))"
+        }
+    }
+
+    /// Where the cursor ended up, which is the half of the fold no picture shows: the acceptance
+    /// this was built to is that folding never leaves it on a row nobody can see.
+    private static func describe(_ cursor: Cursor?) -> String {
+        switch cursor {
+        case .row(let id): "a row (\(id))"
+        case .head(let key): "a group head (\(key))"
+        case nil: "nothing"
         }
     }
 

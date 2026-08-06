@@ -287,6 +287,12 @@ missing edge rather than a missing file.
   The gap is still a gap: it is a stated list rather than a discovered one, so a fourth surface
   is invisible until somebody adds it, and `claude-ai` is named without a block because no export
   of that shape has been seen here. What changed is that the omission announces itself.
+  The same asymmetry decides what `cs init` may do to a config that already exists. `--force`
+  used to save a fresh `Config::default()` over it, which deleted both blocks above and the
+  comments beside them and said nothing; it now compares first and refuses unless re-running
+  detection would put back everything the file holds (`cs_archive::overwrite`,
+  chat-search-a7k.30). So it adds what has appeared since and never removes what it cannot
+  find, and regenerating an edited config is a `mv` somebody types.
   **This paragraph is load-bearing.** `cs-archive`'s staleness nag (chat-search-a7k.10) derives
   "export-shaped" from exactly this — absence from the candidate list — so adding an export id
   to `candidate_sources()` would silently switch its nag off rather than fail, and would also

@@ -190,6 +190,7 @@ enum Measure {
                 + "\(model.conversations.count) rows, cursor on \(describe(model.cursor))")
             print("  \(shut) \(capture(window, to: shut))")
             model.foldAll(false)
+            await foldPass(model: model)
         }
         model.group(by: .none)
 
@@ -200,6 +201,54 @@ enum Measure {
         let library = path.replacingOccurrences(of: ".png", with: "-library.png")
         print("  library → \(capture(window, to: library)) \(library)")
         model.surface = .search
+    }
+
+    /// The fold's other half, which is not a picture: where the cursor is allowed to be.
+    ///
+    /// `chat-search-me9.8.15` is two claims — a group folds, and a folded group cannot hold the
+    /// cursor — and only the first of them shows up in a PNG. This drives the second: put the
+    /// cursor on a row, shut the group around it, then walk the list a line at a time from the top
+    /// and count what it landed on. There is no test target to put this in, for the same reason
+    /// `--verify-theme` is a flag (the Command Line Tools SDK carries neither `Testing` nor
+    /// `XCTest`), and an invariant checked by nobody is one that was true on the day it was
+    /// written.
+    @MainActor
+    private static func foldPass(model: SearchModel) async {
+        let axis = model.grouping
+        guard let first = model.groups.first, let inside = first.items.first else { return }
+
+        // A click on a head with the cursor already inside that group, which is the only gesture
+        // that can strand it.
+        model.cursor = .row(inside.id)
+        model.toggleFold(first.key)
+        let rescued = model.cursor == .head(first.key)
+
+        // Every line from the top, by the key an arrow sends. `lines` is what the list draws, so a
+        // row reached here that belongs to a folded group is a row on nobody's screen.
+        model.cursor = model.lines.first
+        var visited: [Cursor] = []
+        for _ in 0...model.lines.count {
+            if let cursor = model.cursor { visited.append(cursor) }
+            model.moveSelection(by: 1)
+        }
+        let hidden = Set(
+            model.groups.filter { model.isFolded($0.key) }.flatMap { $0.items.map(\.id) })
+        let trespass = visited.filter {
+            guard case .row(let id) = $0 else { return false }
+            return hidden.contains(id)
+        }
+
+        print("  fold, by \(axis.rawValue): \(model.foldedGroups) of \(model.groups.count) shut, "
+            + "\(model.lines.count) lines the cursor can reach")
+        print("    folding under the cursor moved it to the head: \(rescued)")
+        print("    rows reached inside a folded group: \(trespass.count) of \(hidden.count) hidden")
+
+        // Switching axes clears the accordion. Away and back, because clicking the axis already in
+        // force is inert by design and so would prove nothing.
+        model.group(by: axis == .source ? .project : .source)
+        model.group(by: axis)
+        try? await Task.sleep(for: .milliseconds(200))
+        print("    after switching axis and back: \(model.foldedGroups) folded")
     }
 
     /// The scroll relationship, driven from both ends.

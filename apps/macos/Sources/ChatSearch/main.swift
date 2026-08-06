@@ -32,6 +32,19 @@ struct Options {
     var themeLight: String?
     var themeDark: String?
     var appearance: String?
+    /// A token set to read off disk instead of drawing a direction (`chat-search-me9.8.10`). Not a
+    /// preference and not remembered: the file is the memory, and it is there or it is not. `nil`
+    /// is `ThemeFile.standardLocation` — which is a different thing from having named that path,
+    /// because a file that is absent where a flag pointed is a flag that did nothing.
+    var themeFile: URL?
+    /// Draw a direction for this run with the file left where it is. The way to see what the app
+    /// ships beside what you are dialling, without moving anything.
+    var noThemeFile = false
+    /// Write the theme this launch would draw to the theme file's path and exit. The fifth
+    /// non-affordance, and the answer to what would otherwise be an hour of typing: a user theme
+    /// has to be complete (ADR 25), so dialling one in starts from a direction rather than a blank
+    /// page. It writes values `poc/ui/palette.py` solved and this build already carries.
+    var writeTheme = false
     /// Search, open the first result and draw the window to a PNG, then quit. The third
     /// non-affordance, and the only way to check the reader from a script: what it draws is a
     /// picture, and no exit code describes one.
@@ -75,7 +88,12 @@ struct Options {
     /// Nobody is typing into this run. Every scripted mode stays out of the query log, because its
     /// queries are a benchmark's rather than a need somebody had, and out of the four preference
     /// keys. See `CsClient.driven`.
-    var scripted: Bool { measure || shot || clipboard }
+    ///
+    /// It now also decides that a run reads no theme file unless a flag names one, for the reason
+    /// it decides the rest: `--shot` draws what the script named it, and a frame that changed
+    /// because of a file in somebody's home directory is a frame of that home directory.
+    /// `--write-theme` is here because it must not remember whatever it was told to write out.
+    var scripted: Bool { measure || shot || clipboard || writeTheme }
 
     /// ...and all but one stay out of the *front*, so they can be run beside whatever a person is
     /// actually doing, and so a latency taken here is comparable with `poc/swift/RESULTS.md` §1,
@@ -118,6 +136,9 @@ func parse(_ argv: [String]) -> Options {
         case "--theme-light": o.themeLight = next()
         case "--theme-dark": o.themeDark = next()
         case "--appearance": o.appearance = next()
+        case "--theme-file": if let v = next() { o.themeFile = URL(fileURLWithPath: v) }
+        case "--no-theme-file": o.noThemeFile = true
+        case "--write-theme": o.writeTheme = true
         case "--shot": o.shot = true
         case "--query": if let v = next() { o.shotQuery = v }
         case "--out": if let v = next() { o.shotPath = v }
@@ -134,13 +155,20 @@ func parse(_ argv: [String]) -> Options {
                                        and the row metrics come from --theme, for both sides
                   --appearance WHICH   \(Appearance.names) — which side is drawn, whatever
                                        macOS is doing. Also remembered
+                  --theme-file PATH    draw the token set in this file instead of a direction.
+                                       Default \(ThemeFile.standardLocation.path)
+                                       when it is there. Measured on load and drawn either way
+                  --no-theme-file      ignore that file for this run and draw a direction
+                  --write-theme        write the theme this launch would draw to the theme
+                                       file's path, as the file --theme-file reads, and exit
                   --settings           open the settings window at launch. All three settings
                                        are on it, and it is Cmd-comma the rest of the time
                   --clipboard          press the Edit menu's keys in the search field and print
                                        what each one moved. The only run that takes the front
                   --measure            type the measurement phrases and print keystroke→frame
                   --interval MS        milliseconds between simulated keystrokes (default 100)
-                  --verify-theme       re-measure every compiled-in direction and exit
+                  --verify-theme       re-measure every compiled-in direction and exit. With
+                                       --theme-file, measure that file instead
                   --shot               search, open the first result, write the window to --out
                   --query TEXT         what --shot searches for (default "borrow checker")
                   --out PATH           where --shot writes its PNG (default /tmp/chat-search.png)
@@ -157,6 +185,39 @@ func parse(_ argv: [String]) -> Options {
         i += 1
     }
     return o
+}
+
+/// Sentences on stderr, where every other complaint about a theme goes (`ThemeChoice.resolve`).
+func complain(_ sentences: [String]) {
+    FileHandle.standardError.write(Data(sentences.map { $0 + "\n" }.joined().utf8))
+}
+
+/// A direction, written out as the file `--theme-file` reads back.
+///
+/// It refuses to overwrite, and that is the whole of its policy. A theme file is somebody's
+/// afternoon of nudging values, `--write-theme` is the first thing they will run again when they
+/// want to start over, and a flag that silently replaces the work is worse than one that makes you
+/// move it yourself. `--theme-file` names another path when the answer is "beside it, not over it".
+func writeTheme(_ theme: Theme, to url: URL) -> Int32 {
+    guard !FileManager.default.fileExists(atPath: url.path) else {
+        complain([
+            "there is already a file at \(url.path). Move it, or name another path with "
+                + "`--theme-file PATH` — this never writes over one."
+        ])
+        return 2
+    }
+    do {
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try ThemeFile.text(for: theme).write(to: url, atomically: true, encoding: .utf8)
+    } catch {
+        complain(["could not write \(url.path): \(error.localizedDescription)"])
+        return 2
+    }
+    print(
+        "\(url.path) — \(theme.name)'s tokens, as a \(ThemeClass.userTheme.label). Edit and "
+            + "relaunch; it is measured on load and drawn either way (docs/DECISIONS.md ADR 25).")
+    return 0
 }
 
 /// `WxH`, or nil for anything else. A malformed value leaves the default standing rather than
@@ -179,7 +240,23 @@ let options = parse(Array(CommandLine.arguments.dropFirst()))
 // rather than defaulted, here and everywhere else: what is compiled into this binary is what the
 // project ships, and shipping is what makes these measurements binding (docs/DECISIONS.md ADR 25).
 // A token set that arrived some other way is a different promise.
-if options.verifyTheme { exit(ThemeCheck.run(Theme.directions, as: .direction)) }
+//
+// Named a file, and it is the file being asked about instead. The gate stays what it was — every
+// direction, and nothing outside the binary — because a gate that read `$HOME` would pass or fail
+// on whose machine it ran. `--theme-file X --verify-theme` is somebody checking a candidate before
+// they load it, and it exits on the readings and never on the policy (`ThemeCheck.run`): 1 for a
+// token set that missed, 2 for a file that is not a token set at all.
+if options.verifyTheme {
+    guard let named = options.themeFile else {
+        exit(ThemeCheck.run(Theme.directions, as: .direction))
+    }
+    do {
+        exit(ThemeCheck.run(try ThemeFile.load(named), as: .userTheme))
+    } catch {
+        complain((error as? ThemeFile.Unreadable)?.sentences ?? ["\(named.path): \(error)"])
+        exit(2)
+    }
+}
 
 // Resolved once, here, and handed down. Not read from the environment's default by each view: the
 // default is what the build ships and this is what the person chose, and only one of those two is
@@ -193,9 +270,21 @@ let settings = ThemeSettings(
     ThemeChoice.resolve(
         ThemeChoice.Request(
             direction: options.theme, light: options.themeLight, dark: options.themeDark,
-            appearance: options.appearance),
+            appearance: options.appearance,
+            file: options.themeFile ?? ThemeFile.standardLocation,
+            fileNamed: options.themeFile != nil,
+            // The run that is about to write a theme file does not first read the one it is about
+            // to overwrite, which would make `--write-theme` a copy of itself.
+            ignoreFile: options.noThemeFile || options.writeTheme),
         remember: !options.scripted),
     remembers: !options.scripted)
+
+// After the theme is resolved, because what this writes is what this launch would have drawn —
+// `--theme paper --write-theme` is how you start from paper. Before `cs` is looked for, with
+// `--verify-theme`, because neither needs an index.
+if options.writeTheme {
+    exit(writeTheme(settings.theme, to: options.themeFile ?? ThemeFile.standardLocation))
+}
 
 guard let binary = CsClient.locate(binary: options.binary) else {
     FileHandle.standardError.write(

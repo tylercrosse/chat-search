@@ -26,6 +26,13 @@ final class ThemeSettings {
     /// one — it moves when the two side menus agree, and `SettingsForm` says so in a caption rather
     /// than leaving a setting that changes the window invisible.
     private(set) var layout: Theme
+    /// A token set read off disk, when this launch found one. Not a control and not remembered —
+    /// the file is the memory — but the window has to know, because while it is in force it is
+    /// what is on screen and the two menus below are choosing what comes back without it
+    /// (`chat-search-me9.8.10`).
+    private(set) var user: Theme?
+    /// And where it was read from, which is the part somebody who has forgotten needs.
+    private(set) var userFile: URL?
     /// What the views draw. Stored rather than computed: `Theme.init` resolves every colour token
     /// into a dynamic `NSColor`, which is work worth doing when a choice changes and not once per
     /// `body`.
@@ -46,6 +53,8 @@ final class ThemeSettings {
         light = choice.light
         dark = choice.dark
         layout = choice.layout
+        user = choice.user
+        userFile = choice.userFile
         theme = choice.theme
         self.remembers = remembers
     }
@@ -72,8 +81,12 @@ final class ThemeSettings {
     /// Both menus on one direction is that direction whole, which is where the layout moves.
     private func sidesChanged() {
         layout = ThemeChoice.whole(light, dark) ?? layout
+        // `user` rides along rather than being dropped, so that a menu moved while a token set off
+        // disk is in force changes what comes back when the file goes and not what is on screen.
+        // The window disables both menus in that state; this is what makes it true rather than
+        // enforced in one place (`SettingsForm`).
         theme = ThemeChoice.Choice(
-            light: light, dark: dark, layout: layout, appearance: appearance
+            light: light, dark: dark, layout: layout, user: user, appearance: appearance
         ).theme
         if remembers { ThemeChoice.remember(light: light, dark: dark) }
         onChange?()

@@ -409,8 +409,8 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuIt
             self.frames = frames
             Task { @MainActor in
                 await Measure.shot(
-                    model: model, window: window, query: options.shotQuery, to: options.shotPath,
-                    longest: options.longest, frames: frames)
+                    model: model, window: window, theme: settings.theme, query: options.shotQuery,
+                    to: options.shotPath, longest: options.longest, frames: frames)
                 NSApp.terminate(nil)
             }
             return

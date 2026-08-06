@@ -307,11 +307,11 @@ extension String {
         for range in ranges {
             if range.upperBound <= cursor { continue }
             let start = Swift.max(range.lowerBound, cursor)
-            if start > cursor { out.append(TextRun(text: String(self[cursor..<start]), marked: false)) }
-            out.append(TextRun(text: String(self[start..<range.upperBound]), marked: true))
+            if start > cursor { out.append(TextRun(range: cursor..<start, marked: false)) }
+            out.append(TextRun(range: start..<range.upperBound, marked: true))
             cursor = range.upperBound
         }
-        if cursor < endIndex { out.append(TextRun(text: String(self[cursor...]), marked: false)) }
+        if cursor < endIndex { out.append(TextRun(range: cursor..<endIndex, marked: false)) }
         return out
     }
 
@@ -326,15 +326,21 @@ extension String {
     }
 }
 
-/// One stretch of text and whether the query matched inside it — what `runs(marking:in:)` hands
-/// a renderer, so that turning a match into a colour, an underline or a terminal modifier is the
-/// only decision left to make.
+/// Where one stretch of the string sits and whether the query matched inside it — what
+/// `runs(marking:in:)` hands a renderer, so that turning a match into a colour, an underline or a
+/// terminal modifier is the only decision left to make.
+///
+/// A range rather than a copy of the text, because a renderer that styles the same string a
+/// second time has to know where each run sits in order to intersect with it: the macOS reader
+/// sets markdown over the source (`chat-search-me9.8.37`), and finding a copied run's way back
+/// into the string it came from is a second, worse answer to a question the cut already had.
+/// `String(source[run.range])` is what a renderer that only wants the text writes.
 public struct TextRun: Sendable, Equatable {
-    public let text: String
+    public let range: Range<String.Index>
     public let marked: Bool
 
-    public init(text: String, marked: Bool) {
-        self.text = text
+    public init(range: Range<String.Index>, marked: Bool) {
+        self.range = range
         self.marked = marked
     }
 }

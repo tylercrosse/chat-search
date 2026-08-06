@@ -2,7 +2,8 @@ import CsKit
 import CsTheme
 import SwiftUI
 
-/// Each drawn message's text with its matches marked, built once rather than once a frame.
+/// Each drawn message's text with its matches marked and its markdown set, built once rather than
+/// once a frame.
 ///
 /// `cs_core::blocks` refused exactly this shape one layer down. Marks are held on the block rather
 /// than located at render time "because locating them means tokenizing the message — ~25 µs fixed
@@ -23,11 +24,13 @@ import SwiftUI
 ///   Both arrive with the transcript, which is why the query is not passed in: a re-read against
 ///   the same query produces the same marks and may reuse them, and a re-read against a different
 ///   one arrives with different `terms`.
-/// - **Which direction is drawing**, since a mark bakes in three colour tokens. Named by
-///   `Theme.name`, which is what `ThemeSettings.choose(light:)` already treats as a direction's
-///   identity. Appearance is deliberately not part of it: every token is one dynamic `NSColor`
-///   that picks its own side where it is drawn, so a light/dark flip repaints these without
-///   rebuilding them.
+/// - **Which direction is drawing**, since a mark bakes in three colour tokens and the markdown
+///   over it bakes in a face and two sizes. Named by `Theme.name`, which is what
+///   `ThemeSettings.choose(light:)` already treats as a direction's identity. Appearance is
+///   deliberately not part of it: every token is one dynamic `NSColor` that picks its own side
+///   where it is drawn, so a light/dark flip repaints these without rebuilding them — and the type
+///   scale does not travel with a side at all, which is `Theme.composed`'s decision and the reason
+///   an unattended sunset cannot relayout a conversation somebody is reading.
 ///
 /// The first two are per entry. The last two invalidate every entry at once, which is what makes
 /// a stale mark unreachable rather than merely unlikely.
@@ -101,32 +104,83 @@ final class MarkedText {
         answering = nil
     }
 
-    /// The message with its matches marked, in the units the transcript named.
+    /// The message with its matches marked and its markdown set, in the units the transcript named.
     ///
     /// The two mark kinds are told apart by *form* and not by hue — a filled ground against an
     /// underline — for the same reason the TUI spends a text modifier on them: `--hit` and
     /// `--hit-bg` are one colour family, and a claim as consequential as "this is why the
     /// conversation is on screen" should not rest on which shade of amber it happens to be.
+    ///
+    /// Two span sets are laid over one string here and they answer different questions, so the cut
+    /// is by both and the attributes are applied in an order that says which wins. Markdown goes
+    /// on first and owns the *face*: a fence is monospaced whether or not the query matched inside
+    /// it. The mark goes on second and owns the *colour*, so a term that lands on a `**` or inside
+    /// a code block is still drawn as the reason this conversation is on screen — which is the one
+    /// claim the reader came here to check, and the one that must not be dimmed by punctuation.
     private static func mark(
         _ block: Block, fold: Fold, in units: MarkOffsets, theme: Theme
     ) -> AttributedString {
         // Line breaks become spaces one byte at a time when collapsed, which is what keeps every
         // mark offset pointing at the character it was measured against.
         let source = fold == .collapsed ? block.text.lineBreaksAsSpaces : block.text
+        let styling = Markdown.styling(source, of: block, fold: fold)
+        let base = Display.textFace(block)
         var out = AttributedString()
         for run in source.runs(marking: block.marks, in: units) {
-            var piece = AttributedString(run.text)
-            if run.marked {
-                if block.markKind.claimsRanking {
-                    piece.backgroundColor = theme.color(.hitBg)
-                    piece.foregroundColor = theme.color(.ink)
-                } else {
-                    piece.underlineStyle = .single
-                    piece.foregroundColor = theme.color(.hit)
+            for cut in styling.pieces(in: run.range) {
+                var piece = AttributedString(source[cut.range])
+                cut.style?.apply(to: &piece, base: base, theme: theme)
+                if run.marked {
+                    if block.markKind.claimsRanking {
+                        piece.backgroundColor = theme.color(.hitBg)
+                        piece.foregroundColor = theme.color(.ink)
+                    } else {
+                        piece.underlineStyle = .single
+                        piece.foregroundColor = theme.color(.hit)
+                    }
                 }
+                out.append(piece)
             }
-            out.append(piece)
         }
         return out
+    }
+}
+
+extension MarkedText {
+    /// A built message read back out of the drawing rather than off the string it was built from.
+    ///
+    /// `--shot`'s markdown pass is the only caller, and this lives here rather than there for one
+    /// reason: reading an attribute back needs the same scope that wrote it, and `Measure` also
+    /// imports AppKit — where `backgroundColor` is a second attribute of the same name. Beside the
+    /// write is the one place that ambiguity cannot arise.
+    enum Drawn {
+        /// The marked stretches, in order.
+        ///
+        /// Adjacent runs are rejoined, because markdown cuts a mark wherever a `**` or a fence
+        /// boundary falls inside one and the claim being checked is about the stretch rather than
+        /// about the cut. Told apart by the two attributes a mark sets and markdown never does —
+        /// a ground and an underline — rather than by comparing colours, which would be a check on
+        /// `Color`'s equality as much as on this.
+        static func marks(of text: AttributedString) -> [String] {
+            var out: [String] = []
+            var current = ""
+            for run in text.runs {
+                let piece = String(text[run.range].characters)
+                if run.backgroundColor != nil || run.underlineStyle != nil {
+                    current += piece
+                } else if !current.isEmpty {
+                    out.append(current)
+                    current = ""
+                }
+            }
+            if !current.isEmpty { out.append(current) }
+            return out
+        }
+
+        /// How many runs carry a face of their own — which is everything markdown set and nothing
+        /// a mark did, since a mark spends colour and an underline and never a font.
+        static func faced(of text: AttributedString) -> Int {
+            text.runs.count { $0.font != nil }
+        }
     }
 }

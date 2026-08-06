@@ -228,6 +228,27 @@ public enum SizeToken: String, CaseIterable, Sendable {
     case meta = "--fs-meta"
     /// Keys, section labels, the topics line.
     case micro = "--fs-micro"
+
+    /// The next step up the scale, and itself at the top.
+    ///
+    /// Here rather than in the view that wanted it, because which size is above which is a fact
+    /// about the scale and the scale is declared here. The saturation at `head` is the honest
+    /// answer and not a missing case: five sizes is the whole ladder, and a caller asking for one
+    /// above the largest is asking for a size this project does not have.
+    ///
+    /// **How much of a step this is belongs to the direction.** `terminal` puts 0.5pt between
+    /// `body` and `head` and `paper` puts none at all, so anything drawn one size up has to carry
+    /// its own weight — literally, in the semibold that `Markdown` sets a heading in — rather than
+    /// relying on this to be visible.
+    public var larger: SizeToken {
+        switch self {
+        case .head: .head
+        case .body: .head
+        case .sub: .body
+        case .meta: .sub
+        case .micro: .meta
+        }
+    }
 }
 
 /// The three faces.

@@ -56,8 +56,10 @@ four chips were a click and nothing else, and `View ▸ Group` at ⌘1–⌘4 is
 looks like once there is a bar to put it on.
 
 **5 · The reader's controls.** The per-frame `AttributedString` first (`me9.8.29`), because the
-next thing was going to add runs to that path, then the fidelity model itself (`me9.8.36`): four
-knobs over `Band`, three levels, four presets, and a run summarised in one line rather than listed.
+next two things were both going to add runs to that path, then the fidelity model itself
+(`me9.8.36`): four knobs over `Band`, three levels, four presets, and a run summarised in one line
+rather than listed. Then markdown (`me9.8.37`), set over the source and never cut out of it,
+because `marks` are byte offsets into the text a scanner would otherwise be deleting from.
 A port of `poc/ui`'s fifth iteration of that control and not a design — and the reason the ordering
 matters is that `me9.41` had to re-key `Density` onto `Band` first, since `{ user: expanded, agent:
 collapsed }` is unsayable in a table keyed on `kind` where both are `prose`.

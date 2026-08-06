@@ -91,7 +91,7 @@ impl Preview {
         self.blocks.iter().filter(|b| b.drawn()).count()
     }
 
-    /// Resolve a block's fold: an explicit override, else the default for its kind under the
+    /// Resolve a block's fold: an explicit override, else the default for its band under the
     /// current density.
     ///
     /// The override is session state and lives here; the default is a rule every client shares
@@ -100,7 +100,7 @@ impl Preview {
         if let Some(explicit) = self.overrides.get(&block.msg_id) {
             return *explicit;
         }
-        self.density.default_fold(&block.kind)
+        self.density.default_fold(block.band())
     }
 
     pub fn cycle_density(&mut self) {

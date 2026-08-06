@@ -25,6 +25,7 @@ pub mod layout;
 pub mod preview;
 pub mod render;
 pub mod rows;
+pub mod shot;
 pub mod state;
 pub mod text;
 pub mod theme;

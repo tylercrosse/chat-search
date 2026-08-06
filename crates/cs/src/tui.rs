@@ -71,6 +71,55 @@ pub fn run(
     }
 }
 
+/// Draw the TUI's frames to text files and exit, for `--shot`.
+///
+/// Deliberately not routed through [`run`]: there is no sink, so no scripted run can reach
+/// `queries.jsonl`. The Swift app states the same rule out loud under `--shot`, and for the same
+/// reason — a benchmark's queries are not needs anybody had (`6eb.21`).
+pub fn shot(
+    config_path: &Path,
+    db_path: Option<PathBuf>,
+    source: Option<&str>,
+    limit: i64,
+    query: &str,
+    out: &Path,
+    size: &str,
+) -> Result<()> {
+    let (width, height) = parse_size(size)
+        .with_context(|| format!("--size wants WxH, as in 140x40; got {size:?}"))?;
+
+    let cfg = Config::load(config_path)?;
+    let db_path = db_path.unwrap_or_else(|| cfg.default_db());
+    let watched = crate::inventory::watched(&cfg, &cs_archive::drift::detect(&cfg.sources));
+
+    let opts = cs_tui::Opts {
+        query: query.to_string(),
+        source: source.map(String::from),
+        limit,
+        watched,
+    };
+
+    let frames = cs_tui::shot::frames(db_path, opts, width, height)?;
+    std::fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+
+    println!("{query:?} at {width}x{height}, nothing written to the query log");
+    for frame in &frames {
+        let path = out.join(format!("tui-{}.txt", frame.name));
+        std::fs::write(&path, &frame.text)
+            .with_context(|| format!("writing {}", path.display()))?;
+        println!("  {} ({} lines)", path.display(), frame.text.lines().count());
+    }
+    Ok(())
+}
+
+/// `WxH` into a pair. Malformed input is an error rather than a default, unlike the Swift app's
+/// `--size`: there it would silently change what a measurement was taken at, here it would
+/// silently make two frames incomparable, and a shot nobody can trust is worse than no shot.
+fn parse_size(s: &str) -> Option<(u16, u16)> {
+    let (w, h) = s.split_once(['x', 'X'])?;
+    Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+}
+
 /// Replace this process with the agent, so it inherits the terminal directly.
 ///
 /// **Nothing here may redirect a standard descriptor.** A crossterm TUI — Codex is one —

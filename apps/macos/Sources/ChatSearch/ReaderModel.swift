@@ -2,6 +2,10 @@ import CsKit
 import CsTheme
 import Foundation
 import Observation
+// For `ScrollGeometry` and `UnitPoint`. The scroll relationship is arithmetic over what the scroll
+// view publishes and what its rows measure, and both arrive in this framework's own types — a
+// second set of them here would be a translation layer with nothing on the other side of it.
+import SwiftUI
 
 /// What the drawer knows: which conversation is open, the transcript of it, and which messages
 /// the reader has opened or closed by hand.
@@ -39,20 +43,35 @@ final class ReaderModel {
     /// O(messages) to build and the view holding it is invalidated on every frame of a scroll.
     private(set) var minimap = MinimapLayout()
 
-    /// The messages `List` currently has on screen, as its rows report themselves.
+    /// The rectangle the transcript is drawn in, and how much document is behind it.
     ///
-    /// **This is the whole of route 1**, and it is worth being exact about what it is. `List` is
-    /// the only container `chat-search-me9.22` measured that recycles, and it gives back neither
-    /// of the two numbers the prototype reads off the DOM — `scrollTop` and `scrollHeight`. What
-    /// it does give is `onAppear` and `onDisappear` per row, so the position of the transcript is
-    /// kept in the units this container actually speaks: which rows exist right now.
+    /// **This is what the floor raise bought** (`chat-search-me9.8.27`). Until macOS 15 a `List`
+    /// gave back neither of the two numbers the prototype reads off the DOM — `scrollTop` and
+    /// `scrollHeight` — so the position of the transcript was kept as the set of rows that had
+    /// reported themselves through `onAppear`. That is a superset of what a reader can see, since
+    /// `NSTableView` prepares rows past both edges, and it changes only when a whole row crosses
+    /// one — which is why the box was too tall and moved a message at a time.
     ///
-    /// The cost is that this is a *superset* of what a reader can see. `NSTableView` prepares rows
-    /// beyond the visible rectangle, so the box drawn from these is larger than the viewport and
-    /// larger at the ends of a fling than in the middle of one. It is a report of where you are
-    /// and not a measurement of what you can see; `apps/macos/README.md` records what that
-    /// measured, and route 2 is what to reach for if it ever stops being good enough.
-    private(set) var onScreen: Set<String> = []
+    /// `frame` is the visible rectangle in the window's coordinates and is what a row's own
+    /// rectangle is tested against; `document` and `offset` come from `onScrollGeometryChange`
+    /// and are what `--shot` checks against AppKit's numbers for the same scroll view.
+    private(set) var viewport = Viewport()
+
+    struct Viewport: Equatable {
+        var frame: CGRect = .zero
+        var offset: CGFloat = 0
+        var document: CGFloat = 0
+        var height: CGFloat { frame.height }
+    }
+
+    /// Where each row the list is holding actually sits, in the same coordinates as
+    /// `viewport.frame`.
+    ///
+    /// Still reported by the rows, and deliberately so — this container has no other way to say
+    /// where a row is. What changed is *what* they report: `onAppear` said a row exists, and
+    /// `onGeometryChange` says where it is in points, so a row half off the top of the screen can
+    /// say which half.
+    private(set) var placed: [String: CGRect] = [:]
 
     /// Where the minimap has asked the transcript to go. Consumed by `ReaderView`, which is the
     /// only place with a `ScrollViewReader` to ask.
@@ -63,13 +82,20 @@ final class ReaderModel {
 
     struct ScrollRequest: Equatable {
         let id: String
+        /// Where in the viewport to put the message, which is how a drag lands *inside* one. See
+        /// `anchor(for:within:)`.
+        let anchor: UnitPoint
         let serial: Int
     }
 
-    /// The last message a drag asked for, so a drag that crosses fifty of them in one flick issues
-    /// one scroll per message rather than one per frame. Cleared when the drag ends, because
+    /// The last thing a drag asked for, so a drag that crosses fifty messages in one flick issues
+    /// one scroll per message rather than one per frame — and, inside a message tall enough to
+    /// scroll through, one per anchor it actually moves to. Cleared when the drag ends, because
     /// dragging back to a message you scrolled away from by hand is a real request.
-    private var lastScrubbed: String?
+    private var lastScrubbed: ScrollRequest?
+    /// A drag can name a message the list has not laid out, and the anchor arithmetic needs that
+    /// message's height. The request is re-issued once, the moment the row says where it landed.
+    private var unrefined: (id: String, within: Double)?
     private var scrollSerial = 0
 
     let client: CsClient
@@ -93,9 +119,11 @@ final class ReaderModel {
         // themselves gone — `List` is handed a new array rather than emptied — so a set that
         // survived would draw a viewport box over a conversation those messages are not in.
         minimap = MinimapLayout()
-        onScreen.removeAll()
+        placed.removeAll()
+        viewport = Viewport()
         scrollRequest = nil
         lastScrubbed = nil
+        unrefined = nil
         // The marked text goes too. It invalidates itself against whatever transcript is asking
         // (see `MarkedText`), so this is not about staleness — it is that a shut drawer asks
         // nothing, and a table nobody consults is a megabyte of a conversation nobody is reading.
@@ -135,55 +163,156 @@ final class ReaderModel {
 
     // MARK: - The scroll relationship
 
-    /// A row appeared or went away. Called from the transcript's rows and from nowhere else.
-    ///
-    /// Written straight through, which was not the first version. `onAppear` fires from inside
-    /// `NSTableView`'s row preparation and a fling changes twenty rows a frame, so this buffered
-    /// into an unobserved set and published once per turn of the run loop — and that turned out to
-    /// be a hand-rolled copy of what SwiftUI already does, since an observable write marks a view
-    /// dirty and the body runs at the next frame either way. Measured against each other on the
-    /// corpus's longest conversation, neither the frame tail nor the count of AppKit's reentrancy
-    /// warning could tell the two apart. The simpler one ships; `apps/macos/README.md` has both
-    /// sets of numbers.
-    func rowAppeared(_ id: String) { onScreen.insert(id) }
+    /// The list was laid out somewhere. Called from the transcript and from nowhere else.
+    func viewportMoved(to frame: CGRect) { viewport.frame = frame }
 
-    func rowDisappeared(_ id: String) { onScreen.remove(id) }
+    /// The list scrolled.
+    func scrolled(_ geometry: ScrollGeometry) {
+        viewport.offset = geometry.contentOffset.y
+        viewport.document = geometry.contentSize.height
+    }
+
+    /// A row moved. Called for every row the list is holding, on every frame of a scroll.
+    ///
+    /// Written straight through, which was not the first version of the old `onAppear` path
+    /// either. That one buffered into an unobserved set and published once per turn of the run
+    /// loop, and it turned out to be a hand-rolled copy of what SwiftUI already does, since an
+    /// observable write marks a view dirty and the body runs at the next frame regardless. The
+    /// same argument holds here and the simpler one ships; `apps/macos/README.md` has the numbers
+    /// for both the old pair and this.
+    func rowMoved(_ id: String, to rect: CGRect) {
+        placed[id] = rect
+        // The message a drag asked for has just said how tall it is, so the anchor that lands the
+        // pointer inside it can finally be worked out. Once only: the scroll this issues moves the
+        // row again, and a second pass would be a loop with a scroll view on both ends of it.
+        guard let pending = unrefined, pending.id == id else { return }
+        unrefined = nil
+        let refined = anchor(for: id, within: pending.within)
+        guard refined != scrollRequest?.anchor else { return }
+        issue(id, anchor: refined)
+    }
+
+    /// A row went away. The rectangle goes with it, because the last place a row was seen is not
+    /// where it is now — a stale one sitting at the top edge would keep claiming to be on screen
+    /// for the rest of the conversation.
+    func rowLeft(_ id: String) { placed.removeValue(forKey: id) }
 
     /// A drag on the minimap, as a fraction of its height.
     func scrub(to fraction: Double) {
-        guard let id = minimap.drawnId(atFraction: fraction), id != lastScrubbed else { return }
-        request(id)
+        guard let target = minimap.target(atFraction: fraction) else { return }
+        request(target.id, within: target.within)
     }
 
-    func endScrub() { lastScrubbed = nil }
+    func endScrub() {
+        lastScrubbed = nil
+        unrefined = nil
+    }
 
     /// One drawn message up or down — the minimap's adjustable action, and the only way to move
     /// it without a pointer.
     ///
-    /// Stepped from the message this last asked for, as long as that message is still on screen,
-    /// and from the top of the box otherwise. Anchoring on the box alone looks right and is not:
-    /// `onScreen` is a superset of what is visible, so a step of one message frequently does not
-    /// move its top edge, and the next step would then resolve to the same message again and the
-    /// keyboard would be stuck one message below where it started.
+    /// Stepped from the first message whose *start* is on screen, which is not the same as the
+    /// top of the box and is the thing that makes a step advance. Scrolling to a message puts it
+    /// 10 pt down — `contentMargins` — so the tail of the message above it stays visible and owns
+    /// the top edge of the box. Anchored on that one, every step would resolve to the message
+    /// just scrolled to and the keyboard would stand still; `chat-search-me9.8.18` worked around
+    /// the same shape by anchoring on the message last asked for, which this replaces with a fact
+    /// about the screen rather than about the request.
     func step(by delta: Int) {
-        // Annotated, because `scrollRequest?.id.flatMap` reads as `String`'s and walks the id one
-        // character at a time.
-        let requested: String? = scrollRequest?.id
-        let anchor = requested.flatMap { onScreen.contains($0) ? $0 : nil }
-            ?? minimap.firstOnScreen(of: onScreen)
-        guard let id = minimap.drawnId(steppingFrom: anchor, by: delta) else { return }
-        request(id)
+        let from = stepAnchor ?? visibleMessages.flatMap { minimap.id(at: $0.top) }
+        guard let id = minimap.drawnId(steppingFrom: from, by: delta) else { return }
+        request(id, within: 0)
+    }
+
+    /// The topmost message the reader can see the beginning of.
+    private var stepAnchor: String? {
+        let edge = viewport.frame
+        guard edge.height > 0 else { return nil }
+        var best: Int?
+        for (id, rect) in placed {
+            guard rect.minY >= edge.minY, rect.minY < edge.maxY,
+                let position = minimap.position(of: id)
+            else { continue }
+            if position < best ?? Int.max { best = position }
+        }
+        return best.flatMap { minimap.id(at: $0) }
+    }
+
+    /// The stretch of the map the reader can actually see, or nil before anything has been laid
+    /// out. What the viewport box is drawn from.
+    var visible: ClosedRange<Double>? {
+        guard let span = visibleMessages else { return nil }
+        let lower = minimap.fraction(at: span.top, within: span.topWithin)
+        let upper = minimap.fraction(at: span.bottom, within: span.bottomWithin)
+        return lower...Swift.max(lower, upper)
     }
 
     /// How far down the conversation the reader is, 0 to 1. What the map says out loud.
-    var scrollFraction: Double {
-        minimap.span(ofIds: onScreen)?.lowerBound ?? 0
+    var scrollFraction: Double { visible?.lowerBound ?? 0 }
+
+    /// The visible rectangle, in messages and in fractions of the two the edges cut through.
+    ///
+    /// A row counts when its rectangle overlaps the viewport at all, which is the whole of the
+    /// difference from the old set: `NSTableView` hands out rows above and below the edges, and
+    /// those have negative or past-the-bottom rectangles and are excluded by arithmetic rather
+    /// than hoped about.
+    var visibleMessages: (top: Int, topWithin: Double, bottom: Int, bottomWithin: Double)? {
+        let edge = viewport.frame
+        guard edge.height > 0 else { return nil }
+        var top = Int.max
+        var bottom = Int.min
+        var topWithin = 0.0
+        var bottomWithin = 1.0
+        for (id, rect) in placed {
+            guard rect.height > 0, rect.maxY > edge.minY, rect.minY < edge.maxY,
+                let position = minimap.position(of: id)
+            else { continue }
+            if position < top {
+                top = position
+                topWithin = Double(Swift.max(0, edge.minY - rect.minY) / rect.height)
+            }
+            if position > bottom {
+                bottom = position
+                bottomWithin = Double(Swift.min(rect.height, edge.maxY - rect.minY) / rect.height)
+            }
+        }
+        guard top <= bottom else { return nil }
+        return (top, topWithin, bottom, bottomWithin)
     }
 
-    private func request(_ id: String) {
-        lastScrubbed = id
+    /// Where in the viewport to put a message so that the point the pointer is over ends up at the
+    /// top of the screen.
+    ///
+    /// `scrollTo(id:anchor:)` aligns the row's anchor point with the viewport's, so a row of
+    /// height *h* in a viewport of height *H* lands at document offset `rowTop + a(h - H)`.
+    /// Landing fraction *f* of the row at the top therefore wants `a = f·h / (h - H)`, which is
+    /// inside `0...1` exactly when the message is taller than the viewport — and that is the only
+    /// case where a message boundary is somewhere a reader can see the difference from, because a
+    /// message that fits on screen is already entirely on screen once its top is. So this is the
+    /// documented anchor semantic and not an extrapolation of it: `me9.8.18`'s "on a short
+    /// conversation with tall blocks it is the block" was the whole of that cost, and it is the
+    /// half that is fixed.
+    private func anchor(for id: String, within: Double) -> UnitPoint {
+        guard within > 0, let height = placed[id]?.height, height > viewport.height else {
+            return .top
+        }
+        let fraction = within * Double(height) / Double(height - viewport.height)
+        return UnitPoint(x: 0.5, y: Swift.min(Swift.max(fraction, 0), 1))
+    }
+
+    private func request(_ id: String, within: Double) {
+        // A message the list has not laid out has no height, so the anchor cannot be worked out
+        // yet and the top of it is where this lands. `rowMoved` finishes the job.
+        unrefined = within > 0 && placed[id] == nil ? (id, within) : nil
+        issue(id, anchor: anchor(for: id, within: within))
+    }
+
+    private func issue(_ id: String, anchor: UnitPoint) {
+        guard id != lastScrubbed?.id || anchor != lastScrubbed?.anchor else { return }
         scrollSerial += 1
-        scrollRequest = ScrollRequest(id: id, serial: scrollSerial)
+        let request = ScrollRequest(id: id, anchor: anchor, serial: scrollSerial)
+        lastScrubbed = request
+        scrollRequest = request
     }
 
     private func load(query: String) {

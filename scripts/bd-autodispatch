@@ -160,21 +160,8 @@ fi
 # Epics are containers, not work. A bead with no acceptance criteria has no
 # definition of done, so unattended it would burn a whole session only to come
 # back as an ambiguous-bead gate -- cheaper to skip it and say so.
-#
-# Decisions are excluded for a sharper reason than either. An agent handed
-# "Decide redaction: at import or at display" does not decline it -- it decides,
-# and the choice lands as an implementation nobody reviewed. That is the whole
-# argument the type exists to carry, and retyping those beads bought nothing
-# while this line still offered them. `me9.8.28` is the worked example: its
-# first step is "capture the real window frame, not --shot, on this machine",
-# which needs the window server and somebody looking at it.
-#
-# The triage label is the same rule one step earlier. Every bead a worker files
-# for its own leftovers carries it, and it means no human has yet agreed the
-# bead should exist -- so dispatching one is the queue feeding on itself.
 
-CANDIDATES=$("$BD" ready --json --exclude-type=epic,decision --exclude-label=triage \
-  --limit 40 2>/dev/null | "$PY" -c '
+CANDIDATES=$("$BD" ready --json --exclude-type=epic --limit 40 2>/dev/null | "$PY" -c '
 import json, sys
 want = int(sys.argv[1])
 try:
@@ -189,29 +176,8 @@ for i in eligible[:want]:
 
 # Queue health belongs in the log. If eligible ever reaches zero this job goes
 # quiet forever, and a silent no-op every 5 hours looks identical to success.
-#
-# The held-back count is part of that and not a nicety: the exclusions above
-# happen inside bd, so without this line a queue that has filled with decisions
-# reports "0 eligible" and looks exactly like a queue that is empty. One asks
-# for a human afternoon and the other asks for nothing.
-HELD=$("$BD" ready --json --exclude-type=epic --limit 40 2>/dev/null | "$PY" -c '
-import json, sys
-try:
-    issues = json.load(sys.stdin)
-except Exception:
-    issues = []
-d = sum(1 for i in issues if i.get("issue_type") == "decision")
-t = sum(1 for i in issues if "triage" in (i.get("labels") or []))
-print(str(d) + "\t" + str(t))
-' 2>/dev/null)
-
 echo "$CANDIDATES" | grep '^FLOOR' | while IFS=$'\t' read -r _ ok bad; do
   log "queue: $ok eligible, $bad ready but lacking acceptance criteria"
-done
-echo "$HELD" | while IFS=$'\t' read -r dec tri; do
-  [ -z "${dec:-}" ] && continue
-  [ "$dec" -gt 0 ] && log "held back: $dec decision(s) waiting on a human -- run bd list --type=decision"
-  [ "$tri" -gt 0 ] && log "held back: $tri untriaged bead(s) labelled triage"
 done
 
 PICKS=$(echo "$CANDIDATES" | grep '^PICK' || true)

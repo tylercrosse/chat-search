@@ -45,6 +45,11 @@ nobody repeats. `--folded` moves the *default* rather than folding what is on sc
 so a group arriving on a later keystroke is folded too: an instrument that measured a list
 unfolding itself as it typed would not be measuring anything.
 
+Two of them have a key that does the same thing while the app is running, and the relationship is
+the same in both cases — the flag opens in a state, the key moves between them: `--no-timeline` and
+Cmd-T, `--group` and ⌘1 to ⌘4. Both keys are on [the menu bar](#the-menu-bar), which is the only
+place in this window a key can be bound without the query box losing it.
+
 The theme flags are the ones that are *not* instruments. They choose among the six directions
 compiled into the binary and which side of one you are looking at, and they stick, which is why
 they are the only flags here that change anything about the next launch. `--theme-file` is the
@@ -225,11 +230,11 @@ do a thing the keyboard cannot reach at all* (the drawer, below).
 ```
 chat-search                 Edit                      View                 Window
   About chat-search           Undo             ⌘Z       Hide Timeline ⌘T     Close      ⌘W
-  Settings…            ⌘,     Redo            ⇧⌘Z                            Minimize   ⌘M
-  Quit chat-search     ⌘Q     Cut              ⌘X
-                              Copy             ⌘C
-                              Paste            ⌘V
-                              Select All       ⌘A
+  Settings…            ⌘,     Redo            ⇧⌘Z       ┈ Group              Minimize   ⌘M
+  Quit chat-search     ⌘Q     Cut              ⌘X       ✓ None        ⌘1
+                              Copy             ⌘C         Project     ⌘2
+                              Paste            ⌘V         Run         ⌘3
+                              Select All       ⌘A         Source      ⌘4
 ```
 
 **Edit is the one with a use in the ordinary path.** The search box is where you paste a path or a
@@ -262,6 +267,32 @@ flips**, which is Finder's arrangement for the status bar. `MainMenu` holds no m
 `AppHost.validateMenuItem` writes *Hide* or *Show* at validation — the callback that runs both
 before the menu is drawn and before the key fires, so the verb cannot be read stale.
 
+**And under it the axis, which is that same argument at four states rather than two.** The four
+chips above the query box were a click and nothing else — the drawer's complaint, one control over
+— and `chat-search-me9.8.40` was filed rather than folded into the bead above precisely because a
+toggle is one item and one verb where an axis is a *set*: four items, four keys, and a mark saying
+which of them you are in. That is a radio group, macOS has one shape for it, and it is Finder's
+`View ▸ as Icons ⌘1 · as List ⌘2 · as Columns ⌘3 · as Gallery ⌘4` — the digits, in the menu that
+says what the one list looks like. This window has one list and one axis cutting it, so the shape
+arrives without adaptation: a section header, then `None ⌘1`, `Project ⌘2`, `Run ⌘3`, `Source ⌘4`.
+
+**The digits are free, and the app that would have wanted them is being scrapped.** Cmd-1 upward is
+a tab or a place in most apps; there are no tabs here, and the only other candidate — the
+Search/Library switch, mouse-only in exactly the same way — is what `chat-search-me9.8.30` removes.
+Finder splits those two questions the same way in any case: the digits say how the list is cut, and
+a *place* is `⇧⌘` and a letter.
+
+Neither the words nor the digits are a second list of axes beside the chips. The titles are
+`Grouping`'s own, capitalised, and the digit is the axis's position in `allCases` — so an axis added
+to the enum arrives on the bar with the next digit and no edit to `MainMenu`. The mark is written
+where the drawer's verb is, in `AppHost.validateMenuItem`, and it is written on all four every time
+rather than moved from the one that had it: `--group project` at launch and a click on a chip both
+change the axis without the menu being open, and a menu that disagreed with the screen about which
+axis is in force would be worse than one that offered no keys at all. **`topic` is on the chips and
+not here**, which is the same rule cutting the other way — the chip is dashed because there is no
+taxonomy on this wire to switch to, and an item whose key reaches nothing is what this bar exists
+not to have.
+
 **Window is what the app owes its second window.** Cmd-comma opens the settings panel and until now
 only the mouse could dismiss it — a window reached by a key and left by a click, which is the same
 asymmetry as a text field you can type into and not copy out of, one window over. `performClose:`
@@ -280,7 +311,7 @@ says this app has a capability it does not have, and says it in the one place pe
 | Zoom, Bring All to Front | no key equivalent between them, which puts them outside the rule — the green button is the affordance for one and there is nothing for the other to gather |
 | the window list | what `NSApp.windowsMenu` would fill in, and its job is finding a window lost behind others; there are two here and Cmd-comma already raises the second |
 | Hide Others, Show All | both act on *other* applications, so neither is a key this app owes anybody, and Show All has no key equivalent to deliver |
-| the grouping axis | it passes the rule — the four chips are mouse-only in exactly the way the drawer was — and it is left off anyway, because an axis is four states rather than a toggle, and four items with four keys is an argument worth making on its own rather than smuggling in beside one. `chat-search-me9.8.40` |
+| the fifth chip, `topic` | the other four are on `View` and this one is not, for the reason it is drawn dashed rather than live: there is no taxonomy on this wire to switch to, so the item would be a key that reaches nothing. `chat-search-me9.8.40` |
 
 **And Hide, which was on this menu until the pass measured it.** Cmd-H is the most reflexive key on
 this platform after Cmd-Q, so it arrived on exactly the argument that carried Quit. Then
@@ -327,7 +358,7 @@ was taken back twice.
 ```
 the menu with an empty box:
   Edit: Undo [grey], Redo [grey], Cut [grey], Copy [grey], Paste, Select All, Writing Tools, …
-  View: Hide Timeline
+  View: Hide Timeline, ✓None, Project, Run, Source
 ⌘A → matched true, selected 27 of 27 characters
 ⌘C → field "dir:chat-search agent:codex" · query "…" · pasteboard "dir:chat-search agent:codex"
 ⌘X → field "" · query "" · pasteboard "dir:chat-search agent:codex"
@@ -336,12 +367,17 @@ the menu with an empty box:
 ⇧⌘Z → field "dir:chat-search agent:codex" · query "…"
 the menu with the phrase selected:
   Edit: Undo, Redo Cut, Cut, Copy, Paste, Select All, …
-  View: Hide Timeline
+  View: Hide Timeline, ✓None, Project, Run, Source
 ⌘H, which this bar deliberately does not carry → matched false, the app is hidden: false
   NSApp.hide(nil) called directly → the app is hidden: true
 ⌘M → matched true, the window is in the Dock: true
 ⌘T → matched true, the drawer is open: false, the item now reads "Show Timeline"
 ⌘T again → matched true, the drawer is open: true, the item now reads "Hide Timeline"
+⌘1 → matched true, the axis is none with 0 group(s), and the item checked is None — pressed on the axis already in force, which moves nothing
+⌘2 → matched true, the axis is project with 4 group(s), and the item checked is Project
+⌘3 → matched true, the axis is run with 3 group(s), and the item checked is Run
+⌘4 → matched true, the axis is source with 1 group(s), and the item checked is Source
+⌘1 again → matched true, the axis is none, where this run found it
 ```
 
 **Cmd-T is pressed twice**, and that is the shape of a toggle rather than thoroughness: one press
@@ -350,6 +386,20 @@ shut. The second press is what says it is a switch. It also puts the drawer back
 found it, which is the courtesy the pasteboard gets two paragraphs down. The title beside each is
 read after asking the menu to validate, since the verb is written at validation and reading it
 without asking would report the one the bar was built with.
+
+**All four digits are pressed, because the axis is a radio group and not four switches.** What has
+to be true is that the axis arrives *and* that exactly one item carries the mark afterwards: a press
+that regrouped the list while leaving the checkmark where it was would be the menu contradicting the
+screen, and it is the one way this can be wrong while every key still reports `matched true`. So the
+mark is read back beside the axis and the group count each time, through `update()` for the reason
+the verb is. ⌘1 is pressed first and the list is already ungrouped, which is what makes the first
+line the statement that a key on the axis in force moves nothing — the chip has always been inert
+the same way. The run ends by pressing the digit of the axis it started on, the courtesy the drawer
+and the pasteboard both get. The counts are the **rows in hand** when the key was pressed — a
+`--limit` window of a typeahead answer that is still settling — so they are neither corpus numbers
+nor stable between runs, and the run above is not the one that first took these lines: an earlier
+pass on the same index read 13, 1 and 2. What is stable is the pair either side of the comma, which
+is the claim: the axis moved, and exactly one item carries the mark.
 
 The bar is read **twice**, with an empty box and with the phrase selected, because half these items
 are *supposed* to be grey in the first reading — a Copy that offered itself with nothing selected
@@ -1354,6 +1404,15 @@ question was answered once (`chat-search-me9.22`) and sections do not un-answer 
 | `source` | `source` | archetype is ~87% predicted by it |
 | `topic` | — | drawn, and not offered |
 
+**The four are also ⌘1 to ⌘4**, on `View ▸ Group`, with a checkmark on the one in force
+(`chat-search-me9.8.40`). Same order, and the same `SearchModel.group(by:)` the chips call — one
+control with two affordances rather than two controls, so switching from the menu clears the
+accordion and places the cursor exactly as clicking does. The chips were a click and nothing else
+until then, in a window whose one focused view is the query box; [the menu bar](#the-menu-bar) is
+where a key can be bound that the box does not lose, and it is the same route the drawer took.
+`topic` is not on it, because a dashed chip and a menu item that reaches nothing are not the same
+kind of honest.
+
 **The residue group is the point of this bead.** `cwd` is 100% on codex and claude-code and 0% on
 chatgpt and gemini-cli, so a project grouping that quietly kept only the rows it could place drops
 two thirds of the corpus and looks complete doing it. Every axis that can fail to place a row has a
@@ -1445,10 +1504,12 @@ accordion would buy a fold by breaking the editing of the thing being folded. En
 to the list rather than to the field, so the fold costs nothing that was in use.
 
 There is a third way out of that argument now and it does not change this one: a menu resolves its
-keys outside the responder chain, which is how the drawer got Cmd-T (`chat-search-me9.8.26`). It
-is no use to the fold. A menu item is a single act with no idea where the cursor is, and *fold the
-group the cursor is on* is a sentence about a line — so Enter, which is already delivered to the
-list, is still the only thing that can say it.
+keys outside the responder chain, which is how the drawer got Cmd-T (`chat-search-me9.8.26`) and the
+axis ⌘1 to ⌘4 (`chat-search-me9.8.40`). It is no use to the fold. A menu item is a single act with
+no idea where the cursor is, and *fold the group the cursor is on* is a sentence about a line — so
+Enter, which is already delivered to the list, is still the only thing that can say it. The axis
+went the other way for exactly that reason: `group by project` names no line, so nothing has to know
+where the cursor is to obey it.
 
 The footer says what Enter would do whenever the cursor is on a head, and how many groups are shut
 (`12 groups by project · 12 folded`). That is the same defect `poc/ui/NOTES.md` §5 complains about,
@@ -1459,10 +1520,10 @@ folded group and a group that is not there have to look different.
 
 **Switching axes clears the accordion** rather than restoring it, which is the prototype's rule and
 its reasoning: groups are *ranked*, so the set you left open is rarely the set at the top when you
-come back. Clicking the axis already in force is inert, so the reset is a consequence of switching
-and never a surprise. Nothing else clears it — a keystroke that narrows the list until a group is
-empty and a keystroke that brings it back leave the fold alone, because a list rearranging under a
-cursor that never asked it to is worse than a stale fold.
+come back. Clicking the axis already in force — or pressing its key — is inert, so the reset is a
+consequence of switching and never a surprise. Nothing else clears it — a keystroke that narrows the
+list until a group is empty and a keystroke that brings it back leave the fold alone, because a list
+rearranging under a cursor that never asked it to is worse than a stale fold.
 
 The cost of folding, stated: on `borrow checker` the `source` axis has two groups, so shut it is
 two heads and a lot of empty column. That is honest about the axis rather than a fault of the fold,

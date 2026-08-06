@@ -2,11 +2,18 @@
    chat-search — visual directions
    =============================================================================
 
-   Four answers to the same interface. Nothing here changes what is in a row, how
+   Six answers to the same interface. Nothing here changes what is in a row, how
    panes are arranged, or how anything is grouped — those came out of measuring the
    corpus and re-litigating them in a visual pass would spend the measurement. This
    file may only set tokens declared in styles.css: palette, type faces and sizes,
    spacing, radii, and how much contrast separates one thing from another.
+
+   Four of the six were designed here. The last two are ports of palettes designed
+   elsewhere — Gruvbox and Solarized — and both carry `-derived` because neither
+   holds the ramp as published: every hue in them is the original's and not one
+   lightness is. `chat-search-me9.8.12` measured what that costs, and
+   `docs/DECISIONS.md` ADR 25 says why a direction the app ships has no choice about
+   it while a theme you load off your own disk does.
 
    Two findings have to survive whichever one is chosen, and both are easy to lose to
    a prettier palette:
@@ -385,4 +392,211 @@
   --src-chatgpt:     #3d6b47;
   --src-claude-ai:   #6d4b76;
   --src-gemini:      #4a5c85;
+}
+
+
+/* --------------------------------------------------------- gruvbox-derived --- */
+/* Gruvbox, on the only terms a shipped direction is available on. The four grounds
+   and every accent below are published values, unaltered; the eight tokens the ramp
+   and the AA floor fence are Gruvbox's *hues* at lightnesses palette.py solved, and
+   the published lightnesses are gone. That is what `-derived` says, and the distance
+   is small: Gruvbox's dark side already carries an even ramp at 1.77x 1.78x 1.82x,
+   sitting about 1.11x above the targets, and its light side is 0.09 out.
+
+   Where a token is not fenced it is a published Gruvbox colour, and the trailing
+   comments say which. Where one had to be invented — the two selection grounds, the
+   match ground, one rule — it is Gruvbox's own hue at a lightness this interface
+   needed, because inventing from the incumbent's greys is how a port ends up reading
+   as `terminal` wearing a costume.
+
+   No type and no geometry: this is a colour port, so it takes the incumbent's scale
+   and rhythm whole and rows-per-screen does not move. */
+.dir-gruvbox-derived.theme-dark {
+  color-scheme: dark;
+
+  /* bg0_s over bg0 over bg0_h. Gruvbox publishes three dark grounds and they already
+     fall in the order this interface wants: the soft one is the page, the hard one is
+     the ribbon's track, and nothing had to be made up. */
+  --bg:      #32302f;  /* bg0_s */
+  --panel:   #282828;  /* bg0 */
+  --panel-2: #3c3836;  /* bg1 */
+  --panel-3: #504945;  /* bg2 */
+  --ink:     #ebdbb2;  /* fg1 */
+  --ink-2:   #bdae93;  /* fg3 */
+  /* gray's hue, solved. Published `gray` is 4.47:1 on the page and 3.16:1 on the
+     drawer, and the drawer is where most of this tier lands. */
+  --ink-3:   #a4978b;
+  --rule:    #3c3836;  /* bg1 */
+  --rule-2:  #504945;  /* bg2 */
+
+  /* Gruvbox has exactly one cool accent, so selection takes the blue's hue and the
+     Gemini badge below keeps the published bright blue itself — told apart by
+     lightness, which is what the incumbent already does with its teal. */
+  --sel:     #79bfc3;
+  --sel-bg:  #193031;
+  --sel-ink: #0a191a;
+  --hit:     #fabd2f;  /* bright yellow */
+  --hit-bg:  #413310;
+  --err:     #fb4934;  /* bright red */
+  --ok:      #b8bb26;  /* bright green */
+
+  --map-bg:     #1d2021;  /* bg0_h */
+  --k-tool:     #5c544c;
+  --k-reason:   #c25d78;
+  --k-user:     #83ba70;
+  --k-agent:    #efe5c8;
+  --act-look:   #49443f;
+  --act-run:    #5c544c;
+  --act-change: #507642;
+  --k-tool-ink: #a89984;  /* fg4 */
+
+  --src-claude-code: #fe8019;  /* bright orange */
+  --src-codex:       #8ec07c;  /* bright aqua */
+  --src-chatgpt:     #b8bb26;  /* bright green */
+  --src-claude-ai:   #d3869b;  /* bright purple */
+  --src-gemini:      #83a598;  /* bright blue */
+}
+
+/* Gruvbox publishes faded accents for its light side rather than reusing the bright
+   ones, so this is a second palette and not the one above inverted — the hues differ,
+   not only the lightnesses. */
+.dir-gruvbox-derived.theme-light {
+  color-scheme: light;
+
+  --bg:      #f9f5d7;  /* bg0_h */
+  --panel:   #fbf1c7;  /* bg0 */
+  --panel-2: #f2e5bc;  /* bg0_s */
+  --panel-3: #ebdbb2;  /* bg1 */
+  --ink:     #282828;  /* fg0 */
+  --ink-2:   #504945;  /* fg2 */
+  --ink-3:   #776a5f;
+  --rule:    #ede2c0;
+  --rule-2:  #d5c4a1;  /* bg2 */
+
+  --sel:     #076678;  /* faded blue */
+  --sel-bg:  #cbe6eb;
+  --sel-ink: #fbf1c7;  /* bg0 */
+  --hit:     #b57614;  /* faded yellow */
+  --hit-bg:  #f1e1b1;
+  --err:     #9d0006;  /* faded red */
+  --ok:      #79740e;  /* faded green */
+
+  --map-bg:     #f2e5bc;  /* bg0_s */
+  --k-tool:     #a6998e;
+  --k-reason:   #ae4b8a;
+  --k-user:     #295038;
+  --k-agent:    #231e1b;
+  --act-look:   #b8b0a9;
+  --act-run:    #a6998e;
+  --act-change: #4d8e66;
+  --k-tool-ink: #665c54;  /* fg3 */
+
+  --src-claude-code: #af3a03;  /* faded orange */
+  --src-codex:       #427b58;  /* faded aqua */
+  --src-chatgpt:     #79740e;  /* faded green */
+  --src-claude-ai:   #8f3f71;  /* faded purple */
+  --src-gemini:      #076678;  /* faded blue */
+}
+
+
+/* ------------------------------------------------------- solarized-derived --- */
+/* Solarized, and this one is a rebuild rather than a nudge. No assignment of its
+   sixteen published colours makes an even ramp at all — the best available is 1.46x
+   1.38x 2.18x, because nothing sits between base1 at 5.61:1 and base2 at 12.25:1 —
+   so every kind here is a Solarized hue at a lightness Solarized does not publish.
+
+   Two consequences worth naming, because both are the palette rather than the port.
+   Its comments tier is the one it designates for secondary content and it reads
+   2.42:1 on base02; solved to the 4.6 floor it comes back brighter than Solarized's
+   own body text. And Solarized publishes two foreground tiers per ground where this
+   interface has three, so the middle one is invented on both sides — the only tokens
+   here that are neither published nor solved, besides the grounds noted below.
+
+   The five source badges are Solarized's accents exactly as published, on both sides,
+   because nothing fences a badge and holding them still is the strongest claim this
+   port can make about being Solarized at all. */
+.dir-solarized-derived.theme-dark {
+  color-scheme: dark;
+
+  /* The one direction here whose panel is *lighter* than its background, because that
+     is what Solarized's own "background highlights" tier is for. The track is the
+     invention: the darkest colour Solarized publishes is the page itself, and a ribbon
+     needs a ground its kinds can climb away from, so it is base03's hue and saturation
+     one step down. */
+  --bg:      #002b36;  /* base03 */
+  --panel:   #073642;  /* base02 */
+  --panel-2: #0c4655;
+  --panel-3: #1a5566;
+  --ink:     #eee8d5;  /* base2 */
+  --ink-2:   #a6b4b5;
+  --ink-3:   #879ea4;
+  --rule:    #0c3e4b;
+  --rule-2:  #194a57;
+
+  /* Blue's hue lifted, because published blue at 4.5:1 would want a selection ground
+     darker than the page it sits on. */
+  --sel:     #5aace7;
+  --sel-bg:  #0c3245;
+  --sel-ink: #002b36;  /* base03 */
+  --hit:     #b58900;  /* yellow */
+  --hit-bg:  #3d2f05;
+  --err:     #dc322f;  /* red */
+  --ok:      #859900;  /* green */
+
+  --map-bg:     #001e26;
+  --k-tool:     #44555a;
+  --k-reason:   #6d72c5;
+  --k-user:     #36baaf;
+  --k-agent:    #dce0e0;
+  --act-look:   #394347;
+  --act-run:    #44555a;
+  --act-change: #2b736d;
+  --k-tool-ink: #8eabb4;
+
+  --src-claude-code: #cb4b16;  /* orange */
+  --src-codex:       #2aa198;  /* cyan */
+  --src-chatgpt:     #859900;  /* green */
+  --src-claude-ai:   #d33682;  /* magenta */
+  --src-gemini:      #268bd2;  /* blue */
+}
+
+/* Solarized's greys change temperature between its sides — hue 192 on the dark one,
+   hue 45 on the light one — so the grounds do here too, and the track is a step below
+   base2 on base2's own warm hue rather than a step below base03 on its cool one. */
+.dir-solarized-derived.theme-light {
+  color-scheme: light;
+
+  --bg:      #fdf6e3;  /* base3 */
+  --panel:   #eee8d5;  /* base2 */
+  --panel-2: #e9dfc4;
+  --panel-3: #ddd2b0;
+  --ink:     #002b36;  /* base03 */
+  --ink-2:   #3b4e54;
+  --ink-3:   #556a71;
+  --rule:    #ece5d0;
+  --rule-2:  #dfd5b9;
+
+  --sel:     #0b578e;
+  --sel-bg:  #cfe0ed;
+  --sel-ink: #fdf6e3;  /* base3 */
+  --hit:     #b58900;  /* yellow */
+  --hit-bg:  #f4e2af;
+  --err:     #dc322f;  /* red */
+  --ok:      #859900;  /* green */
+
+  --map-bg:     #e8e0c8;
+  --k-tool:     #849ba2;
+  --k-reason:   #5e62bf;
+  --k-user:     #154d49;
+  --k-agent:    #031e25;
+  --act-look:   #a0b0b4;
+  --act-run:    #849ba2;
+  --act-change: #2e8b83;
+  --k-tool-ink: #49666e;
+
+  --src-claude-code: #cb4b16;  /* orange */
+  --src-codex:       #2aa198;  /* cyan */
+  --src-chatgpt:     #859900;  /* green */
+  --src-claude-ai:   #d33682;  /* magenta */
+  --src-gemini:      #268bd2;  /* blue */
 }

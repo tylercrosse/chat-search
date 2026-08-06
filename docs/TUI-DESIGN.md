@@ -333,7 +333,8 @@ are the strongest recognition cues, "stronger than anything in the text."
 CLI and the TUI filter through one parser and one set of SQL clauses. `agent:` and `dir:` take
 comma lists; both negation spellings work and mean the same thing; repeated tokens of one facet
 union, and repeated `date:` tokens intersect so two bounds make a range. `date:` takes
-`today`, `yesterday`, `week`, `month`, `<Nu` and `>Nu` with units `m|h|d|w|mo|y`, and its
+`today`, `yesterday`, `week`, `month`, `<Nu` and `>Nu` with units `m|h|d|w|mo|y`, and an
+absolute half-open span, `date:2026-07-28..2026-08-02` (`me9.18`, below). Its
 day/week/month/year arithmetic is civil rather than fixed-width — a day across a DST boundary
 is 23 or 25 hours, pinned in `cs_core::time`'s tests at 82,800 s and 90,000 s. A value nothing
 can select on (`date:nope`, a half-typed `agent:`) neither errors nor filters: it is reported
@@ -418,6 +419,50 @@ the same quotes rather than an extension of this one. The syntax highlighting th
 specifies has a case it did not have — an open run, which is a value still being typed and not an
 error — and the ghost-text completion of a `dir:` value now has to quote what it inserts. Both are
 `cs_core::query`'s rules to state and neither is written yet.
+
+**An absolute window, 2026-08-06 (`me9.18`).** `date:` grew a half-open span with either end
+optional — `date:2026-07-28..2026-08-02`, `date:2026-07-28..`, `date:..2026-08-02` — and a lone
+`YYYY-MM-DD` for the day it names. The gap was the interface prototype's timeline scrubber
+(`me9.8.20`): it narrows the list by an arbitrary bounded window, and `DateSpec` was `{Day,
+Younger, Older}`, every one of which is measured back from now. A drag is a decision about the
+corpus rather than a statement about the present, so there was no way to type what it produced —
+and this section's whole rule is that a filter which cannot be typed is a second source of truth,
+invisible when copied out and unreplayable from a log.
+
+The separator, the reading and the accepted spellings are `cs pick --driven`'s, which has taken a
+half-open `2026-08-04..2026-08-05` span of the query log since it was written. One grammar for a
+span, not two: the local-date bug was three clients each deriving the day themselves.
+
+**It is the one `date:` form that says the same thing tomorrow**, which is why it is a variant
+rather than a spelling of `date:<Nd`. Its bounds are held as the wall clocks that were typed and
+resolved against a zone only when a window is asked for, so a query parsed on one machine does not
+carry that machine's zone, and a span across a DST boundary is still measured in civil days —
+`date:2026-03-07..2026-03-09` in Los Angeles is 47 hours.
+
+**Writing a drag down is `cs_core`'s job too** (`Window::value_in`). A rail can hand each chip the
+query text clicking it produces, which is what keeps the Swift side from ever assembling a token;
+a scrubber cannot be enumerated that way, so the alternative was a client rendering two instants
+into this grammar itself — a second, partial implementation of it in a language that cannot link
+this crate. Two lossy things it does, stated where it is defined: each edge rounds *outward* to a
+whole second, because a conversation dragged across and then filtered out is a bug nobody can see;
+and an edge on a midnight is written as the bare date, because `date:2026-07-28..2026-08-02` is a
+line someone can edit where `date:2026-07-28T00:00:00..` is one they retype. How a range reaches
+the macOS client, which spawns `cs` rather than linking it, is `me9.8.20`'s to answer — the rule
+now exists in one place for it to reach.
+
+**The rail is unchanged and says the honest thing already.** An absolute span is a `date:` value
+the four chips have no chip for, so it lights none of them and turns the All chip off: something
+is filtering, and it is not one of these. A second `date:` token still replaces rather than
+widens, so a drag lands on top of `date:week` the way a chip does.
+
+**The other half of the bead — the `topic:` chip — is not going into this grammar.** A seeded
+topic is already expressible as a collection: `matches(query)` ∪ pinned − excluded, which makes
+`topic:rust-and-cargo` a *named saved query* and puts it in `library.db` with the rest of the
+authored data (ADR 3) rather than in the parser. It also has no data source until `6eb.24` or
+`6eb.18` lands, so a facet built now would be a keyword over a taxonomy nobody has. The macOS app
+draws `topic` in the GROUP control, dashed and unclickable, which is a grouping axis it cannot
+offer rather than a filter it applies silently — that is the honest form and it stays until the
+saved-query question is answered (`me9.40`).
 
 **Done, 2026-08-01 (`me9.16`).** `App` has no source field: a chip click calls
 `Query::toggling`, which returns the query *text* with the `agent:` token added or taken back

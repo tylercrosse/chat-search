@@ -129,7 +129,7 @@ one bead making the next one cheap.
 | `28 → 30` | No point theming a titlebar before knowing whether the macOS 26 SDK is already compositing glass over it. |
 | `30 → 31` | Both rewrite the top of `Shell.swift`. Remove and reclaim height, *then* add two strips into it. |
 | `31 → 32` | Build the scrubber's gestures once, after it has moved. |
-| `27 → 33` | `ScrollPosition` is how a list keeps its place when a page is appended rather than jumping. |
+| `27 → 33` | Was "`ScrollPosition` is how a list keeps its place when a page is appended rather than jumping", and `27` measured that `ScrollPosition` does not move a `List` at all — see [what the floor bought](./README.md#what-the-floor-bought). What survives the edge is `onScrollGeometryChange`: `33` still needs to know where the list is to know it has reached the bottom, and it needs another answer for keeping its place. |
 | `10 → 34` | Without a token set read at runtime, the type scale is one rebuild per guess. |
 | `34 → 35` | The header may stop colliding once `micro` is 10pt with less tracking — see what is left first. |
 | `29 → 36`, `29 → 37` | Both add runs to a path that currently rebuilds an `AttributedString` on every body evaluation. Fix it first or measure the wrong thing. |

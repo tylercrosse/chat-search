@@ -81,12 +81,6 @@ struct SearchView: View {
 
     /// The axis, as five chips of which four are offered.
     ///
-    /// **The four are also `View ▸ Group`, on ⌘1 to ⌘4** (`chat-search-me9.8.40`). Both routes call
-    /// `model.group(by:)`, so this is one control with two affordances and not two controls: what
-    /// the menu marks is what the chip fills, because both are reading `model.grouping`. `topic` is
-    /// on neither — a menu item is a key that goes somewhere, and there is nowhere for this one to
-    /// go — which is the whole reason the chip is dashed rather than absent.
-    ///
     /// **`topic` is drawn and cannot be clicked**, which is the prototype's rule for a narrowing
     /// with no grammar behind it — dashed, not hidden and not faked. Hiding it would say this
     /// corpus has four axes; drawing it live would need a taxonomy that is a `poc/ui` export

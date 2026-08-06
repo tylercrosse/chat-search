@@ -21,6 +21,10 @@ item and its ADR disagree, the ADR wins.
 | `chat-search-me9` | **Clients** — CLI, TUI, Raycast, VS Code                                     |
 | `chat-search-4ar` | **Cross-cutting** — fixtures, ADR revisit triggers, redaction                |
 
+One epic has grown large enough to carry its own map: `chat-search-me9.8`, the macOS app, in
+[apps/macos/ROADMAP.md](../apps/macos/ROADMAP.md) — the phases it fell into, the dependency graph
+over what is left, and which files force two beads apart.
+
 ---
 
 ## MVP

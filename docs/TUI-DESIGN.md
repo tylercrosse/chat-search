@@ -130,8 +130,8 @@ does not move as you type, and it is also the sum the facet bar is already showi
 because the naive approach — hide the preview when it gets tight — is worse than both levels.
 
 *Pane level.* At `width >= 116`, horizontal split 62/38. Below that, **reflow to vertical**:
-results `Min(8)`, preview `Length(12)`. The preview is never dropped for width; it is dropped
-only on the explicit toggle. A user who narrows a window has not asked to lose the preview.
+results `Min(8)`, preview `Length(12)`. The preview is never dropped for width, only on the
+explicit toggle. A user who narrows a window has not asked to lose the preview.
 
 *Column level.* Progressive shedding with a floor on Title. fast-resume's plan
 (`render.rs:507-534`) sheds Directory first at `<72`; we shed **Msgs** first and the density

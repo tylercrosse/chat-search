@@ -13,7 +13,6 @@ item and its ADR disagree, the ADR wins.
 
 ## Epics
 
-
 | epic              | area                                                                          |
 | ------------------- | ------------------------------------------------------------------------------- |
 | `chat-search-a7k` | **Capture** — get transcripts into `~/.chat-archive` before they are pruned  |
@@ -34,13 +33,12 @@ Archive (done) + three importers + real schema + BM25 + a CLI that prints result
 becomes answerable in days rather than weeks.
 
 **Met as of 2026-07-28.** 2,935 conversations / 168k messages across all three sources,
-grouped search with resume commands, 108 tests green. The remaining MVP work is not features
-— it is the three defects below that would make an eval measure the wrong thing, and then the
-eval itself. Everything else is post-MVP regardless of how it is grouped.
+grouped search with resume commands, 108 tests green. What remains is not features. It is the
+three defects below that would make an eval measure the wrong thing, and then the eval itself.
+Everything else is post-MVP regardless of how it is grouped.
 
 `bd list -l mvp-blocker` returns these three plus the eval they gate, and the gating is wired
 as real dependencies — `bd ready` will not offer the eval until all three are closed:
-
 
 | blocker                                              | why it corrupts an eval                                     | state |
 | ------------------------------------------------------ | ------------------------------------------------------------- | ------- |
@@ -52,8 +50,8 @@ as real dependencies — `bd ready` will not offer the eval until all three are 
 172k messages, and a source that contributes nothing gets a row saying why instead of
 vanishing. The eval harness (`cs eval sheet` / `collect` / `run`, see `evals/README.md`) and a
 24-query seed set are in; what remains is the judging pass, which is the part nobody else can
-do. Until queries are judged the score is `—`, not zero — an unjudged set reports as
-unscorable rather than reporting a number nobody should trust.
+do. Until queries are judged the score is `—` rather than zero, because an unjudged set
+reports as unscorable instead of reporting a number nobody should trust.
 
 The corpus is 2,963 and not the 3,032 previously reported: `IndexStats.conversations` counted
 conversation *objects* rather than rows, so 69 conversations that span several transcript
@@ -62,7 +60,7 @@ files (ADR 7) were each counted twice. The same bug made a re-delivered ChatGPT 
 
 **Not in it:** embeddings, clustering, `library.db`, any GUI, OpenCode, Gemini, tool-output
 search. Skipping `library.db` is safe only while nothing authored is written into
-`index.db`; that invariant is easy to hold and expensive to unwind.
+`index.db`. That invariant is easy to hold now and expensive to unwind later.
 
 **Hard constraint:** `cs search --json` must emit exactly what a GUI would consume — stable
 field names, no terminal-width truncation. That is what makes a Raycast extension a
@@ -88,7 +86,6 @@ beads dependency, so `bd ready` will not offer you the downstream item first.
 
 Current live setup on this machine, recorded here because it lives outside the repo:
 
-
 |          |                                                                     |
 | ---------- | --------------------------------------------------------------------- |
 | binary   | `~/.cargo/bin/cs` (`cargo install --path crates/cs`)                |
@@ -107,7 +104,6 @@ ADR 14 (subprocess vs daemon) came off this list on 2026-07-29: an in-process qu
 1.4–6.4 ms and spawning `cs` plus opening the index is ~3 ms, so a daemon buys about 3 ms for a
 socket protocol and cache-staleness bugs. Rust clients link `cs-core`; everything else spawns
 `cs search --json`. Still needs writing up in DECISIONS.md — `chat-search-me9.13`.
-
 
 ADR 8 (in-app vs upstream rename precedence) came off this list on 2026-08-01: authored wins
 unconditionally, because last-write-wins depends on two sources' clocks being comparable and

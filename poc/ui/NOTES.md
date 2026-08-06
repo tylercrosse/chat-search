@@ -6,8 +6,8 @@ the code is not. The prototype is throwaway; this file should survive it.
 Companion to [`README.md`](./README.md), which says what the thing currently does, and
 to [`DESIGN-BRIEF.md`](./DESIGN-BRIEF.md), which is the short pasteable version for a
 design tool — what each mark must encode, and which constraints are settled by
-measurement rather than taste. This
-says why, what was measured to get there, and what was got wrong on the way.
+measurement rather than taste. This says why, what was measured to get there, and what
+was got wrong on the way.
 
 Status: **still iterating.** Nothing here is a product decision. `docs/DECISIONS.md` and
 `docs/TUI-DESIGN.md` remain authoritative for the shipped surfaces; where this disagrees

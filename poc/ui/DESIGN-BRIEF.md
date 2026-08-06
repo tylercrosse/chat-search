@@ -120,7 +120,7 @@ me or mostly the machine, where are my hits, and did anything go wrong.
 alone. Measured, two of the four sat 1.12:1 apart in luminance — the same colour to the
 eye — because hue is the channel that degrades fastest at 2px. They are now on an even
 luminance ramp (~1.8× per step) with hue as the redundant second channel. The specific
-colours are not sacred; the lesson is: at this size, **luminance does the work**.
+colours are not sacred. The lesson is that at this size, **luminance does the work**.
 
 ---
 
@@ -166,8 +166,8 @@ Reported, not prescribed:
 
 ## Where to push
 
-- **The overall register.** Austere and terminal-ish today. Warmer, more crafted, more
-  editorial are all available.
+- **The overall register.** Austere and terminal-ish today, and nothing requires it to
+  stay that way.
 - **Type pairing.** Nothing here was chosen. A better mono alone would change the feel
   of the whole product.
 - **Spacing and vertical rhythm.** Currently ad hoc.

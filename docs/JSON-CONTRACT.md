@@ -5,11 +5,11 @@ a Rust program spawns `cs search --json` and reads this, so a field's shape is p
 interface whether or not anyone wrote it down.
 
 This file exists because it was not written down. The Swift spike (`chat-search-me9.22`) was the
-first client to decode this without reading the structs that produce it, typed `title` as a
-non-optional `String` — the obvious choice, and one that passes every hand test, because no
-untitled conversation appears in the first ten rows of anything — and threw at `results[54]` of
-a `--limit 60` query. Exactly the page size a GUI asks for, and exactly the size nobody checks
-by hand (`chat-search-me9.27`).
+first client to decode this without reading the structs that produce it. It typed `title` as a
+non-optional `String`, which is the obvious choice and passes every hand test, because no
+untitled conversation appears in the first ten rows of anything. Then it threw at `results[54]`
+of a `--limit 60` query. Exactly the page size a GUI asks for, and exactly the size nobody
+checks by hand (`chat-search-me9.27`).
 
 **The rule this file is really for: nullability is part of the contract.** A key that is
 sometimes null, sometimes absent and sometimes present is three different types to a decoder,
@@ -74,7 +74,7 @@ built, not a promise — decode by name.
 | `hits` | array of [`Hit`](#hit--one-message-under---flat) | never; may be empty | The messages that matched, best first. |
 
 No `total` or `settled`. The number worth settling counts *conversations*, and this envelope is
-not about conversations; a message-level total would be a second counting rule no surface reads.
+not about conversations. A message-level total would be a second counting rule no surface reads.
 
 An empty query comes back with nothing in it. The fallback for a query too short to rank is a
 list of recent conversations, and there is no honest way to answer a question about messages
@@ -368,7 +368,7 @@ One chip:
 | key | type | null? | |
 | --- | --- | --- | --- |
 | `keyword` | string | never | `date:`. |
-| `all` | object | never | `selected` is true exactly when the query carries no `date:` token — including one this rail has no chip for, which is the honest pair: something is filtering, and it is not one of these. |
+| `all` | object | never | `selected` is true exactly when the query carries no `date:` token, including one this rail has no chip for. |
 | `values` | array | never | The spans, newest first. Fixed vocabulary, not a census: an index that can count nothing still has four, because they are arithmetic. All but the last nest — today ⊂ this week ⊂ this month — and the last is the complement of the one before it, so the counts do not sum to the corpus. |
 
 One span:

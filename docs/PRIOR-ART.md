@@ -26,8 +26,7 @@ transcripts was an open gap. All three are false.
 - **agentsview, cass and Polylogue are true archives**, copying content into durable stores.
 - **agentsview covers all five of this project's target sources**, ingests the ChatGPT export
   ZIP, and ships a desktop app and web UI over its archive.
-- **SQLite FTS5 is the common choice**, not an unusual one — agentsview, Polylogue and Agent
-  Sessions all use it.
+- **SQLite FTS5 is the common choice** — agentsview, Polylogue and Agent Sessions all use it.
 
 The live-read prior holds only below the top three.
 
@@ -130,9 +129,9 @@ plaintext JSONL to local disk with no auth barrier, so the marginal cost of prov
 one adapter file — which is why this cluster has 20–28 providers while the web cluster stalls
 at the handful of sites worth scraping.
 
-The consequence matters: because Cluster 2 optimises for *resume*, it optimises for the
-**recent** session. Retention is off-strategy — an expired session cannot be resumed, so why
-keep it. That is why three of five Tier 1 tools prune. Only cass and Polylogue reconceived
+Because Cluster 2 optimises for *resume*, it optimises for the **recent** session. Retention
+is off-strategy — an expired session cannot be resumed, so why keep it. That is why three of
+five Tier 1 tools prune. Only cass and Polylogue reconceived
 the problem as evidence retention, and both had to build a durable store to do it.
 
 ## Gaps — closed and open
@@ -204,10 +203,9 @@ answers the question the whole project exists to answer.
 Three outcomes, all fine:
 
 1. **It works.** The actual goal is met today. This project narrows to the retention-aware
-   archiver — smaller, sharper, and the one idea the survey found nowhere — feeding it.
+   archiver, the one idea the survey found nowhere, feeding it.
 2. **It nearly works.** Contribute the gap upstream. It is MIT and shipping weekly.
 3. **It does not.** Continue, with far better information about what "better" has to mean.
 
-What survives all three outcomes: the archiver is complementary rather than competitive, it
-produces a plain mirrored tree any of these tools can read, and the Rust practice that
-motivated the language choice was never contingent on being first.
+The archiver survives all three, because its output is a plain mirrored tree any of these
+tools can read.

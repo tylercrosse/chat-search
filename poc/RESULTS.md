@@ -28,7 +28,7 @@ Two things matter here and neither was obvious up front:
   Node's on-the-fly type stripping and made TypeScript look disqualified. Bundling more
   than halves it; Bun halves it again. Anyone benchmarking a TS CLI without bundling
   first will reach the wrong conclusion.
-- **The query itself is 1–3 ms in every runtime.** SQLite dominates; language choice is
+- **The query itself is 1–3 ms in every runtime.** SQLite dominates, so language choice is
   irrelevant to query cost. The entire spread is process startup.
 
 So the subprocess seam survives type-ahead in every variant except unbundled `.ts`.

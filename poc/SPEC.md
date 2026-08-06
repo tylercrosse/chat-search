@@ -37,8 +37,8 @@ shares its parent's `session_id`, so ordinals collide across files belonging to 
 conversation. Measured on this corpus: 13 session_ids span 28 files, and in every case the
 extra files are subagents (`thread_source: "subagent"`).
 
-Forks are separate and cleanly declared — a fork gets a new `session_id` plus
-`forked_from_id` pointing at its parent (32 on this corpus, all resolvable) — so forks
+Forks are separate and cleanly declared. A fork gets a new `session_id` plus
+`forked_from_id` pointing at its parent (32 on this corpus, all resolvable), so forks
 never collide.
 
 So the codex message id is scoped by the rollout file:
@@ -47,10 +47,10 @@ So the codex message id is scoped by the rollout file:
 native_message_id = "<rollout-file-stem>:<zero-padded-ordinal>"
 ```
 
-The conversation stays keyed on `session_id` (it genuinely is one logical thread); the
+The conversation stays keyed on `session_id` (it genuinely is one logical thread), and the
 rollout file is the branch. Without this, ~3% of messages collide and which copy survives
-depends on directory iteration order — the two implementations disagreed here, which is
-how the collision was found.
+depends on directory iteration order. The two implementations disagreed here, which is how
+the collision was found.
 
 ## Kinds — the prose/tool split
 
@@ -189,5 +189,5 @@ documents pushes them down. Deliberately simple — real weighting comes later.
 ## Out of scope for the PoC
 
 Embeddings, OpenCode/Gemini importers, the ChatGPT export, incremental re-index,
-redaction, and the authored-data log. All deferred on purpose; this measures the
-runtime floor, not the product.
+redaction, and the authored-data log. All deferred on purpose. This measures the
+runtime floor rather than the product.

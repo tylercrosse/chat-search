@@ -83,19 +83,19 @@ is a loop back:
   the agent in place so it inherits the terminal, and prints an `eval`-able line instead
   whenever stdout is not one.
 - **The query log flows back into the ranking, by hand.** `cs search`, `cs pick`, `cs abandon`
-  and `cs tui` append what was searched for and what was opened — and, through the third of
-  those, what was searched for and *not* opened, which is the only thing the log ever learns
-  that is not a success; `cs needs` folds it into one entry per
-  *need* — not per query string, which counted every keystroke of a slowly typed query as its
-  own need (ADR 22). Nothing reads it automatically — converting it into an eval set is
+  and `cs tui` append what was searched for and what was opened. `cs abandon` also records what
+  was searched for and *not* opened, which is the only thing the log ever learns that is not a
+  success. `cs needs` then folds all of it into one entry per *need* rather than per query
+  string, since counting strings counted every keystroke of a slowly typed query as its own
+  need (ADR 22). Nothing reads any of this automatically. Converting it into an eval set is
   `6eb.21`, and until then the eval set in `evals/ranking.toml` is written by hand.
 - **The manifest feeds change detection and nothing else.** The dotted edge into the importer
   is the fold ADR 9 describes, and it does not exist yet — see "Built in part" under
   [What exists](#what-exists).
 
 `queries.jsonl` is drawn as its own node because it is a third category the picture used to have
-no room for. `index.db` is disposable and `library.db` is precious-but-absent; this one is
-precious, present, and **the only file here that cannot be reconstructed from anything** — the
+no room for. `index.db` is disposable, `library.db` is precious but absent, and this one is
+precious, present, and **the only file here that cannot be reconstructed from anything**. The
 archive can rebuild the index, and nothing can rebuild a record of what you went looking for.
 
 ---
@@ -116,8 +116,8 @@ Two boundaries carry most of the weight, plus one deliberate exception:
 - **Archiver / importer** — the split that makes _retroactive reparse_ possible. Fix an
   importer, rebuild, and every conversation back to the first captured byte gets the
   improvement. Fused, fixes would only ever apply going forward. (ADR 1)
-- **Indexer / search are NOT split.** They share the tokenizer, schema and ranking; splitting
-  them produces silent recall bugs rather than crashes.
+- **Indexer / search are not split.** They share the tokenizer, schema and ranking, and
+  splitting them produces silent recall bugs rather than crashes.
 - **The query log is allowed to fail.** Every call site drops the error from
   `querylog::append` on purpose: losing a log line costs a data point, failing the search
   costs the thing that was actually asked for. It is the one place here where swallowing an
@@ -138,8 +138,8 @@ different UUID in its filename:
 | `rollout-…019f1a51-cab4…` | subagent (Poincare) | 465 KB |
 | `rollout-…019f1ace…` | subagent (Singer) | 239 KB |
 
-Nothing in the filenames or paths links them — the shared `session_id` is _inside_ the files.
-So the archiver cannot group them and does not try; it copies four unrelated files.
+Nothing in the filenames or paths links them, because the shared `session_id` is _inside_ the
+files. So the archiver cannot group them and does not try. It copies four unrelated files.
 
 **Conversation identity does not exist until stage 3.** This is the clearest illustration of
 the division of labour, and the reason the archiver can be finished before any importer works.
@@ -268,12 +268,11 @@ missing edge rather than a missing file.
   `deleted-upstream` flag from it in both its flat and grouped output. Nothing ever sets it.
   The archiver writes `vanished` events into the manifest, and **no stage downstream of capture
   reads the manifest at all**, so the fold ADR 9 describes has nowhere to happen.
-  `grep -rn deleted_upstream crates/` returns selects, renders and test fixtures — and not one
-  write. On this
-  machine the column is non-null for 0 of 2,935 conversations, which is indistinguishable from
-  "nothing has vanished yet" — and that is the failure mode. When a source file does disappear,
-  the archive keeps the content and the search says nothing, so reopening fails at the one
-  moment the flag existed to warn about.
+  `grep -rn deleted_upstream crates/` returns selects, renders and test fixtures, and not one
+  write. On this machine the column is non-null for 0 of 2,935 conversations, which is
+  indistinguishable from "nothing has vanished yet", and that is the failure mode. When a
+  source file does disappear, the archive keeps the content and the search says nothing, so
+  reopening fails at the one moment the flag existed to warn about.
 - **Exports are configured sources, not detected ones.** Every id in the archiver's candidate
   list is a directory some running agent writes to, and detection is `path.is_dir()` over that
   list. An export is not written by anything — it is mailed, downloaded and unpacked wherever
@@ -318,9 +317,9 @@ missing edge rather than a missing file.
 ### What would keep this honest
 
 Not much, and it is worth being blunt about that: **none of the above is enforced.** A sentence
-in a Markdown file cannot fail a build. What the section buys instead is a cost change — every
+in a Markdown file cannot fail a build. What the section buys instead is a cost change. Every
 claim is one command away from being checked, so the effort of verifying is smaller than the
-effort of wondering, which is the only lever a document has.
+effort of wondering, and lowering that cost is about all a document can do.
 
 The two claims that deserve promotion out of prose and into `crates/` are the ADR 3 invariant
 (no authored column reachable in `index.db`) and the tombstone writer, since both are testable
@@ -351,7 +350,7 @@ states every client has to render rather than transport errors it can ignore.
 
 ## Reading order
 
-1. [GLOSSARY.md](./GLOSSARY.md) — vocabulary. Four different things look like "branching"; they are not interchangeable.
+1. [GLOSSARY.md](./GLOSSARY.md) — vocabulary. Four different things look like "branching", and they are not interchangeable.
 2. [DECISIONS.md](./DECISIONS.md) — what was decided and why, with status.
 3. [../poc/RESULTS.md](../poc/RESULTS.md) — measurements, and the three bugs differential testing caught. A settled language question (ADR 13), not a foundation; the product lives in `crates/`.
 4. This document — the shape it all adds up to, provisionally.

@@ -23,11 +23,11 @@ part of the product. `poc/` is outside the cargo workspace.
 The decoder and the transport are no longer here. They are `CsKit`, a library product of
 [`apps/macos`](../../apps/macos/README.md), and this package consumes it (`chat-search-me9.8.1`).
 
-That direction is the point. The decoder is written once — every field added to the contract
-after the first non-Rust reader ships would otherwise land twice — and the app cannot depend on
-an instrument, so the instrument depends on the product. What it buys is that the contract check
-below tests the decoder the app is actually built on, rather than a copy of it that has since
-drifted, which is the same class of failure the check exists to catch.
+That direction is the point. The decoder is written once, since every field added to the
+contract after the first non-Rust reader ships would otherwise land twice. And the app cannot
+depend on an instrument, so the instrument has to depend on the product. What it buys is that
+the contract check below tests the decoder the app is actually built on rather than a copy that
+has since drifted, which is the same class of failure the check exists to catch.
 
 What is still the spike's own: the benches, the metrics, and `SearchView.swift` — a view with a
 three-way container picker and a five-field footer in it, which is scaffolding for questions
@@ -96,7 +96,7 @@ reimplement them — and reimplementing them is the duplication `chat-search-me9
 
 **No debounce.** The whole question is what a process per keystroke costs, and a debounce answers
 a different question by hiding that one. `RESULTS.md` §2 has the number that says whether one is
-needed; it is not this program's job to pre-empt it.
+needed, and it is not this program's job to pre-empt it.
 
 **No `cs serve --stdio`.** The transport follows the direction rather than leading it. A spike
 that needs no new infrastructure is one that can be thrown away honestly.

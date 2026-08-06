@@ -19,7 +19,7 @@ measured. This is the map above it.
 
 ## Built
 
-Seventeen beads closed between 2026-07-29 and 2026-08-06, in four groups. They are groups rather
+Eighteen beads closed between 2026-07-29 and 2026-08-06, in four groups. They are groups rather
 than sprints: the epic's one hard ordering rule is that **the shell lands before anything fans
 out**, because "five agents told to build the app produce five incompatible skeletons — window,
 client state, transport and error handling all invented independently."
@@ -43,8 +43,10 @@ six directions come out of one binary with nothing under `Sources/ChatSearch` di
 them.
 
 **4 · The instruments.** The minimap and its scroll relationship (`me9.8.18`), the bottom drawer's
-timeline and scrubber (`me9.8.20`), the main menu (`me9.8.24`), and a `dir:` parsing bug
-(`me9.8.16`).
+timeline and scrubber (`me9.8.20`), the main menu (`me9.8.24`), a `dir:` parsing bug (`me9.8.16`),
+and the drawer's key (`me9.8.26`) — which is the menu paying for itself: `me9.8.20` had closed
+saying a window with one focused view has no key to spare, and a menu bar is where that stops
+being true.
 
 ---
 
@@ -113,9 +115,8 @@ Kept out of the graph to keep it readable. Free-standing — nothing blocks them
 nothing: `me9.8.6` (prove the seam by swapping a whole theme), `me9.8.11` (is spacing outside the
 row a token), `me9.8.14` (carry `model` and `thread_count` on the wire), `me9.8.23` (a group head
 counts rows in hand and cannot say what the corpus holds), `me9.8.25` (`cs timeline` cannot
-describe a `--tools` search), `me9.8.26` (the bottom drawer has no keyboard reach — worth doing
-alongside `me9.8.32`, since a scrubber reachable only by mouse is the same complaint). And one
-pair: `me9.8.13` (a hue for `google-takeout`, or a rule for sources the palette does not name)
+describe a `--tools` search), `me9.8.40` (the grouping axis is four chips and a mouse, which is
+what the drawer was before `me9.8.26`). And one pair: `me9.8.13` (a hue for `google-takeout`, or a rule for sources the palette does not name)
 blocks `g6u` (the facet rail has no source colour).
 
 ### Why the edges are there

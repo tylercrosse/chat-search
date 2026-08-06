@@ -206,13 +206,15 @@ plainly knew how to quit, and why Cmd-C did nothing in an entirely ordinary text
 `chat-search-me9.8.24`. Neither the app nor the field was ever broken. The bar was absent.
 
 **One rule decides what is on it**, and it is `chat-search-me9.8.21`'s argument for Quit carried to
-the end rather than a template copied: an item is here because a key somebody already presses is
-dead without it.
+the end rather than a template copied: an item is here because a key would otherwise reach nothing.
+That has two halves, and while every item on the bar was AppKit's only the first was visible —
+*a key somebody already presses is dead without it* (Quit, and then all of Edit), or *this app can
+do a thing the keyboard cannot reach at all* (the drawer, below).
 
 ```
-chat-search                 Edit                      Window
-  About chat-search           Undo             ⌘Z       Close      ⌘W
-  Settings…            ⌘,     Redo            ⇧⌘Z       Minimize   ⌘M
+chat-search                 Edit                      View                 Window
+  About chat-search           Undo             ⌘Z       Hide Timeline ⌘T     Close      ⌘W
+  Settings…            ⌘,     Redo            ⇧⌘Z                            Minimize   ⌘M
   Quit chat-search     ⌘Q     Cut              ⌘X
                               Copy             ⌘C
                               Paste            ⌘V
@@ -230,6 +232,24 @@ this menu nothing has to — which is why the fix is a file about menus and not 
 **Undo is on it because Paste is.** Cmd-V into a box with a phrase already in it destroys the
 phrase, and the key that gets it back is the one people reach for without looking. The stack is the
 field editor's, so it costs nothing to maintain and is wrong only if the field editor is.
+
+**View is the rule's other half, and the first item here that is this app's own act.** Everything
+above resolves into AppKit — a text system, an application, a window — where Cmd-T calls the same
+method the drawer's own `hide` button calls. It is on the bar because `chat-search-me9.8.20` closed
+saying the drawer could not have a key: this window has one focused view, the query box, so a key
+bound beside it is a key the box stops getting, and the fold escaped that only because Enter already
+belonged to the list rather than to the field. A menu resolves its key equivalents before the
+responder chain is consulted, which is what makes it the one place a key can be added here without
+taking it off something. That argument was not available when the drawer shipped, because there was
+no bar; it is the same shape as Cmd-C, and it arrived the same way.
+
+**Cmd-T is free in this app in a way it is not in most.** The platform spends it on New Tab and on
+Show Fonts; there are no tabs here (nothing implements `newWindowForTab:`, and `--clipboard`'s
+listing of the bar confirms AppKit added no tab items of its own — only a `Close All` alternate
+beside Cmd-W), and nothing in a one-line query box wants a font panel. **The title is a verb and it
+flips**, which is Finder's arrangement for the status bar. `MainMenu` holds no model on purpose, so
+`AppHost.validateMenuItem` writes *Hide* or *Show* at validation — the callback that runs both
+before the menu is drawn and before the key fires, so the verb cannot be read stale.
 
 **Window is what the app owes its second window.** Cmd-comma opens the settings panel and until now
 only the mouse could dismiss it — a window reached by a key and left by a click, which is the same
@@ -249,6 +269,7 @@ says this app has a capability it does not have, and says it in the one place pe
 | Zoom, Bring All to Front | no key equivalent between them, which puts them outside the rule — the green button is the affordance for one and there is nothing for the other to gather |
 | the window list | what `NSApp.windowsMenu` would fill in, and its job is finding a window lost behind others; there are two here and Cmd-comma already raises the second |
 | Hide Others, Show All | both act on *other* applications, so neither is a key this app owes anybody, and Show All has no key equivalent to deliver |
+| the grouping axis | it passes the rule — the four chips are mouse-only in exactly the way the drawer was — and it is left off anyway, because an axis is four states rather than a toggle, and four items with four keys is an argument worth making on its own rather than smuggling in beside one. `chat-search-me9.8.40` |
 
 **And Hide, which was on this menu until the pass measured it.** Cmd-H is the most reflexive key on
 this platform after Cmd-Q, so it arrived on exactly the argument that carried Quit. Then
@@ -295,6 +316,7 @@ was taken back twice.
 ```
 the menu with an empty box:
   Edit: Undo [grey], Redo [grey], Cut [grey], Copy [grey], Paste, Select All, Writing Tools, …
+  View: Hide Timeline
 ⌘A → matched true, selected 27 of 27 characters
 ⌘C → field "dir:chat-search agent:codex" · query "…" · pasteboard "dir:chat-search agent:codex"
 ⌘X → field "" · query "" · pasteboard "dir:chat-search agent:codex"
@@ -303,10 +325,20 @@ the menu with an empty box:
 ⇧⌘Z → field "dir:chat-search agent:codex" · query "…"
 the menu with the phrase selected:
   Edit: Undo, Redo Cut, Cut, Copy, Paste, Select All, …
+  View: Hide Timeline
 ⌘H, which this bar deliberately does not carry → matched false, the app is hidden: false
   NSApp.hide(nil) called directly → the app is hidden: true
 ⌘M → matched true, the window is in the Dock: true
+⌘T → matched true, the drawer is open: false, the item now reads "Show Timeline"
+⌘T again → matched true, the drawer is open: true, the item now reads "Hide Timeline"
 ```
+
+**Cmd-T is pressed twice**, and that is the shape of a toggle rather than thoroughness: one press
+proves a key matched an item and shut a drawer, and cannot tell that from a drawer that was already
+shut. The second press is what says it is a switch. It also puts the drawer back the way the run
+found it, which is the courtesy the pasteboard gets two paragraphs down. The title beside each is
+read after asking the menu to validate, since the verb is written at validation and reading it
+without asking would report the one the bar was built with.
 
 The bar is read **twice**, with an empty box and with the phrase selected, because half these items
 are *supposed* to be grey in the first reading — a Copy that offered itself with nothing selected
@@ -1033,6 +1065,12 @@ getting. Left and right are how a caret moves through a query that is a *grammar
 accordion would buy a fold by breaking the editing of the thing being folded. Enter already belongs
 to the list rather than to the field, so the fold costs nothing that was in use.
 
+There is a third way out of that argument now and it does not change this one: a menu resolves its
+keys outside the responder chain, which is how the drawer got Cmd-T (`chat-search-me9.8.26`). It
+is no use to the fold. A menu item is a single act with no idea where the cursor is, and *fold the
+group the cursor is on* is a sentence about a line — so Enter, which is already delivered to the
+list, is still the only thing that can say it.
+
 The footer says what Enter would do whenever the cursor is on a head, and how many groups are shut
 (`12 groups by project · 12 folded`). That is the same defect `poc/ui/NOTES.md` §5 complains about,
 approached from the other side: a footer that draws a key nobody wired and a fold no footer
@@ -1150,6 +1188,13 @@ opens that way — an instrument affordance in the same family as `--group` and 
 `--measure` can take the keystroke number both ways. It is not remembered between launches, for
 the same reason those are not.
 
+**Cmd-T is the same switch from the keyboard**, through `View ▸ Hide Timeline`
+(`chat-search-me9.8.26`). The button in the corner and the menu item call one method, so there is
+one act with two routes rather than two behaviours; and since a menu resolves its keys outside the
+responder chain, the third `cs` per keystroke can now be stopped without the mouse and without the
+query box giving up a key. [The menu bar](#the-menu-bar) is why that became possible after the
+drawer shipped rather than with it.
+
 **Shutting it cannot change the result set**, because it never narrowed one: the window it draws
 is a `date:` token in the query box, and hiding the drawer does not touch the box.
 
@@ -1180,10 +1225,18 @@ Three frames beside the ordinary ones: `-scrubbed.png` with the selection standi
 
 ### What it does not do
 
-- **No keyboard reach.** The arrows belong to the results list and this window has one focused
-  view, so hiding and dragging are both mouse-only. The same argument as the fold's, without the
-  key the fold found — and it matters less here, since a drawer can only ever draw and the window
-  it selects is typeable by hand. `chat-search-me9.8.26`.
+- **No key moves the selection, and the box is the keyboard route to a date window.** Hiding has
+  Cmd-T now; dragging has nothing, and typing `date:2026-07-28..2026-08-02` into the query box is
+  the answer rather than a workaround. That is the whole point of the drag being a keystroke: the
+  window is a token in the box either way, so the rectangle a drag produces and the rectangle
+  typing produces are the same rectangle derived from the same text — [the round trip
+  above](#the-drag-is-a-keystroke) is `--shot` checking exactly that. What a binding would buy is
+  nudging an *existing* window without retyping it, and nothing is free to bind it to: the arrows
+  move the cursor through the results list, and left and right move a caret through a query that
+  is a grammar. A menu item is what Cmd-T rides in on and it does not help here — a menu is a
+  discrete act, and *wider by one bucket* wants a key held down. So this is stated rather than
+  fixed, and the mouse half of the same complaint — no handles, no pan — is
+  `chat-search-me9.8.32`. `chat-search-me9.8.26`.
 - **`undated` is a number and not a mark.** Four of 4,426 conversations have no ending and can be
   in no bucket; the header says so and the track cannot show them.
 - **A negated `date:` draws no rectangle.** The complement of a window is not a rectangle, and

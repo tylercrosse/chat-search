@@ -111,6 +111,7 @@ stylesheets and exits non-zero if one stops holding.
 | `directions.html` · `directions.js` | six visual directions on the row and the ribbon at real size, in both themes, with what each costs |
 | `directions.css` | those six as token sets — palette, faces, sizes, rhythm, radii; nothing structural |
 | `palette.py` | solves each direction's luminance ramp, and re-measures the stylesheets with `--verify` |
+| `verify-shape.js` | re-measures the drawn ribbon against the runs `cs search --json` sent — `node poc/ui/verify-shape.js` |
 | `tokens.py` | emits the named directions as the macOS app's `Tokens.swift`, so the app and the mockup read one authored copy |
 | `styles.css` | tokens, the three views, the annotation layer |
 | `data.js` | mock conversations, collections, sittings, annotation copy |

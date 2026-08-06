@@ -763,6 +763,8 @@ python3 poc/ui/export.py --limit 400 --per-project 30
 python3 poc/ui/export.py --cs ~/.cargo/bin/cs      # or any other build of it
 python3 poc/ui/icons.py --rebuild   # re-inline source marks
 
+node poc/ui/verify-shape.js         # re-measure the ribbon against the runs cs sent
+
 python3 poc/ui/palette.py           # solve every direction's ramp, print as CSS
 python3 poc/ui/palette.py --verify  # re-measure what directions.css actually says
 ```
@@ -771,6 +773,14 @@ python3 poc/ui/palette.py --verify  # re-measure what directions.css actually sa
 below 4.5:1, so it is a check and not only a generator. `--verify` reads the stylesheets
 back rather than trusting `DIRECTIONS`, because solving a colour and pasting it into a
 file are two events and only one of them was checked before.
+
+`verify-shape.js` is the same idea for the ribbon: it loads `data.js` and `app.js` into a
+stub DOM, reads the markup `ribbon()` produces for all 355 exported conversations, and
+checks each band boundary against cs's cumulative run lengths *over the drawn count*. The
+sequence check alone was not enough — measure the same runs against every head-path message
+and the colours come out in the right order in the wrong places, which is exactly §3.27 and
+exactly what a screenshot does not show. Deliberately not a proof of provenance: it reads
+the markup, so a local re-encode of cs's per-message bands would still pass.
 
 The sample is stratified three ways — by source, by size, and by project. The third
 stratum exists because source-stratified sampling alone gave 9 projects, six of them with

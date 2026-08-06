@@ -39,19 +39,33 @@ footer — the same rule the commits are under.
 There are two surfaces and they photograph differently. Both do it themselves; neither needs a
 screen recording permission, a foreground window, or a human holding the machine.
 
-### The TUI — text frames
+### The TUI — three renderings of the same buffer
 
 ```bash
 cs tui --shot --db ~/.chat-archive/index.db --out /tmp/tui --size 140x40
 ```
 
-Writes `tui-rest.txt`, `tui-no-preview.txt` and `tui-expanded.txt` — the three states that render
-differently rather than merely taller. Paste the relevant one into the body in a fence.
+Writes `tui-{rest,no-preview,expanded}` in three formats each — the three states that render
+differently rather than merely taller. **Which format to reach for depends on the size of the
+change, and getting this wrong is how a review misses something.**
 
-A terminal frame is already characters, so the honest capture is the buffer itself: it diffs line
-by line in review, costs a few kilobytes, needs no display, and is byte-identical whether a person
-or a sandboxed Codex worker took it. Colour is dropped, which makes this the one thing text frames
-cannot show — theme work needs the Swift side's `--verify-theme`.
+| | what it is | use it for |
+| --- | --- | --- |
+| `.txt` | characters, no styling | small changes: what moved, wrapped or truncated. Diffs line by line, pastes into a fence, needs no hosting |
+| `.ans` | the same buffer with SGR escape codes | the truth. `cat` it and your terminal resolves it exactly as the running app would, because it is the same bytes |
+| `.svg` | the ANSI resolved against a stated palette | larger changes, and anything a reviewer has to *see*. Renders in a browser; `rsvg-convert` turns it into a PNG for a PR body |
+
+A plain text frame answers "what moved" and nothing else. That is most of what a small change
+needs and almost none of what a large one does — if the styling *is* the change, a monochrome
+frame that says nothing about it still reads as though the render was checked. Say which format
+you looked at.
+
+**The SVG is *a* rendering, not *the* rendering.** `theme.rs` styles in named ANSI colours —
+`Color::LightBlue`, `Modifier::DIM` — which resolve against whatever palette the reader's terminal
+carries. The Swift app has concrete tokens and one true set of pixels; the TUI does not. So the
+SVG names the palette it used (xterm's 16-colour defaults) and a disagreement about a *colour* is
+settled in a terminal against the `.ans`, never in the picture. `DIM` in particular has no SVG
+equivalent and is approximated with opacity.
 
 This replaces hand-typing an approximation of the screen. Every TUI PR before this one carried a
 hand-typed frame, which is an assertion about the render made by the party least able to check it,

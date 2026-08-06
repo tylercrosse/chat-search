@@ -59,8 +59,9 @@ pub enum Fold {
 /// `thread_key` carries which strand a message belongs to. Ordering by `seq` alone therefore
 /// interleaves every thread at once: on a real 9-thread conversation it put all nine opening
 /// user turns first, then all nine first replies, which reads as nonsense. Main thread before
-/// sidechains, each strand contiguous. `idx_message_thread` is (conv_id, thread_key, seq),
-/// which exists for exactly this.
+/// sidechains, each strand contiguous. `idx_message_reading` is this order, and exists for
+/// exactly this — the index it replaced claimed the same and could not deliver it, being
+/// (conv_id, thread_key, seq) against a sort that leads with `is_sidechain`.
 ///
 /// A shared fragment rather than a comment on one query, because two of them now have to
 /// produce the *same* order: [`load`], and the shape `cs search` puts on every row
@@ -293,6 +294,28 @@ pub fn load(conn: &Connection, conv_id: &str, terms: &[String]) -> rusqlite::Res
     Ok(blocks)
 }
 
+/// The transcript read, named so the test that pins its plan reads the statement
+/// [`read_record`] runs rather than a copy of it.
+///
+/// Unlike the shape's query this one selects `text`, so it can never be index-only — what
+/// `idx_message_reading` buys here is the ordering, which is otherwise a temp b-tree over
+/// every message of the conversation before the first one comes back. The `LEFT JOIN` onto
+/// the sitting table arrived after that was measured and does not cost it: the join is on a
+/// temp table keyed by `conv_id` and the ordering still comes from the index, which is what
+/// the test in [`crate::schema`] is there to keep true.
+pub(crate) fn read_record_sql() -> String {
+    format!(
+        "SELECT m.id, m.role, m.kind, {position}, m.on_head_path, m.text, m.is_sidechain,
+                m.thread_key, m.is_error
+         FROM message m
+         {join}
+         WHERE m.conv_id = ?1 AND m.on_head_path = 1
+         {READING_ORDER}",
+        position = crate::sittings::POSITION,
+        join = crate::sittings::OF_MESSAGE,
+    )
+}
+
 /// One record's messages, unmarked, in [`READING_ORDER`].
 ///
 /// Per record and concatenated by the caller rather than widened into one `IN (...)` query, for
@@ -307,16 +330,7 @@ pub fn load(conn: &Connection, conv_id: &str, terms: &[String]) -> rusqlite::Res
 /// The `LEFT JOIN` finds nothing for an ordinary conversation, so that expression is `seq + 0`
 /// and nothing outside the Takeout records moves.
 fn read_record(conn: &Connection, conv_id: &str) -> rusqlite::Result<Vec<Block>> {
-    let mut stmt = conn.prepare_cached(&format!(
-        "SELECT m.id, m.role, m.kind, {position}, m.on_head_path, m.text, m.is_sidechain,
-                m.thread_key, m.is_error
-         FROM message m
-         {join}
-         WHERE m.conv_id = ?1 AND m.on_head_path = 1
-         {READING_ORDER}",
-        position = crate::sittings::POSITION,
-        join = crate::sittings::OF_MESSAGE,
-    ))?;
+    let mut stmt = conn.prepare_cached(&read_record_sql())?;
     let blocks = stmt
         .query_map(rusqlite::params![conv_id], |r| {
             Ok(Block {

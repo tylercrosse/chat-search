@@ -172,13 +172,38 @@ pub struct SearchOptions {
     ///
     /// Off by default because it is the one field whose cost scales with the *conversations*
     /// returned rather than with the matches in them: it reads every head-path message of
-    /// every row. Measured against the real index, it adds 4–30 ms at the 20–50 rows a
-    /// terminal holds and 205 ms at 354 rows for a broad prefix — and the TUI, which is the
-    /// caller that runs this on every keystroke, draws [`match_density`] rather than a band
-    /// strip and would be paying that for nothing.
+    /// every one, which at the TUI's own limit of 100 is 10k–56k messages per keystroke. Note
+    /// *conversations* and not rows — [`fill_shape`] runs once per member of a [`Sitting`], so
+    /// a page of 100 rows can be 196 of these reads and the broad query below is exactly that.
     ///
-    /// A covering index would make it close to free and let this flag go away; that is
-    /// chat-search-me9.26, filed with these numbers.
+    /// **It stays a flag, and that was decided with the covering index in place rather than
+    /// before it** (chat-search-me9.26). `idx_message_reading` covers this query and did what
+    /// it was built for — the constant fell from ~570 ns per message to ~195, holding to
+    /// within ±4% across a five-fold range of page sizes — but the work is still proportional
+    /// to the messages read, so what is left is real. Measured in-process at limit 100 against
+    /// 4,491 conversations / 208,522 messages, medians of 10 alternating runs on one open
+    /// reader, which is what a client holds:
+    ///
+    /// ```text
+    ///                    rows  convs    search    +shape       without the index
+    /// timezone             49     51     0.52  ->   2.52 ms     0.61 ->   6.48 ms
+    /// borrow checker       73     73     0.72  ->   3.54 ms     0.75 ->   9.06 ms
+    /// schema migration     68     68     1.08  ->   5.66 ms     1.05 ->  14.32 ms
+    /// commits             100    100     7.59  ->  16.30 ms     7.66 ->  32.48 ms
+    /// the                 100    196    83.65  ->  94.76 ms    82.94 -> 116.01 ms
+    /// ```
+    ///
+    /// The absolute cost is small and it is not the argument. An ordinary query at that limit
+    /// searches in 0.5–1.1 ms, so filling the shape unconditionally would make a keystroke
+    /// **about five times longer** — for a strip the TUI does not draw, since it draws
+    /// [`match_density`] instead. The multiple is worst exactly where the search is already
+    /// fast; the broad queries that cost the most in milliseconds are the ones where the shape
+    /// is a rounding error. A default chosen for the broad case would be paid for on every
+    /// other one.
+    ///
+    /// So the surface that draws the strip asks for it (`cs search --json`), and the surface
+    /// that cannot use it does not pay. What changed is that the flag is now a measured
+    /// choice rather than a placeholder waiting on an index.
     pub shape: bool,
 }
 
@@ -1008,6 +1033,22 @@ pub(crate) struct Group {
     pub hits: Vec<Hit>,
 }
 
+/// The shape query, named so the test that pins its plan reads the statement [`drawn_bands`]
+/// runs rather than a copy of it.
+///
+/// The columns are the whole point and a copy would not notice losing them: every one of
+/// these sits in `idx_message_reading`, which is what keeps this an index-only read. Adding a
+/// fourth would drop it back to walking the table, and the difference does not show up as a
+/// failure — only as a slower keystroke that nothing complains about.
+pub(crate) fn drawn_bands_sql() -> String {
+    format!(
+        "SELECT role, kind, is_error FROM message
+         WHERE conv_id = ?1 AND on_head_path = 1
+         {}",
+        crate::blocks::READING_ORDER
+    )
+}
+
 /// One conversation's drawn messages, as bands, in reading order — see [`Group::kind_runs`].
 ///
 /// Bands rather than runs, because a row can be several conversations ([`Sitting`]) and two
@@ -1023,12 +1064,7 @@ pub(crate) struct Group {
 /// an `IN (...)` list sized to the result count would be a new statement per query and would
 /// lose the cache on every keystroke.
 fn drawn_bands(conn: &Connection, conv_id: &str) -> rusqlite::Result<Vec<crate::blocks::Band>> {
-    let mut stmt = conn.prepare_cached(&format!(
-        "SELECT role, kind, is_error FROM message
-         WHERE conv_id = ?1 AND on_head_path = 1
-         {}",
-        crate::blocks::READING_ORDER
-    ))?;
+    let mut stmt = conn.prepare_cached(&drawn_bands_sql())?;
     let rows = stmt
         .query_map(params![conv_id], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? != 0))

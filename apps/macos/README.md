@@ -10,6 +10,10 @@ cargo build --release                       # the app finds ./target/release/cs 
 cd apps/macos && swift run -c release chat-search
 ```
 
+This file is the implementation record: how each piece works, and what it measured.
+[ROADMAP.md](./ROADMAP.md) is the map above it — what is built, what is next, and why the
+remaining beads are ordered the way they are.
+
 No Xcode project, no asset catalog, no bundle: the Command Line Tools SDK and nothing else, the
 same terms `poc/swift` was built on. When something here needs a bundle — a Dock icon, a login
 item, a URL scheme — that is the moment to add one.

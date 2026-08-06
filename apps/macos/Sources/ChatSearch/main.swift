@@ -174,7 +174,8 @@ func parse(_ argv: [String]) -> Options {
                   --out PATH           where --shot writes its PNG (default /tmp/chat-search.png)
                   --longest            --shot opens the longest conversation, not the best
                   --size WxH           open the window at this size (default 900x620)
-                  --group AXIS         open grouped by none|project|run|source (default none)
+                  --group AXIS         open grouped by none|project|run|source (default none).
+                                       Cmd-1 to Cmd-4 are the same four while it is running
                   --folded             open with every group folded (needs --group)
                   --no-timeline        open with the bottom drawer shut, so a keystroke spawns
                                        two processes rather than three. Cmd-T is the same
@@ -328,7 +329,7 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuIt
         // under `--shot` and `--measure` rather than a second behaviour to reason about.
         NSApp.mainMenu = MainMenu.build(
             target: self, settings: #selector(showSettings(_:)),
-            timeline: #selector(toggleTimeline(_:)))
+            timeline: #selector(toggleTimeline(_:)), group: #selector(groupBy(_:)))
         model.group(by: options.group)
         // After the axis, because folding is a property of the groups that axis produced. It moves
         // the default rather than folding what is on screen now, so a group that arrives on a later
@@ -459,17 +460,41 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuIt
     /// change which conversations the list holds (`TimelineModel.toggle`).
     @objc func toggleTimeline(_ sender: Any?) { model.toggleTimeline() }
 
-    /// The verb on the View item, written at the moment AppKit asks whether the item is live.
+    /// Cmd-1 to Cmd-4, and the keyboard's only way onto an axis.
     ///
-    /// `MainMenu` holds no model and should not: which of *Hide* and *Show* is true right now is a
-    /// fact about this window, and validation is the one callback that runs both before the menu is
-    /// drawn and before a key equivalent fires. Everything else on the bar goes to `nil` and up the
-    /// responder chain, so this is asked only about the two items aimed here by name — and both are
-    /// always live, which is the answer that keeps them off the grey list `MainMenu` is built to
-    /// avoid.
+    /// The same method the chip calls, for the same reason Cmd-T is: two routes to one act, and the
+    /// consequences of switching — the accordion clearing, the cursor being placed again — are
+    /// `SearchModel.group(by:)`'s to have, not a menu's to reimplement. Which axis is on the item
+    /// rather than in this method, so adding one to `Grouping` adds a key and not a branch.
+    ///
+    /// An axis already in force returns early inside the model, so the key is inert on the item
+    /// that is already checked — which is what a click on the chip in force already did.
+    @objc func groupBy(_ sender: NSMenuItem) {
+        guard let axis = sender.representedObject as? Grouping else { return }
+        model.group(by: axis)
+    }
+
+    /// The verb on the View item and the mark beside the axis, written at the moment AppKit asks
+    /// whether the item is live.
+    ///
+    /// `MainMenu` holds no model and should not: which of *Hide* and *Show* is true right now, and
+    /// which of four axes the list is cut along, are facts about this window, and validation is the
+    /// one callback that runs both before the menu is drawn and before a key equivalent fires.
+    /// Everything else on the bar goes to `nil` and up the responder chain, so this is asked only
+    /// about the items aimed here by name — and all of them are always live, which is the answer
+    /// that keeps them off the grey list `MainMenu` is built to avoid.
+    ///
+    /// The mark is a checkmark and the group is exclusive, which is what makes it the radio control
+    /// the chips are: `.on` is written on the axis in force and `.off` on the other three every
+    /// time, rather than moved from the one that had it. A mark left behind by a `--group` flag or
+    /// by a click on a chip would be a menu disagreeing with the screen about a thing the screen is
+    /// right about.
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         if item.action == #selector(toggleTimeline(_:)) {
             item.title = model.timeline.shown ? "Hide Timeline" : "Show Timeline"
+        }
+        if item.action == #selector(groupBy(_:)) {
+            item.state = item.representedObject as? Grouping == model.grouping ? .on : .off
         }
         return true
     }

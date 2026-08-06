@@ -117,6 +117,9 @@ enum Measure {
         model.query = query
         model.queryChanged()
         try? await Task.sleep(for: .seconds(2))
+        // Before anything is opened, because that is both the state a person browses in and the
+        // only moment the list is the rightmost pane in the window.
+        density(model: model, window: window)
         // `--longest` opens the biggest conversation the query returned rather than the best. The
         // minimap's hard case is the corpus's longest conversation and no query puts it first, so
         // without this the one thing that has to be looked at cannot be reached from a script.
@@ -204,6 +207,48 @@ enum Measure {
         let library = path.replacingOccurrences(of: ".png", with: "-library.png")
         print("  library → \(capture(window, to: library)) \(library)")
         model.surface = .search
+    }
+
+    /// What a row costs, and therefore how much of the answer a screen holds.
+    ///
+    /// The number the type scale is spent against, and until `chat-search-me9.8.34` nothing
+    /// reported it. `poc/ui/directions.html` fences rows-per-screen *between* directions and says
+    /// so — it stands 800px in for a viewport nobody has — which makes it silent about what a row
+    /// costs at a size somebody opens. Counting them off the PNG is the alternative and it is
+    /// worst at exactly the size that matters: at the 720×480 floor the last row is cut by the
+    /// edge, and whether a half-drawn row counts is a judgement made by whoever is looking. So
+    /// both counts are printed and the arithmetic one is stated first.
+    ///
+    /// The height is a mean over the rows on screen rather than the document divided by its rows.
+    /// A `List` estimates the height of everything it has not laid out yet, so the document is
+    /// partly a guess and the guess is a bigger share of it in a small window — which read as
+    /// *shorter rows at 720 than at 900*, a difference in the instrument reported as a difference
+    /// in the row. The rows in the viewport are the ones that certainly have been measured.
+    @MainActor
+    private static func density(model: SearchModel, window: NSWindow) {
+        let bounds = window.contentView?.bounds.size ?? window.frame.size
+        let at = "\(Int(bounds.width))×\(Int(bounds.height))"
+        // The results list is an `NSTableView` inside its scroll view, which is a fact about how
+        // SwiftUI draws a `List` on this platform rather than a promise it makes. If that ever
+        // stops being true the reading is skipped rather than guessed at.
+        guard let scroll = rightmostScrollView(window), !model.conversations.isEmpty,
+              let table = scroll.documentView as? NSTableView
+        else {
+            print("  density at \(at): no results list to measure")
+            return
+        }
+        let drawn = table.rows(in: table.visibleRect)
+        let heights = (0..<drawn.length).map { table.rect(ofRow: drawn.location + $0).height }
+        let visible = scroll.contentView.bounds.height
+        guard let row = heights.isEmpty ? nil : heights.reduce(0, +) / Double(heights.count),
+              row > 0
+        else {
+            print("  density at \(at): the list has laid out no rows to measure")
+            return
+        }
+        print("  density at \(at): \(fmt(row)) pt per row, \(fmt(visible)) pt of list → "
+            + "\(Int((visible / row).rounded(.down))) rows on screen, "
+            + "\(drawn.length) counting the one the edge cuts")
     }
 
     /// The scrubber, driven from both ends — and the three claims about it that a PNG cannot make.
@@ -609,7 +654,8 @@ enum Measure {
         print("  \(model.reader.transcript?.drawn ?? 0) messages of \(conv.convId) open, "
             + "\(copyResponders(window).count) view(s) in the window answer `copy:`")
         print("    from the query box, Copy lands on \(lands())")
-        if let drawer = readerScrollView(window)?.documentView {
+        // A conversation is open by this point, so the rightmost pane is the drawer.
+        if let drawer = rightmostScrollView(window)?.documentView {
             window.makeFirstResponder(drawer)
             try? await Task.sleep(for: .milliseconds(600))
             print("    with the first responder moved into the drawer "
@@ -731,10 +777,9 @@ enum Measure {
         print("    at rest          \(where_(reader))")
 
         // The transcript's own scroll view, and not the results list beside it: both are `List`s
-        // and therefore both are `NSScrollView`s, so they are told apart by where they are. The
-        // drawer is the right-hand pane, which makes it the rightmost of the two — a weaker test
-        // than asking SwiftUI, which does not answer.
-        guard let scroll = readerScrollView(window) else {
+        // and therefore both are `NSScrollView`s, so they are told apart by where they are. This
+        // runs with a conversation open, which makes the drawer the rightmost of the two.
+        guard let scroll = rightmostScrollView(window) else {
             print("    (no scroll view found in the drawer — nothing to drive)")
             return
         }
@@ -801,9 +846,14 @@ enum Measure {
             + (asked.map { ", last asked for \($0)" } ?? "")
     }
 
-    /// The drawer's scroll view: the rightmost one in the window.
+    /// The rightmost scroll view in the window — which pane that is depends on when you ask.
+    ///
+    /// With a conversation open it is the drawer, with the results list to its left; before one is
+    /// opened it is the results list, with only the facet rail to its left. Both callers state
+    /// which of the two they are after and both depend on their own timing to get it, which is a
+    /// weaker test than asking SwiftUI — and asking SwiftUI is not on offer.
     @MainActor
-    private static func readerScrollView(_ window: NSWindow) -> NSScrollView? {
+    private static func rightmostScrollView(_ window: NSWindow) -> NSScrollView? {
         var found: [NSScrollView] = []
         func walk(_ view: NSView?) {
             guard let view else { return }

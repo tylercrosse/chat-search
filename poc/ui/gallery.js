@@ -592,7 +592,7 @@
   }
 
   /* The fixtures, exported for the same reason window.CS_UI exists: directions.html
-     shows the row and the ribbon under four palettes, and building it a second set of
+     shows the row and the ribbon under every direction, and building it a second set of
      conversations would let the two pages disagree about what a specimen is. A shape
      written as `u c o c* o a` is also the most compact way anyone has found to say
      what a ribbon is being asked to draw. */

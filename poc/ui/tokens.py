@@ -14,8 +14,8 @@ only one of them was checked. This script removes the second event.
         -o ../../apps/macos/Sources/CsTheme/Tokens.swift
 
 SEVERAL DIRECTIONS, ONE FILE. Naming more than one emits them all, declares the list,
-and makes the first one `shipped` — which is what lets a build carry four palettes and
-pick between them at launch (`chat-search-me9.8.9`). The alternative was a file each
+and makes the first one `shipped` — which is what lets a build carry several palettes
+and pick between them at launch (`chat-search-me9.8.9`). The alternative was a file each
 plus a hand-written file to bind them, and it was rejected for what it costs rather
 than for how it looks: the binding is the one part that has to agree with the set, and
 a hand-written binding is the place that agreement rots. Generating the list means a

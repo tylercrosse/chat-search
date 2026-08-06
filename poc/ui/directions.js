@@ -1,9 +1,11 @@
-/* chat-search — four visual directions, on the two marks that break first.
+/* chat-search — every visual direction, on the two marks that break first.
  *
  * DESIGN-BRIEF.md hands the look of this prototype to a designer and asks for several
  * distinct directions rather than one refinement, with the row and the ribbon shown at
  * real size in each — because those are where a purely visual pass breaks without
- * noticing. This page is that ask, answered in the prototype's own tokens.
+ * noticing. This page is that ask, answered in the prototype's own tokens. The last
+ * two are not answers to that brief: they are ports of Gruvbox and Solarized, here for
+ * the same reason the others are, which is that a table of ratios is not a picture.
  *
  * Three rules, and they are the whole design of the file:
  *
@@ -33,25 +35,43 @@
   };
 
   /* Named, because "the second one" is not something two people can agree about a week
-     later. The sentence is the bet each direction is making, not a description of it. */
+     later. The sentence is the bet each direction is making, not a description of it,
+     and the third field is where it came from — a port is not a candidate answer to
+     the brief and the page should not call it one. */
   const DIRECTIONS = [
     ['terminal', 'The incumbent, and the control. System faces, teal and slate, ' +
       'hairlines at low contrast, radii that grew ad hoc. It declares no tokens of ' +
-      'its own — it is styles.css as it stands, so the other three are measured ' +
-      'against what actually ships rather than against a restatement of it.'],
+      'its own — it is styles.css as it stands, so every other row is measured ' +
+      'against what actually ships rather than against a restatement of it.',
+      'control'],
     ['paper', 'Ink on stock rather than phosphor on glass. A warm ground, a text face ' +
       'for the two lines of the row that are prose, square corners, and rules ' +
       'withdrawn until space is doing most of the separating. The bet is that an ' +
-      'archive reads more like a set of documents than like a process listing.'],
+      'archive reads more like a set of documents than like a process listing.',
+      'candidate'],
     ['blueprint', 'The terminal register taken seriously instead of apologised for. ' +
       'Everything in the mono face, every corner square, and the hairlines raised ' +
       'rather than hidden so the grid the row already is becomes visible. The one ' +
-      'direction that buys rows-per-screen rather than spending it.'],
+      'direction that buys rows-per-screen rather than spending it.',
+      'candidate'],
     ['ink', 'The argument that this product has no business being colourful. Chrome ' +
       'goes neutral, corners soften, rules all but vanish and separation comes from ' +
       'the ground a thing sits on. What colour remains is the reserved vocabulary — ' +
       'amber for a match, red for a failure, blue for selection — and the four kinds, ' +
-      'which keep only enough hue to be a second channel.'],
+      'which keep only enough hue to be a second channel.',
+      'candidate'],
+    ['gruvbox-derived', 'Gruvbox, which somebody asked for by name. Its grounds and ' +
+      'its accents are published values; the eight tokens the ramp and the AA floor ' +
+      'fence are its hues at lightnesses palette.py solved, because the published ' +
+      'ones miss. A nudge rather than a rebuild — its dark ramp is already even at ' +
+      '1.77x 1.78x 1.82x, and no band moves more than 13 points of lightness.',
+      'ported'],
+    ['solarized-derived', 'Solarized, and this one is a rebuild. No assignment of its ' +
+      'sixteen colours makes an even ramp at all, so its brightest kind leaves the ' +
+      'range entirely — base1 at L 60% comes back at L 87% — and the tier it ' +
+      'designates for secondary content, at 2.42:1 on base02, comes back brighter ' +
+      'than its own body text. Low contrast is what Solarized is.',
+      'ported'],
   ];
 
   /* ------------------------------------------------------------ measuring -- */
@@ -246,14 +266,14 @@
   const body = $('vd-body');
   const readings = [];
 
-  DIRECTIONS.forEach(([id, thesis]) => {
+  DIRECTIONS.forEach(([id, thesis, role]) => {
     const sec = el('section', 'gal-sec');
     sec.id = id;
     const h = el('div', 'gal-h');
     const title = el('h2');
     title.textContent = id;
     const meta = el('span');
-    meta.textContent = id === 'terminal' ? 'control' : 'candidate';
+    meta.textContent = role;
     h.appendChild(title);
     h.appendChild(meta);
     sec.appendChild(h);

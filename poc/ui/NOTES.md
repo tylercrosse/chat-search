@@ -409,9 +409,10 @@ checking.**
 
 The information design here was argued from measurements and the *look* never was — the
 faces are system defaults and the palette is one nobody chose. `DESIGN-BRIEF.md` says so
-and asks for several distinct directions rather than one refinement. Four exist now, in
-[`directions.css`](./directions.css), shown on the row and the ribbon at real size in
-both themes by [`directions.html`](./directions.html).
+and asks for several distinct directions rather than one refinement. Six exist now in
+[`directions.css`](./directions.css) — four answers to that ask, and two ports of
+palettes designed elsewhere — shown on the row and the ribbon at real size in both
+themes by [`directions.html`](./directions.html).
 
 - **A direction is a set of token values, not a fork of `styles.css`.** That is the whole
   reason the surface layer exists: the five type sizes, six chrome radii, the row's
@@ -430,18 +431,24 @@ both themes by [`directions.html`](./directions.html).
   themes render in one document and the page can read every token in both.
 - **The kind ramp is generated, not picked.** `palette.py` takes a hue per kind and solves
   the lightness that lands it at 2.2 / 4.0 / 7.2 / 13.0 against that direction's own
-  track. Holding the *ratios* constant across all four is what makes the finding survive
+  track. Holding the *ratios* constant across all six is what makes the finding survive
   by construction: however different they look at 200px they read identically at 2px.
   The colours are not sacred and the ramp is, so the ramp is the generated part.
 - **The generator agrees with the incumbent.** Given only hue and target ratio it
   reproduces the ramp that was hand-solved earlier to within one part in 255 — `#2bb6b2`
   exactly for the user band, `#415358` against `#425258` for tools. That agreement is the
-  reason to trust it on the three new directions, and it is the only reason.
+  reason to trust it on the three new directions, and it is the only reason. On the two
+  ports there is nothing hand-solved for it to agree with, which is the point of them.
 - **`terminal` declares nothing.** The control has to be `styles.css` as it stands.
-  Nudging it to match the generator would have moved the baseline the other three are
+  Nudging it to match the generator would have moved the baseline the others are
   measured against, to make a table look tidier.
+- **A port is a colour port and nothing else.** `gruvbox-derived` and
+  `solarized-derived` set no type, radius or rhythm token, so density is not something
+  they can spend and there is no argument to have about it. That is not modesty: what
+  was asked for was two palettes, and giving Gruvbox a face it does not publish would
+  be this file inventing a direction and calling it a port.
 
-The four, and what each is betting:
+The six, and what each is betting:
 
 | | bet | row | rows / 800px |
 | --- | --- | --- | --- |
@@ -449,10 +456,30 @@ The four, and what each is betting:
 | `paper` | an archive reads like documents, not a process listing | 64.9px | 12 |
 | `blueprint` | the terminal register taken seriously, not apologised for | 60.6px | 13 |
 | `ink` | this product has no business being colourful | 65.3px | 12 |
+| `gruvbox-derived` | Gruvbox's hues, none of its lightnesses — a nudge | = `terminal` | 12 |
+| `solarized-derived` | Solarized's hues, none of its lightnesses — a rebuild | = `terminal` | 12 |
 
 Row heights are measured off the rendered page, not summed from the tokens — a row's
 height is a line box's opinion. The incumbent measures 66.3px against the 66px reported
-in the brief, which is the check that the harness is looking at the real thing.
+in the brief, which is the check that the harness is looking at the real thing. The two
+ports are the exception and are marked as such: they declare no token a row's height
+depends on, so theirs is the incumbent's by construction rather than by measurement,
+and `directions.html` re-measures them anyway.
+
+What re-solving cost each palette, in points of HSL lightness against the published
+value, worst band first — the numbers `apps/macos/README.md` tabulates beside the ramps
+they buy:
+
+| | worst band, dark | worst band, light |
+| --- | --- | --- |
+| `gruvbox-derived` | purple, −11.4 pt (reasoning) | aqua, −13.3 pt (user) |
+| `solarized-derived` | base1, **+26.7 pt** (agent) | base1, −21.6 pt (quiet tier) |
+
+Which is the whole difference between the two ports in one table. Gruvbox's bands move
+a few points because its dark ramp was already even at 1.77× 1.78× 1.82×; Solarized's
+brightest kind has to travel 27 points of lightness because nothing sits between `base1`
+at 5.61:1 and `base2` at 12.25:1, and its designated secondary tier travels 22 the other
+way because 2.42:1 is under half the AA floor. Low contrast is what Solarized *is*.
 
 `ink` is the one worth watching: it strips almost all the hue the ramp has been leaning
 on as a redundant second channel, so if its four kinds are still tellable apart, then

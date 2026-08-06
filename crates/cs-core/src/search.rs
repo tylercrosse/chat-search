@@ -239,7 +239,7 @@ fn like_contains(value: &str) -> String {
 /// `WHERE 1 = 1`. Values are bound rather than interpolated: `agent:codex` and `agent:claude`
 /// then produce one cached statement instead of two, which is what keeps the typeahead's
 /// prepared-statement cache useful.
-fn filter_sql(query: &Query, now_ms: i64, binds: &mut Vec<Value>) -> String {
+pub(crate) fn filter_sql(query: &Query, now_ms: i64, binds: &mut Vec<Value>) -> String {
     let mut sql = String::new();
 
     // `agent:` is equality — a source id is an enum, and a substring match on one would make
@@ -279,27 +279,48 @@ fn filter_sql(query: &Query, now_ms: i64, binds: &mut Vec<Value>) -> String {
         ));
     }
 
-    // `date:` is a half-open window on when the conversation ended.
-    for (window, negated) in query.date_windows(now_ms) {
-        let mut bounds = Vec::new();
-        if let Some(from) = window.from {
-            bounds.push(format!("c.ended_at >= {}", bind(binds, Value::Integer(from))));
-        }
-        if let Some(until) = window.until {
-            bounds.push(format!("c.ended_at < {}", bind(binds, Value::Integer(until))));
-        }
-        if bounds.is_empty() {
-            continue;
-        }
-        let inside = format!("(c.ended_at IS NOT NULL AND {})", bounds.join(" AND "));
-        // Negation wraps the whole test rather than flipping each comparison, which is what
-        // makes an undated conversation survive `-date:today`: it is not in the window, so
-        // it belongs in the complement. Flipped comparisons would leave it NULL and drop it.
-        let clause = if negated { format!("NOT {inside}") } else { inside };
-        sql.push_str(&format!("\n           AND {clause}"));
+    if let Some(dates) = date_sql(query, now_ms, binds) {
+        sql.push_str(&format!("\n           AND {dates}"));
     }
 
     sql
+}
+
+/// The `date:` half of [`filter_sql`], as a boolean expression over `c.ended_at`.
+///
+/// A function of its own because [`crate::timeline`] needs the same test as a *selected column*
+/// rather than as a predicate: the drawer draws what a window does not hold while counting what
+/// it does, so one statement has to answer both. Two spellings of "inside the window" would be
+/// the local-date bug's shape one client further out — a filter and a picture of it, derived
+/// separately, agreeing until the day one of them moved.
+///
+/// `None` when the query names no window at all, which is not `Some("1")`: a caller with nothing
+/// to test should get no column rather than a column of ones.
+pub(crate) fn date_sql(query: &Query, now_ms: i64, binds: &mut Vec<Value>) -> Option<String> {
+    // `date:` is a half-open window on when the conversation ended.
+    let clauses: Vec<String> = query
+        .date_windows(now_ms)
+        .into_iter()
+        .filter_map(|(window, negated)| {
+            let mut bounds = Vec::new();
+            if let Some(from) = window.from {
+                bounds.push(format!("c.ended_at >= {}", bind(binds, Value::Integer(from))));
+            }
+            if let Some(until) = window.until {
+                bounds.push(format!("c.ended_at < {}", bind(binds, Value::Integer(until))));
+            }
+            if bounds.is_empty() {
+                return None;
+            }
+            let inside = format!("(c.ended_at IS NOT NULL AND {})", bounds.join(" AND "));
+            // Negation wraps the whole test rather than flipping each comparison, which is what
+            // makes an undated conversation survive `-date:today`: it is not in the window, so
+            // it belongs in the complement. Flipped comparisons would leave it NULL and drop it.
+            Some(if negated { format!("NOT {inside}") } else { inside })
+        })
+        .collect();
+    // Two `date:` tokens intersect, which is `Query::toggling`'s rule read from the other end.
+    (!clauses.is_empty()).then(|| clauses.join(" AND "))
 }
 
 pub(crate) fn search(

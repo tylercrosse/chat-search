@@ -11,9 +11,18 @@ import PackageDescription
 // keeps `swift run -c release cs-spike contract` — the only thing in the repo that catches a
 // contract break, since `cargo test --workspace` structurally cannot see it — checking the same
 // decoder the app runs on.
+// The floor is macOS 15 and the commitment is per-API rather than per-release
+// (`chat-search-me9.8.27`). What bought it is `onScrollGeometryChange(for:of:action:)`, which is
+// the only way a `List` says where it actually is — before it, the minimap's viewport box was
+// drawn from which rows had reported themselves through `onAppear`, which is a superset of what a
+// reader can see and moves in message-sized jumps. Going back below 15 now means `#available`
+// guards around that and around `onGeometryChange`, so adopt deliberately.
+//
+// Fifteen and not twenty-six, which is what this machine runs: there is no macOS 16 through 25, so
+// one release of headroom is a year of it, and it keeps a hand-fenced palette out of Liquid Glass.
 let package = Package(
     name: "chat-search-macos",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
     products: [
         .library(name: "CsKit", targets: ["CsKit"]),
         .executable(name: "chat-search", targets: ["ChatSearch"]),

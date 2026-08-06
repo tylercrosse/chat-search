@@ -306,7 +306,10 @@ pub struct Filter {
 impl Filter {
     fn new(facet: Facet, value: &str, negated: bool, as_typed: String) -> Self {
         let kind = match facet {
-            Facet::Date => match DateSpec::parse(value) {
+            // Unquoted first, because quoting is lexical and applies to every facet's value even
+            // though only `dir:` has one that needs it. A `date:` value read one way here and
+            // another in `Query::selection` would be the two-readings bug this module is named for.
+            Facet::Date => match DateSpec::parse(&unquote(value)) {
                 Some(spec) => FilterKind::Date(spec, negated),
                 None => FilterKind::Rejected,
             },
@@ -343,20 +346,135 @@ impl Filter {
 /// state a typeahead is in for most of its life and not something to raise an error over.
 fn parse_selection(value: &str, prefix_negated: bool) -> Option<Selection> {
     let mut selection = Selection::default();
-    for piece in value.split(',') {
-        let (negated, name) = match piece.strip_prefix('!') {
-            Some(rest) => (!prefix_negated, rest),
-            None => (prefix_negated, piece),
-        };
+    for piece in split_values(value) {
+        let (flipped, name) = piece_value(piece);
         if name.is_empty() {
             continue;
         }
+        let negated = if flipped { !prefix_negated } else { prefix_negated };
         let bucket = if negated { &mut selection.exclude } else { &mut selection.include };
-        if !bucket.iter().any(|v| v == name) {
-            bucket.push(name.to_string());
+        if !bucket.iter().any(|v| *v == name) {
+            bucket.push(name);
         }
     }
     (!selection.is_empty()).then_some(selection)
+}
+
+// ---- quoting --------------------------------------------------------------------------------
+//
+// The grammar spends two characters on structure — whitespace ends a word, a comma ends a value —
+// and a `cwd` is free to contain either. So `dir:/Users/t/Mobile Documents` parsed as the filter
+// `dir:/users/t/mobile` plus the free term `documents`, and `dir:/a,b/c` as two directories, the
+// first of which is a substring of most paths on the machine. Both filtered, neither said so, and
+// both looked like they had worked (`chat-search-me9.8.16`).
+//
+// A double quote suspends both, the way a shell does and the way `docs/TUI-DESIGN.md` §5 records
+// fast-resume already doing: `dir:"/Users/t/Mobile Documents"` is one token naming one directory.
+// Three rules, and they are all of it:
+//
+//   - Inside a quoted run, whitespace and commas are ordinary characters.
+//   - `""` inside a quoted run is one literal quote — the same doubling `Query::match_expr`
+//     already does for FTS5, rather than a second escaping scheme to learn.
+//   - An unterminated run reaches the end of the text, because half-typed is the normal state of
+//     a typeahead and parsing may not fail (`chat-search-6eb.11`).
+//
+// **Quoting is lexical, not semantic.** A quoted run of *free text* still tokenises into exactly
+// the terms it did unquoted, so this buys no phrase search and changes no ranking: all 31 pinned
+// expressions below are unchanged by it. What it buys is a filter value that can hold a separator.
+
+/// The text split into words, with quoted runs held together.
+///
+/// Slices of the original, quotes included, because the rewriters below hand back tokens they did
+/// not mean to change verbatim — and because what a token *means* is [`unquote`]'s answer, not the
+/// splitter's.
+fn split_words(text: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start: Option<usize> = None;
+    let mut quoted = false;
+    for (i, c) in text.char_indices() {
+        if c == '"' {
+            // A doubled quote toggles twice and so protects the run it sits in, which is the
+            // reading `unquote` gives it: no special case is needed here for it.
+            quoted = !quoted;
+            start.get_or_insert(i);
+        } else if c.is_whitespace() && !quoted {
+            if let Some(from) = start.take() {
+                out.push(&text[from..i]);
+            }
+        } else {
+            start.get_or_insert(i);
+        }
+    }
+    out.extend(start.map(|from| &text[from..]));
+    out
+}
+
+/// One token's raw value split at the commas that separate values — the ones outside quotes.
+fn split_values(raw: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut quoted = false;
+    for (i, c) in raw.char_indices() {
+        match c {
+            '"' => quoted = !quoted,
+            ',' if !quoted => {
+                out.push(&raw[start..i]);
+                start = i + c.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    out.push(&raw[start..]);
+    out
+}
+
+/// One raw piece read as the parser reads it: whether an inline `!` negates it, and its value with
+/// the quoting taken off.
+///
+/// The `!` is stripped before unquoting and only off the front of the raw piece, so `dir:!"a b"`
+/// drops the directory `a b` while `dir:"!a b"` keeps one named `!a b`. One `!`, because that is
+/// what this has always stripped: to it `!!codex` is the value `!codex`, and a rewriter reading
+/// further would delete a token nothing selected.
+fn piece_value(piece: &str) -> (bool, String) {
+    match piece.strip_prefix('!') {
+        Some(rest) => (true, unquote(rest)),
+        None => (false, unquote(piece)),
+    }
+}
+
+/// A raw piece with its quoting taken off. The inverse of [`as_written`].
+fn unquote(piece: &str) -> String {
+    let mut out = String::with_capacity(piece.len());
+    let mut chars = piece.chars().peekable();
+    let mut quoted = false;
+    while let Some(c) = chars.next() {
+        match c {
+            // Doubling means a literal quote only inside a run, as it does in CSV and in FTS5:
+            // outside one there is nothing for the pair to be an escape within.
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                chars.next();
+                out.push('"');
+            }
+            '"' => quoted = !quoted,
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// A value written so that [`unquote`] gives back exactly it — quoted only when it has to be.
+///
+/// The restraint is the point. A path is something a reader recognises in their own input box, so
+/// handing back `dir:"/x/y"` where `dir:/x/y` would do is the rewriter changing text it was not
+/// asked about, in the one place the user can see what they wrote.
+fn as_written(value: &str) -> String {
+    let structural = |c: char| c.is_whitespace() || c == ',' || c == '"';
+    // A leading `!` is the inline negation mark, so a value that starts with one has to be quoted
+    // to mean itself — otherwise adding it to the selection would spell dropping it.
+    if !value.starts_with('!') && !value.contains(structural) {
+        return value.to_string();
+    }
+    format!("\"{}\"", value.replace('"', "\"\""))
 }
 
 // ---- rewriting the query text -------------------------------------------------------------
@@ -370,7 +488,7 @@ fn parse_selection(value: &str, prefix_negated: bool) -> Option<Selection> {
 // order, and tokens it does not understand.
 
 fn words(text: &str) -> Vec<String> {
-    text.split_whitespace().map(str::to_string).collect()
+    split_words(text).into_iter().map(str::to_string).collect()
 }
 
 /// Words back into text, deciding the one thing splitting on whitespace threw away: whether
@@ -388,7 +506,11 @@ fn join(words: Vec<String>, original: &str) -> String {
     let closed = original.chars().last().is_some_and(char::is_whitespace);
     let only_filters = words.iter().all(|w| is_filter(w));
     let mut text = words.join(" ");
-    if !text.is_empty() && (closed || only_filters) {
+    // Never inside a quoted run that is still open. There the space would land *in* the value
+    // being typed — the rewriter editing a filter it was not asked about — and it would be
+    // pointless besides: extending that value is exactly what the next character should do.
+    let open = text.matches('"').count() % 2 == 1;
+    if !text.is_empty() && !open && (closed || only_filters) {
         text.push(' ');
     }
     text
@@ -415,7 +537,8 @@ fn facet_token(word: &str, facet: Facet) -> Option<(bool, &str)> {
 /// Every word, with every token of `facet` gone. The All chip's rewrite, and the first half of
 /// a click on a facet whose tokens intersect.
 fn strip_facet(text: &str, facet: Facet) -> Vec<String> {
-    text.split_whitespace()
+    split_words(text)
+        .into_iter()
         .filter(|w| facet_token(w, facet).is_none())
         .map(str::to_string)
         .collect()
@@ -433,24 +556,22 @@ fn strip_facet(text: &str, facet: Facet) -> Vec<String> {
 /// cannot quietly normalise the spelling of another.
 fn strip_value(text: &str, facet: Facet, value: &str) -> Vec<String> {
     let mut out = Vec::new();
-    for word in text.split_whitespace() {
+    for word in split_words(text) {
         let Some((negated, raw)) = facet_token(word, facet) else {
             out.push(word.to_string());
             continue;
         };
-        // One `!`, because `parse_selection` strips one: to it `!!codex` is the value
-        // `!codex`, and a rewriter that read further would delete a token nothing selected.
-        let names = || raw.split(',').map(|p| p.strip_prefix('!').unwrap_or(p));
-        // Lowercased first, because that is the state `parse` hands every value to the SQL in:
+        let pieces = split_values(raw);
+        // Read exactly as `parse_selection` reads it — one `!` off the front, then the quoting —
+        // and lowercased, because that is the state `parse` hands every value to the SQL in:
         // `Agent:Codex` filters, so the bar has to see the same token or it would add a second
-        // one beside it.
-        let kept: Vec<&str> = raw
-            .split(',')
-            .zip(names())
-            .filter(|(_, name)| !facet.selects(&name.to_lowercase(), value))
-            .map(|(piece, _)| piece)
+        // one beside it. Pieces that stay are re-emitted as they were typed, quotes included.
+        let kept: Vec<&str> = pieces
+            .iter()
+            .copied()
+            .filter(|piece| !facet.selects(&piece_value(piece).1.to_lowercase(), value))
             .collect();
-        if kept.len() == names().count() {
+        if kept.len() == pieces.len() {
             out.push(word.to_string());
         } else if kept.iter().any(|p| !p.is_empty()) {
             let dash = if negated { "-" } else { "" };
@@ -463,17 +584,21 @@ fn strip_value(text: &str, facet: Facet, value: &str) -> Vec<String> {
 /// Add `value` to the selection, widening an existing token where there is one to widen.
 ///
 /// A negated token is not a candidate — appending to `-agent:gemini` would exclude the value it
-/// was asked to include. A new token goes at the *front*, which is what makes the caret at the
-/// end of the text still sit at the end of the free text, so clicking a chip mid-query does not
-/// interrupt typing.
+/// was asked to include. Neither is one whose quoting is still open: the comma this appends would
+/// land *inside* the run and make one value out of two, and half-typed is the normal state of a
+/// typeahead. A new token goes at the *front*, which is what makes the caret at the end of the
+/// text still sit at the end of the free text, so clicking a chip mid-query does not interrupt
+/// typing.
 fn add_value(words: &mut Vec<String>, facet: Facet, value: &str) {
-    let widenable = words
-        .iter_mut()
-        .find(|w| matches!(facet_token(w, facet), Some((false, raw)) if !raw.is_empty()));
+    let value = as_written(value);
+    let widenable = words.iter_mut().find(|w| {
+        matches!(facet_token(w, facet), Some((false, raw))
+            if !raw.is_empty() && raw.matches('"').count() % 2 == 0)
+    });
     match widenable {
         Some(word) => {
             word.push(',');
-            word.push_str(value);
+            word.push_str(&value);
         }
         None => words.insert(0, format!("{}{value}", facet.keyword())),
     }
@@ -530,7 +655,7 @@ impl Query {
         let mut terms: Vec<String> = Vec::new();
         let mut filters: Vec<Filter> = Vec::new();
 
-        for word in lower.split_whitespace() {
+        for word in split_words(&lower) {
             let (negated, bare) = match word.strip_prefix('-') {
                 Some(rest) => (true, rest),
                 None => (false, word),
@@ -587,7 +712,10 @@ impl Query {
             return self;
         }
         let mut words = words(&self.raw);
-        words.insert(0, format!("{}{}", Facet::Agent.keyword(), source.to_lowercase()));
+        words.insert(
+            0,
+            format!("{}{}", Facet::Agent.keyword(), as_written(&source.to_lowercase())),
+        );
         Self::parse(&join(words, &self.raw), self.prefix)
     }
 
@@ -730,10 +858,11 @@ impl Query {
                     // Read back off the token rather than kept beside the parsed spec: the two
                     // would be one fact stored twice, and only one of them can be wrong.
                     if let Some((_, value)) = facet_token(&filter.as_typed, facet) {
+                        let value = unquote(value);
                         let bucket =
                             if *negated { &mut out.exclude } else { &mut out.include };
-                        if !bucket.iter().any(|v| v == value) {
-                            bucket.push(value.to_string());
+                        if !bucket.iter().any(|v| *v == value) {
+                            bucket.push(value);
                         }
                     }
                 }
@@ -1387,30 +1516,145 @@ mod tests {
         assert!(lit(&both, Facet::Dir, "/Users/t/dev/api-server"));
     }
 
+    // ---- chat-search-me9.8.16: a separator inside a value ----
+
     #[test]
-    fn a_directory_no_token_can_carry_fails_its_own_round_trip_rather_than_filtering_wrongly() {
-        // Whitespace separates words and a comma separates values, so neither can appear inside
-        // a `dir:` token: `~/Mobile Documents` becomes a filter *and* a search term, and `/a,b`
-        // becomes two directories, the first of which is a substring of most paths on the
-        // machine. This grammar has no quoting yet (`chat-search-me9.8.16`), so what a rail may
-        // not do is hand back a click it cannot prove — `facets::dirs` reparses each one and
-        // drops the directories this pins as unreachable.
-        //
-        // Note what a rail may *not* check: whether the chip lights. `dir:/Users/t/Mobile
-        // Documents` does light it — the token it left behind is a prefix of the path — while
-        // also requiring the word "documents" in the text. The question is whether the value
-        // that arrived is the value the token now names.
+    fn a_quoted_value_holds_the_separators_that_would_otherwise_end_it() {
+        // The bug, stated as the two readings it used to produce. `dir:/Users/t/Mobile Documents`
+        // parsed as the filter `dir:/users/t/mobile` *plus* the free term `documents`, and
+        // `dir:/a,b/c` as two directories, the first of which is a substring of most paths on the
+        // machine. Both filtered, neither said so.
+        let spaced = Query::typeahead(r#"dir:"/Users/t/Mobile Documents" rust"#);
+        assert_eq!(spaced.selection(Facet::Dir).include, ["/users/t/mobile documents"]);
+        assert_eq!(spaced.terms(), ["rust"], "and none of the path is a word to find");
+
+        let comma = Query::typeahead(r#"dir:"/Users/t/a,b/c""#);
+        assert_eq!(comma.selection(Facet::Dir).include, ["/users/t/a,b/c"], "one value, not two");
+
+        // Unquoted, both still parse the way they always did. Quoting is what a reader reaches
+        // for, not a rule applied behind them.
+        assert_eq!(
+            Query::typeahead("dir:/Users/t/Mobile Documents").selection(Facet::Dir).include,
+            ["/users/t/mobile"]
+        );
+    }
+
+    #[test]
+    fn a_directory_a_separator_cannot_be_typed_into_survives_toggling_both_ways() {
+        // The acceptance criterion of `chat-search-me9.8.16`, and what `facets::dirs` needs to
+        // stop dropping such a directory: the click writes a token, the token parses back to
+        // exactly the path that was handed in, and clicking again takes it out whole.
         let names = |text: &str| Query::typeahead(text).selection(Facet::Dir).include;
-        for path in ["/Users/t/Mobile Documents", "/Users/t/dev/a,b"] {
-            let after = Query::typeahead("").toggling(Facet::Dir, path);
+        for path in [
+            "/Users/t/Mobile Documents",
+            "/Users/t/dev/a,b",
+            "/Users/t/dev/say \"hi\"",
+            "/Users/t/!urgent",
+        ] {
+            let on = Query::typeahead("rust").toggling(Facet::Dir, path);
             assert!(
-                !names(&after).contains(&path.to_lowercase()),
-                "{path:?} came back as {after:?}, which is not a token for it"
+                names(&on).contains(&path.to_lowercase()),
+                "{path:?} came back as {on:?}, which is not a token for it"
+            );
+            assert_eq!(Query::typeahead(&on).terms(), ["rust"], "{path:?} leaked into the terms");
+            assert_eq!(
+                Query::typeahead(&on).toggling(Facet::Dir, path),
+                "rust",
+                "{path:?} did not come back out"
             );
         }
-        // The control, or the above would pass on a rewriter that did nothing at all.
-        let reachable = Query::typeahead("").toggling(Facet::Dir, "/Users/t/dev/web-app");
-        assert!(names(&reachable).contains(&"/users/t/dev/web-app".to_string()));
+    }
+
+    #[test]
+    fn a_value_is_quoted_only_when_it_has_to_be() {
+        // The box is the one place a filter is visible, so a rewriter that quoted everything
+        // would be restyling text the user also types in. Quotes appear exactly where the
+        // grammar would otherwise end the value early.
+        let click = |path: &str| Query::typeahead("rust").toggling(Facet::Dir, path);
+        assert_eq!(click("/Users/t/dev/web-app"), "dir:/Users/t/dev/web-app rust");
+        assert_eq!(click("/Users/t/Mobile Documents"), r#"dir:"/Users/t/Mobile Documents" rust"#);
+        // A `"` in a path is written doubled, the same escape `match_expr` already uses for FTS5
+        // rather than a second one to learn.
+        assert_eq!(click(r#"/Users/t/say "hi""#), r#"dir:"/Users/t/say ""hi""" rust"#);
+        // A `!` is only the inline negation mark at the *front* of a value, so it is quoted there
+        // and left alone anywhere else. Unquoted, adding such a value would spell dropping it.
+        assert_eq!(click("!urgent"), r#"dir:"!urgent" rust"#);
+        assert_eq!(click("/Users/t/!urgent"), "dir:/Users/t/!urgent rust");
+    }
+
+    #[test]
+    fn an_inline_bang_negates_from_outside_the_quotes_and_not_from_within() {
+        // Which is the difference between excluding the directory `a b` and selecting one called
+        // `!a b`. The mark is read off the raw piece before the quoting comes off, so the two are
+        // distinguishable rather than one of them being unsayable.
+        let excluded = Query::typeahead(r#"dir:!"/t/a b""#).selection(Facet::Dir);
+        assert_eq!(excluded.exclude, ["/t/a b"]);
+        assert!(excluded.include.is_empty());
+
+        let named = Query::typeahead(r#"dir:"!/t/a b""#).selection(Facet::Dir);
+        assert_eq!(named.include, ["!/t/a b"]);
+        assert!(named.exclude.is_empty());
+    }
+
+    #[test]
+    fn quoting_is_lexical_so_free_text_tokenises_exactly_as_it_did() {
+        // The blast radius of a change to the word splitter, bounded on purpose: a quoted run is
+        // held together for the *filter* grammar's sake and buys no phrase search, so the ranker
+        // sees the same terms in the same order it saw before. The 31 pinned expressions above
+        // are the wider version of this claim.
+        assert_eq!(Query::typeahead(r#"say "hi""#).terms(), ["say", "hi"]);
+        assert_eq!(Query::typeahead(r#"borrow "checker rust""#).terms(), ["borrow", "checker", "rust"]);
+        assert_eq!(Query::typeahead(r#""deep learn""#).match_expr(), "\"deep\" \"learn\"");
+    }
+
+    #[test]
+    fn an_unterminated_quote_reaches_the_end_of_the_text_rather_than_failing() {
+        // Half-typed is the normal state of a typeahead, so the open run is read as running to
+        // the end — the same reading a shell gives it, and the one that closes the moment the
+        // second quote is typed.
+        let open = Query::typeahead(r#"dir:"/Users/t/Mobile Doc"#);
+        assert_eq!(open.selection(Facet::Dir).include, ["/users/t/mobile doc"]);
+        assert!(open.terms().is_empty(), "nothing inside the run is a word to find");
+        // And every prefix of the finished token is safe, which is the invariant every keystroke
+        // in a typeahead relies on.
+        let finished = r#"dir:"/Users/t/Mobile Documents" rust"#;
+        for end in 1..=finished.len() {
+            let Some(prefix) = finished.get(..end) else { continue };
+            let q = Query::typeahead(prefix);
+            let _ = q.match_expr();
+            let _ = q.rejected();
+            let _ = q.selection(Facet::Dir);
+            let _ = q.toggling(Facet::Dir, "/Users/t/dev/web-app");
+        }
+    }
+
+    #[test]
+    fn widening_a_token_whose_quote_is_still_open_starts_a_new_one_instead() {
+        // The comma this would append lands *inside* the open run, making one value of two — so
+        // the half-typed token is left exactly as it was and the click gets a token of its own.
+        // What the reader sees is their own typing untouched beside the chip they pressed.
+        let after = Query::typeahead(r#"dir:"/Users/t/Mob"#).toggling(Facet::Dir, "/t/dev/api");
+        assert_eq!(after, r#"dir:/t/dev/api dir:"/Users/t/Mob"#);
+        let both = Query::typeahead(&after).selection(Facet::Dir);
+        assert_eq!(both.include, ["/t/dev/api", "/users/t/mob"], "and both are in force");
+    }
+
+    #[test]
+    fn a_quoted_value_still_widens_and_narrows_beside_unquoted_ones() {
+        // One token holding both kinds, because the comma between them is outside every run and
+        // `strip_value` re-emits the pieces it keeps as they were typed.
+        let one = Query::typeahead("rust").toggling(Facet::Dir, "/t/Mobile Documents");
+        let two = Query::typeahead(&one).toggling(Facet::Dir, "/t/dev/api");
+        assert_eq!(two, r#"dir:"/t/Mobile Documents",/t/dev/api rust"#);
+        assert_eq!(
+            Query::typeahead(&two).selection(Facet::Dir).include,
+            ["/t/mobile documents", "/t/dev/api"]
+        );
+        // Taking the unquoted one back out leaves the quoted one spelled as it was.
+        assert_eq!(
+            Query::typeahead(&two).toggling(Facet::Dir, "/t/dev/api"),
+            r#"dir:"/t/Mobile Documents" rust"#
+        );
     }
 
     #[test]

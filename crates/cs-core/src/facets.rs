@@ -161,12 +161,13 @@ pub struct DirFacet {
 
 /// The `dir:` rail for one query and one census.
 ///
-/// **A directory is offered only when its click can be proved.** No `dir:` token can carry a path
-/// with a space or a comma — whitespace separates words and commas separate values, so
-/// `~/Mobile Documents` comes back as a filter *and* a search term (`chat-search-me9.8.16`). So
-/// each click is reparsed here and a directory the round trip does not name is dropped, which
-/// costs a chip and saves a chip that lies. The check is the grammar's own reading rather than a
-/// list of forbidden characters, so it stays true the day the grammar gains quoting.
+/// **A directory is offered only when its click can be proved.** Each click is reparsed here and a
+/// directory the round trip does not name is dropped, which costs a chip and saves a chip that
+/// lies. The check is the grammar's own reading rather than a list of forbidden characters, which
+/// is what let it survive `chat-search-me9.8.16`: a path with a space or a comma used to come back
+/// as a filter *and* a search term and so had no chip at all, and now `Query::toggling` quotes it
+/// and the same check passes. Nothing in this function changed. What is left is a guard with no
+/// known counterexample, kept because it is the parser and not this rail that decides there is one.
 ///
 /// A directory the query names but the census did not reach gets no chip of its own. The rail is
 /// the busiest directories, not the query's, and the token is visible and editable where every
@@ -413,13 +414,37 @@ mod tests {
     }
 
     #[test]
-    fn a_directory_whose_click_cannot_be_written_is_not_offered_at_all() {
-        // No `dir:` token can carry a space or a comma (`chat-search-me9.8.16`), so this click
-        // would come back as a filter *and* a search term. The chip is dropped rather than
-        // handed over: a rail that cannot prove a click may not offer it.
-        let census = census_of(&[("/home/t/Mobile Documents", 9), ("/home/t/dev/api", 4)], 2, 0);
+    fn a_directory_a_separator_cannot_be_typed_into_is_offered_like_any_other() {
+        // `chat-search-me9.8.16`. These paths used to have no chip: whitespace ended the word and
+        // a comma ended the value, so the click came back as a filter *and* a search term and the
+        // round trip below dropped it. The grammar quotes them now, the check is unchanged, and
+        // the directory is reachable by clicking rather than only by typing a fragment of it that
+        // happens to be unambiguous.
+        let awkward = [r#"/home/t/Mobile Documents"#, "/home/t/a,b", r#"/home/t/say "hi""#];
+        let census = census_of(&[(awkward[0], 9), (awkward[1], 4), (awkward[2], 2)], 3, 0);
+        let rail = dirs(&Query::typeahead("rust"), &census);
+        assert_eq!(rail.values.len(), 3, "every one of them is offered");
+        for chip in &rail.values {
+            let after = Query::typeahead(&chip.query);
+            assert_eq!(
+                after.selection(Facet::Dir).include,
+                [chip.value.to_lowercase()],
+                "{:?} clicks to {:?}",
+                chip.value,
+                chip.query
+            );
+            assert_eq!(after.terms(), ["rust"], "{:?} leaked into the terms", chip.value);
+        }
+    }
+
+    #[test]
+    fn a_directory_whose_click_cannot_be_proved_is_not_offered_at_all() {
+        // The guard the rail keeps. It has no counterexample in the grammar as it stands, so this
+        // exercises it against a census whose directory is not the one the query would name — a
+        // rail that skipped the check would hand back a chip claiming a click it cannot make.
+        let census = census_of(&[("", 9), ("/home/t/dev/api", 4)], 2, 0);
         let rail = dirs(&Query::typeahead(""), &census);
-        assert_eq!(rail.values.len(), 1);
+        assert_eq!(rail.values.len(), 1, "an empty path names no directory a token could carry");
         assert_eq!(rail.values[0].value, "/home/t/dev/api");
         // The count of what exists is unchanged by what could be drawn, or the client would
         // report a corpus that shrank when a rule was applied to it.

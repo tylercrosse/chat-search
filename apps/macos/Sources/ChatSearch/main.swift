@@ -61,11 +61,23 @@ struct Options {
     /// Cmd-comma, which is a key no script can press, and it is a second window — so `--shot`
     /// cannot photograph it and driving its controls cannot be checked without a way in.
     var settings = false
+    /// Press the Edit menu's keys in the search field and report what each moved. The fourth
+    /// non-affordance, and a mode of its own rather than a section of `--shot` for a reason that is
+    /// the subject of the check: a key equivalent is delivered to the key window's first responder,
+    /// an inactive application has no key window, so this is the one scripted run that has to be
+    /// frontmost. `chat-search-me9.8.24`.
+    var clipboard = false
 
-    /// Nobody is typing into this run. Both scripted modes stay out of the front, so they can be
-    /// run beside whatever a person is actually doing — and out of the query log, because their
-    /// queries are a benchmark's rather than a need somebody had. See `CsClient.driven`.
-    var scripted: Bool { measure || shot }
+    /// Nobody is typing into this run. Every scripted mode stays out of the query log, because its
+    /// queries are a benchmark's rather than a need somebody had, and out of the four preference
+    /// keys. See `CsClient.driven`.
+    var scripted: Bool { measure || shot || clipboard }
+
+    /// ...and all but one stay out of the *front*, so they can be run beside whatever a person is
+    /// actually doing, and so a latency taken here is comparable with `poc/swift/RESULTS.md` §1,
+    /// which was taken the same way. `--clipboard` is the exception because a background app's menu
+    /// bar delivers nothing — the thing it would be checking is the thing it would be missing.
+    var takesFront: Bool { clipboard }
 }
 
 func parse(_ argv: [String]) -> Options {
@@ -91,6 +103,7 @@ func parse(_ argv: [String]) -> Options {
         case "--group": if let v = next(), let axis = Grouping(rawValue: v) { o.group = axis }
         case "--folded": o.folded = true
         case "--settings": o.settings = true
+        case "--clipboard": o.clipboard = true
         case "--verify-theme": o.verifyTheme = true
         // Kept as typed rather than resolved here: a name this build does not carry gets a
         // sentence on stderr from `ThemeChoice`, which is also where the remembered one is read,
@@ -118,6 +131,8 @@ func parse(_ argv: [String]) -> Options {
                                        macOS is doing. Also remembered
                   --settings           open the settings window at launch. All three settings
                                        are on it, and it is Cmd-comma the rest of the time
+                  --clipboard          press the Edit menu's keys in the search field and print
+                                       what each one moved. The only run that takes the front
                   --measure            type the measurement phrases and print keystroke→frame
                   --interval MS        milliseconds between simulated keystrokes (default 100)
                   --verify-theme       re-measure every compiled-in direction and exit
@@ -241,7 +256,12 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // A scripted run does not steal focus — `.accessory` above — which also keeps the number
         // comparable with `poc/swift/RESULTS.md` §1, taken the same way. A latency measured in a
         // frontmost app and one measured in a background app are not the same measurement.
-        if !options.scripted { NSApp.activate(ignoringOtherApps: true) }
+        //
+        // `--clipboard` is the exception and it is the check itself that forces it: a key
+        // equivalent goes to the key window's first responder and an inactive app has no key
+        // window, so a pass that pressed Cmd-C from the background would be reporting on the
+        // background rather than on the menu (`chat-search-me9.8.24`).
+        if !options.scripted || options.takesFront { NSApp.activate(ignoringOtherApps: true) }
 
         // Taken off the hosting view rather than off the window, because the window's own chrome
         // following an override says nothing about whether the colours did (`AppearanceProbe`).
@@ -268,6 +288,16 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate {
             return
         }
         if options.settings { showSettings(nil) }
+
+        // Before `--shot`'s pass and after nothing, because this one wants the box empty and the
+        // drawer shut, and it opens the drawer itself when it gets to the transcript's half.
+        if options.clipboard {
+            Task { @MainActor in
+                await Measure.clipboard(model: model, window: window, query: options.shotQuery)
+                NSApp.terminate(nil)
+            }
+            return
+        }
 
         if options.shot {
             // A display link under `--shot` as well as under `--measure`: the drawer is driven

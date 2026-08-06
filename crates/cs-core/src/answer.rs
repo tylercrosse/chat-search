@@ -401,7 +401,7 @@ impl From<&Unreadable> for Refusal {
 ///
 /// The only rounding of a search duration in this workspace. It was three, and one of the three
 /// fed the query log.
-fn elapsed_ms(started: Instant) -> f64 {
+pub(crate) fn elapsed_ms(started: Instant) -> f64 {
     let ms = started.elapsed().as_secs_f64() * 1000.0;
     (ms * 100.0).round() / 100.0
 }

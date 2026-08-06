@@ -31,6 +31,11 @@ struct SearchView: View {
                 Rectangle().fill(theme.color(.rule)).frame(width: 1)
                 content
             }
+            // Under all three panes rather than under the list alone, which is `poc/ui`'s own
+            // arrangement — `.searchshell` holds the panes *and* the drawer. The axis is a
+            // property of the whole filtered set, and a track the width of one column would read
+            // as a property of that column.
+            TimelineDrawer(model: model)
         }
         .onAppear { focused = true }
         // The fallback half of the arrangement below: this fires only when the focused view did

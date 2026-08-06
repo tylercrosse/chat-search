@@ -95,6 +95,11 @@ final class SearchModel {
     /// the transcript was marked against have to be one fact: a drawer marked against a query the
     /// list has moved past would highlight words the rows no longer claim to have matched.
     let reader: ReaderModel
+    /// The drawer *under* the list, held here for a related reason: a scrubber whose selection
+    /// lived beside the query text would be the second filter state `poc/ui/NOTES.md` §17
+    /// records this prototype letting back in. It is derived from the box like every other
+    /// filter, and a drag writes into the box like every other chip.
+    let timeline: TimelineModel
     let limit: Int
     /// Set only by `--measure`. The honest end of a keystroke is a frame and only the display
     /// link knows when one happened, so the measurement needs a hook here — but a display link
@@ -106,9 +111,10 @@ final class SearchModel {
     /// When the keystroke that this query belongs to happened, on `CACurrentMediaTime`'s clock.
     private var keystrokeAt: Double?
 
-    init(client: CsClient, limit: Int = 60) {
+    init(client: CsClient, limit: Int = 60, timeline: Bool = true) {
         self.client = client
         self.reader = ReaderModel(client: client)
+        self.timeline = TimelineModel(client: client, shown: timeline)
         self.limit = limit
     }
 
@@ -120,6 +126,11 @@ final class SearchModel {
         // processes rather than one, both cancellable; a drawer that lagged the list would be
         // showing highlights for a question nobody is asking any more.
         reader.queryChanged(text)
+        // And the drawer under it, on the same keystroke and with the same cancellation. It is a
+        // third process, which `chat-search-me9.8.20` measured before adding: through a spawn it
+        // costs 140–240 ms for the worst broad prefix against the 280–340 ms the search on the
+        // same keystroke costs, so it is not the thing that decides how fast this window feels.
+        timeline.queryChanged(text)
         openFailure = nil
         // `askAgain` comes through here too, with the text unchanged, and that is the reading
         // this wants: asking the same question a second time is asking it again.
@@ -179,6 +190,33 @@ final class SearchModel {
         // as it does for a typed character. A chip click is a keystroke.
         self.query = query
     }
+
+    /// A drag across the timeline, as a fraction of the track at each end.
+    ///
+    /// **It ends in `apply(chip:)`**, and that is the whole design: a drag is a keystroke, the
+    /// same way a chip click is. The window it selects is never held here — it is written into
+    /// the query text and read back out of it, so there is nothing in this window that could
+    /// narrow the list without appearing in the box (`docs/TUI-DESIGN.md` §5, and the defect
+    /// `poc/ui/NOTES.md` §17 records).
+    ///
+    /// The `date:` value itself is `cs`'s to spell; this hands over two instants and puts the
+    /// answer in the box. Nothing comes back for a drag that names no span, and that is not a
+    /// failure — it is the clear, already applied.
+    func scrub(from: Double, to: Double) {
+        Task { [weak self] in
+            guard let self, let text = await self.timeline.text(forDrag: from, to: to) else {
+                return
+            }
+            self.apply(chip: text)
+        }
+    }
+
+    /// Open or shut the bottom drawer.
+    ///
+    /// Shutting it changes nothing about the results, because the drawer never narrowed them: the
+    /// window it draws is a `date:` token in the query box, and the box is untouched by this.
+    /// What it does change is that a hidden drawer asks `cs` for nothing.
+    func toggleTimeline() { timeline.toggle(query: query) }
 
     /// No answer, so nothing that describes one may stay on screen. `unappliedFilters` in
     /// particular: it names tokens in a query that *was* answered, and left standing it would

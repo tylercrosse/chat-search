@@ -195,6 +195,8 @@ enum Measure {
         }
         model.group(by: .none)
 
+        await timelinePass(model: model, window: window, query: query, path: path)
+
         // The second view. Empty by design and not by accident — there is no store to author into
         // (`chat-search-6eb.14`) — so what there is to check is that every shelf says which.
         model.surface = .library
@@ -202,6 +204,74 @@ enum Measure {
         let library = path.replacingOccurrences(of: ".png", with: "-library.png")
         print("  library → \(capture(window, to: library)) \(library)")
         model.surface = .search
+    }
+
+    /// The scrubber, driven from both ends — and the three claims about it that a PNG cannot make.
+    ///
+    /// A picture shows the bars and the selection rectangle. What it cannot show is that dragging
+    /// wrote `date:A..B` into the *query line* rather than into a variable beside it, that typing
+    /// the same range by hand puts the rectangle back, and that the bars under the rectangle were
+    /// never narrowed by it. The first two together are the whole of `poc/ui/NOTES.md` §17 — the
+    /// prototype kept its timeline range in a tuple nothing drew, and two rounds of another view
+    /// were written against that state before anyone noticed. The third is what the drawer is
+    /// worth having for: a picture narrowed by its own selection cannot say what widening buys.
+    ///
+    /// So this drags, prints what the box says, retypes the same window by hand, and compares the
+    /// bar heights before and after. There is no test target to put it in (`--verify-theme`'s
+    /// note: the Command Line Tools SDK carries neither `Testing` nor `XCTest`), and an invariant
+    /// checked by nobody is one that was true on the day it was written.
+    @MainActor
+    private static func timelinePass(
+        model: SearchModel, window: NSWindow, query: String, path: String
+    ) async {
+        guard let before = model.timeline.drawn else {
+            print("  timeline: nothing drawn — \(model.timeline.failure ?? "still counting")")
+            return
+        }
+        let bars = before.buckets.map(\.conversations)
+        print("  timeline: \(before.buckets.count) bars of \(before.bucketDays)d, "
+            + "\(before.fromDate ?? "?") → \(before.untilDate ?? "?") · \(before.inRange) in "
+            + "range · \(before.total) selected · \(before.undated) undated")
+
+        // The right-hand third of the track, which is where a corpus with a retention floor in it
+        // actually lives. Fractions and not instants: this is the gesture, not the arithmetic.
+        model.scrub(from: 0.66, to: 0.95)
+        try? await Task.sleep(for: .seconds(2))
+        guard let dragged = model.timeline.drawn, let selected = dragged.window else {
+            print("    a drag wrote no window: \(model.query.debugDescription)")
+            return
+        }
+        print("    dragged → the box reads \(model.query.debugDescription)")
+        print("    …which parsed back to \(selected.value ?? "nothing"), so the rectangle is "
+            + "derived from the text rather than kept beside it")
+        print("    bars unchanged by the window: "
+            + "\(dragged.buckets.map(\.conversations) == bars)")
+        print("    in range \(before.inRange) → \(dragged.inRange), "
+            + "selected \(before.total) → \(dragged.total)")
+        let scrubbed = path.replacingOccurrences(of: ".png", with: "-scrubbed.png")
+        print("    \(scrubbed) \(capture(window, to: scrubbed))")
+
+        // The other direction: the same window typed, not dragged. Cleared first so the selection
+        // has to come back rather than merely stay.
+        model.apply(chip: query)
+        try? await Task.sleep(for: .seconds(1))
+        let cleared = model.timeline.drawn?.window == nil
+        model.apply(chip: "\(query) date:\(selected.value ?? "")")
+        try? await Task.sleep(for: .seconds(1))
+        print("    cleared to no window: \(cleared); typed back by hand: "
+            + "\(model.timeline.drawn?.window?.value ?? "nothing")")
+
+        // And shut, which is the state that has to change the picture and nothing else.
+        model.apply(chip: query)
+        try? await Task.sleep(for: .seconds(1))
+        let open = model.conversations.count
+        model.toggleTimeline()
+        try? await Task.sleep(for: .milliseconds(400))
+        let hidden = path.replacingOccurrences(of: ".png", with: "-no-timeline.png")
+        print("    hidden → \(model.conversations.count) rows against \(open) open")
+        print("    \(hidden) \(capture(window, to: hidden))")
+        model.toggleTimeline()
+        try? await Task.sleep(for: .seconds(1))
     }
 
     /// The settings window, and what moving each of its three controls does to the app behind it.

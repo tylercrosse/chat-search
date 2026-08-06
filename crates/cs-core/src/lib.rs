@@ -27,6 +27,11 @@
 //! conversation per turn, and reading them back as the chats they were is a heuristic. It is
 //! computed at read time and joined into `search` precisely so that being wrong about it
 //! costs a rebuild of nothing.
+//!
+//! `timeline` is `facets` for the axis a facet rail cannot enumerate. A `date:` chip can be
+//! handed the query text clicking it produces; a scrubber's window cannot, because it is two
+//! instants out of a continuum — so the distribution is counted here and the drag is written
+//! here, and the client that spawns `cs` draws numbers rather than deriving them.
 
 pub mod answer;
 pub mod blocks;
@@ -44,6 +49,7 @@ pub mod schema;
 pub mod search;
 pub mod sittings;
 pub mod time;
+pub mod timeline;
 
 // `Group` at the root is the answer's, now that no client reads the ranked row directly. The two
 // are one `From` apart, and the name belongs to the one clients decode: `search::Group` is the
@@ -71,6 +77,7 @@ pub use search::{
     REPEAT_WEIGHT,
 };
 pub use sittings::Sitting;
+pub use timeline::{timeline, Bucket, Drag, Selected, Timeline, BUCKETS};
 pub use time::{
     day_start_in, local_day_start, local_ymd, now_ms, shift_days_in, shift_months_in, ymd_in,
 };

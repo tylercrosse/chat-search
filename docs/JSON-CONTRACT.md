@@ -426,8 +426,140 @@ this wire changed and it is not a `v` bump: the span is a `date:` token like any
 arrives inside `query` as text to paste whole, `dates.all.selected` is false while it is in
 force, and each chip's own `query` still replaces it wholesale when clicked. What a client
 cannot do from this reply is *write* such a span, since a scrubber has no chip to be handed one
-— `cs_core`'s `Window::value_in` renders it, and how it reaches a client that spawns `cs`
-rather than linking it is `chat-search-me9.8.20`'s to settle.
+— `cs_core`'s `Window::value_in` renders it, and `cs timeline` below is where it reaches a
+client that spawns `cs` rather than linking it (`chat-search-me9.8.20`).
+
+---
+
+## The timeline — `cs timeline --json`
+
+The third reply, and the facet rail for the one axis a rail cannot enumerate. `cs timeline
+[QUERY] --json [--buckets N] [--drag FROM..UNTIL] [--prefix]`:
+
+```json
+{
+  "v": 1,
+  "query": "borrow checker",
+  "ms": 12.1,
+  "index_state": "ready",
+  "from": 1675321200000,
+  "until": 1786035600000,
+  "from_date": "2023-02-02",
+  "until_date": "2026-08-13",
+  "bucket_days": 8,
+  "sources": ["chatgpt-export", "claude-code", "codex", "gemini-cli", "google-takeout"],
+  "buckets": [
+    { "from": 1675321200000, "until": 1676012400000,
+      "conversations": 14, "matches": 0, "sources": [14, 0, 0, 0, 0] },
+    { "from": 1676012400000, "until": 1676703600000,
+      "conversations": 21, "matches": 2, "sources": [19, 0, 2, 0, 0] }
+  ],
+  "undated": 4,
+  "in_range": 3617,
+  "total": 58,
+  "window": null,
+  "all": { "selected": true, "query": "borrow checker" },
+  "drag": null
+}
+```
+
+**Why a client cannot draw this from the rows it already has.** A search comes back at
+`--limit`, and ranking is not chronological, so the page is a *biased* sample of exactly the
+axis being drawn: the top sixty of 354 matches are not sixty of them spread evenly through
+time. The mistake is invisible — the picture looks like a picture — which is why the counting
+happens here and only counts cross the wire. A second consequence is that the reply is a fixed
+size whatever the archive does, where one instant per conversation would grow with it forever,
+on a path that runs per keystroke.
+
+**The bars are drawn with `date:` left out of them.** `buckets` counts everything surviving
+every *other* filter, so a window narrows the number beside the picture and never the picture.
+That is the whole reason a scrubber is worth having: a timeline filtered by its own selection
+draws a solid block and can never say what widening would get you (`poc/ui`'s `visible(true)`).
+`window` is what to draw *over* the bars, and `in_range` is what the window holds.
+
+**The axis is the corpus, not the query.** `from` and `until` are the whole index's dated span,
+so the coordinate system does not move while somebody types. A bucket is a whole number of civil
+days rather than a span divided by a count, which is what keeps it the same number of *days*
+either side of a clock change.
+
+**`conversations` and `matches` are two questions, not a series and its highlight.**
+`conversations` ignores the free text — "when was I working on this" — and `matches` is the
+conversations a term landed in. For a query with nothing searchable in it there is nothing to
+have matched, so `matches` is zero throughout; `total` still counts, because a browse still has
+an answer and the list below it is showing one.
+
+| key | type | null? | |
+| --- | --- | --- | --- |
+| `v` | integer | never | `1`. Moves under the same rule as the search envelope's. |
+| `query` | string | never | The query this is a distribution of, as parsed. |
+| `ms` | number | never | What this took, rounded to two places by the same rule the search envelope uses. |
+| `index_state` | string | never | As the search envelope's. Unlike `cs facets` this **does** refuse when there is no index, because a histogram of nothing is not a drawable state the way a rail of zeroes is. |
+| `from` | integer | never | Epoch millis. The first bucket's start, which is a local midnight. `0` when the index holds nothing dated. |
+| `until` | integer | never | The last bucket's end, half-open. Later than the newest conversation by up to one bucket, because the last bucket is whole rather than clipped. |
+| `from_date` | string | **nullable** | `from` as a local `YYYY-MM-DD`, for labelling that end of the axis. On the wire for the reason `ended_date` is: the local-date bug happened because three clients each derived the day themselves, and a client formatting an instant is a fourth. Null exactly when `buckets` is empty — `0` renders honestly as `1970-01-01`, which is the one wrong label a reader cannot tell from a right one. |
+| `until_date` | string | **nullable** | The same for `until`. |
+| `bucket_days` | integer | never | Civil days per bucket; `0` when there are no buckets. Carried so an axis can be labelled without dividing the span by the bucket count and getting 5.97 days. |
+| `sources` | array | never; may be empty | Source ids in the order every `Bucket.sources` counts them, sorted so a stacked bar does not reshuffle between keystrokes. Only sources the filters keep appear. |
+| `buckets` | array | never; may be empty | Oldest first, abutting, covering the whole axis. Empty exactly when the index holds no dated conversation. |
+| `undated` | integer | never | Conversations the filters keep that have no `ended_at` and are therefore in no bucket — four of this corpus's 4,426. Carried for the reason `dirs.undirected` is: a picture that silently drops what it cannot place is a picture claiming to be everything. |
+| `in_range` | integer | never | Of what the bars draw, how many are inside `window`. Free text ignored, like the bars. Equal to the sum of `conversations` when `window` is null. |
+| `total` | integer | never | How many conversations the query selects with `limit` ignored — **the same number, spelled the same way, as the search envelope's `total`**, and always settled. Counted here rather than read off a search because the two are two processes and can land a keystroke apart. |
+| `window` | object | **nullable** | The `date:` window in force, described below. Null when the query names none, and **also null when the only one it names is negated**: the complement of a window is not a rectangle, and drawing it as one would put the selection over exactly the stretch the filter threw away. |
+| `all` | object | never | `selected` is true exactly when the query carries no `date:` token; `query` is the text with every one of them gone. The same shape as a rail's All chip, because it is the same thing — the click that clears the selection. |
+| `drag` | object | **nullable** | What a drag writes, described below. Null unless `--drag` was passed, which is the only thing that flag changes about this reply. |
+
+**`--drag` is the scrubber's half of the grammar, and it exists because a rail's trick does not
+reach.** Every chip above arrives carrying the query text clicking it produces, which is what
+keeps a client from ever assembling an `agent:` token. A drag is two instants out of a continuum
+and cannot be enumerated that way, so the trade is made the other way round: hand over
+`FROM..UNTIL` in epoch millis, in whichever order the pointer visited them, and get the finished
+text back. What that saves a client is `Window::value_in`'s two lossy rules — each edge rounds
+*outward* to a whole second, and an edge on a midnight is written as the bare date — and those
+are not rules to keep a second copy of in a language that cannot link `cs_core`.
+
+Two behaviours follow from it being `Query::toggling` underneath, and both are wanted. **Dragging
+the window already in force takes it back off**, which is what every chip in this interface does
+and is the only gesture that clears a selection without a control of its own. And **a drag that
+names no span clears rather than writing an empty filter**, which is `poc/ui`'s "a drag under 1%
+of the span clears the selection" arrived at through the grammar instead of through a magic
+fraction.
+
+**What `--buckets` is for.** The bucket count is a *picture's* resolution and therefore a
+property of a drawing surface rather than of the corpus — a terminal has room for 68 columns and
+the macOS drawer draws 180. It has a default so a client with no opinion does not have to form
+one, and the count that comes back may be one short of what was asked for, since the last bucket
+is whole.
+
+---
+
+## The window, and the drag that writes one
+
+`window` — what to draw over the bars:
+
+| key | type | null? | |
+| --- | --- | --- | --- |
+| `from` | integer | nullable | Epoch millis, inclusive. **Null is an open edge, not the end of the axis**: `date:<7d` reaches to now and past it, and a client that clamped a missing bound to the axis's `until` would draw a rectangle stopping where the data stops rather than where the filter does. |
+| `until` | integer | nullable | The same, exclusive. |
+| `value` | string | nullable | The window written back as a `date:` value — `2026-07-28..2026-08-02`. Null for a window bounded at neither end, which this grammar cannot spell. Worth putting in a header: it is what a reader would have typed, and it spells a *relative* token's current meaning in absolute terms. |
+
+`drag` — what `--drag FROM..UNTIL` answers:
+
+| key | type | null? | |
+| --- | --- | --- | --- |
+| `value` | string | nullable | The `date:` value the two instants are typed as. Null when they name no span, which is what a drag narrower than one bucket produces. |
+| `query` | string | never | The whole query text after the drag. Paste it into the box; do not splice a token. |
+
+---
+
+## `Bucket` — one bar
+
+| key | type | null? | |
+| --- | --- | --- | --- |
+| `from` | integer | never | Epoch millis. Half-open `[from, until)`, so consecutive buckets tile without an instant falling in both or neither — the same reading as `date:`'s own span. |
+| `until` | integer | never | Where the next bucket starts. The last one's is the axis's `until`. |
+| `conversations` | integer | never | Rows surviving every filter but `date:`, free text ignored. Counted per *sitting* where the fold applies, so this and the number beside the results list are counting the same things. |
+| `matches` | integer | never | Of a searchable query's matches, how many landed here. Never more than `conversations`, and zero throughout when the query has nothing searchable in it. |
+| `sources` | array | never | `conversations` broken down by source, parallel to the reply's `sources` and summing to `conversations`. Carried rather than derived so a bar can be stacked in the palette's own source hues without a second census. |
 
 ---
 
@@ -521,9 +653,9 @@ see [`Sitting`](#sitting) for what that means for an id copied from one to the o
 
 `cs status`, `cs scan`, `cs index`, `cs archive`, `cs needs` and `cs explain` also take
 `--json`; those are operator output rather than a client seam, and nothing has been promised
-about them. `cs facets --json` is a client seam and **is** promised — it has
-[a section above](#the-facet-rail--cs-facets---json) — because a GUI's facet bar is not
-optional chrome and the rules behind it are the query grammar's.
+about them. `cs facets --json` and `cs timeline --json` are client seams and **are** promised —
+each has a section above — because a GUI's facet bar and its scrubber are not optional chrome
+and the rules behind both are the query grammar's.
 
 ## Extending this contract
 
@@ -549,9 +681,9 @@ someone's machine.
 
 ## How this stays true
 
-**The five field tables above are read by a test.** `crates/cs/tests/json_contract.rs` parses
-them out of this file, builds an index whose conversations exercise every state described —
-untitled, zero-message, no `cwd`, no `ts`, no destination — runs the real binary against it,
+**Seven of the field tables above are read by a test.** `crates/cs/tests/json_contract.rs`
+parses them out of this file, builds an index whose conversations exercise every state described
+— untitled, zero-message, no `cwd`, no `ts`, no destination — runs the real binary against it,
 and checks both directions:
 
 - every key the binary emits has a row here, and every row here names a key the binary emits;
@@ -566,6 +698,12 @@ read for the words *nullable* and *absent*. Reformatting a table breaks the test
 silently unhooking it, which is the failure mode worth having — a pin that quietly stops
 matching anything is worse than no pin, because it still reads as one.
 
-Adding a field to `Group`, `Match` or `Hit` therefore fails the suite until a row lands here.
-That is the point: the failure is the reminder, because the version of this file that goes
-stale is one nobody was forced to update.
+Adding a field to `Group`, `Match`, `Hit`, `Bucket` or either envelope therefore fails the suite
+until a row lands here. That is the point: the failure is the reminder, because the version of
+this file that goes stale is one nobody was forced to update.
+
+**The facet rail's tables are the exception**, and the line between them is worth naming rather
+than closing by habit. A rail is chips carrying opaque strings — a client pastes `query` into a
+box and never reads it — so a key that moved fails loudly at the decoder. The timeline is
+*numbers a client does arithmetic on*, and a bar that quietly stopped being counted the
+documented way draws a wrong picture instead of failing, which is why it joined the pinned half.

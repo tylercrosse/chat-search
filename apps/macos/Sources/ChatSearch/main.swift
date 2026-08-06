@@ -50,6 +50,10 @@ struct Options {
     /// list rebuilds sections on every keystroke where an ungrouped one rebuilds rows, and
     /// `--measure` cannot take that number on a mode it has no way to enter.
     var group = Grouping.none
+    /// Whether the bottom drawer opens shut. Not a preference and not remembered — the same
+    /// reading as `--group` and `--folded`: it is an instrument affordance, because the drawer is
+    /// a third `cs` per keystroke and `--measure` has to be able to take the number both ways.
+    var timeline = true
     /// Whether the list opens with every group folded. The same kind of affordance as `--group`,
     /// and needed for the same reason: a folded list draws heads where an open one draws heads and
     /// rows, so it is a different render and a different picture, and neither `--measure` nor
@@ -90,6 +94,7 @@ func parse(_ argv: [String]) -> Options {
         // changes what it is measuring is worse than one that ignores you.
         case "--group": if let v = next(), let axis = Grouping(rawValue: v) { o.group = axis }
         case "--folded": o.folded = true
+        case "--no-timeline": o.timeline = false
         case "--settings": o.settings = true
         case "--verify-theme": o.verifyTheme = true
         // Kept as typed rather than resolved here: a name this build does not carry gets a
@@ -128,6 +133,8 @@ func parse(_ argv: [String]) -> Options {
                   --size WxH           open the window at this size (default 900x620)
                   --group AXIS         open grouped by none|project|run|source (default none)
                   --folded             open with every group folded (needs --group)
+                  --no-timeline        open with the bottom drawer shut, so a keystroke spawns
+                                       two processes rather than three
                 """)
             exit(0)
         default: break
@@ -352,7 +359,7 @@ let host = AppHost(
     model: SearchModel(
         client: CsClient(
             binary: binary, db: options.db, config: options.config, driven: options.scripted),
-        limit: options.limit),
+        limit: options.limit, timeline: options.timeline),
     options: options,
     settings: settings)
 app.delegate = host

@@ -875,6 +875,21 @@ impl Query {
         join(strip_facet(&self.raw, facet), &self.raw)
     }
 
+    /// [`Query::without`]'s answer as a query rather than as text.
+    ///
+    /// For the caller that has to ask the *same* question with one facet left out —
+    /// [`crate::timeline`] draws the distribution of everything surviving every filter but
+    /// `date:`, so that widening the window is visible in the picture the window sits on.
+    ///
+    /// Reparsed rather than edited, and reparsed **with this query's own reading of its last
+    /// word**. A timeline built by handing the stripped text to [`Query::typeahead`] would
+    /// expand a final term the search had ranked exactly, so the bars would describe a set the
+    /// list is not showing — one keystroke of difference, invisible, and only at the moment
+    /// somebody stops typing.
+    pub fn without_facet(&self, facet: Facet) -> Query {
+        Self::parse(&self.without(facet), self.prefix)
+    }
+
     /// The text as typed, for redisplay. Not what gets searched — see [`Query::match_expr`].
     pub fn raw(&self) -> &str {
         &self.raw

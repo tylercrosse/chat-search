@@ -152,6 +152,42 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// When a query's answers happened: a bar per stretch of days, with the matches raised out
+    /// of them.
+    ///
+    /// The facet rail for the one axis a rail cannot enumerate. `cs facets` hands each chip the
+    /// query text clicking it produces; a scrubber's window is two instants out of a continuum,
+    /// so `--drag` is that trade made the other way round — hand over two instants, get back the
+    /// whole query text.
+    ///
+    /// It counts rather than lists, and it counts *here*, because a client holding a `--limit`
+    /// page holds a biased sample of this axis: ranking is not chronological.
+    Timeline {
+        /// The query the distribution is of. Same syntax as `cs search`.
+        // `allow_hyphen_values` for the reason `cs search` needs it: `-agent:codex` is one of
+        // the DSL's two negation spellings.
+        #[arg(allow_hyphen_values = true, default_value = "")]
+        query: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// How many bars to divide the axis into. A picture's resolution, so a surface that
+        /// knows how wide it is may say; the default is what a 900 pt window wants.
+        #[arg(long, default_value_t = cs_core::BUCKETS)]
+        buckets: usize,
+        /// Two epoch-millisecond instants, `FROM..UNTIL`, in whichever order the pointer
+        /// visited them. Answers "what does this drag write into the query line" and changes
+        /// nothing else about the reply.
+        #[arg(long, value_name = "FROM..UNTIL")]
+        drag: Option<String>,
+        /// Treat the last word as a prefix, for typeahead. Pass it when the search beside this
+        /// was asked that way: the two readings rank different sets, and a drawer under a list
+        /// has to be describing that list.
+        #[arg(long)]
+        prefix: bool,
+        /// The client contract. docs/JSON-CONTRACT.md says what it emits.
+        #[arg(long)]
+        json: bool,
+    },
     /// Record that a search ended in opening this conversation, and print its resume command.
     ///
     /// The selection is the ground truth an eval set cannot invent: the query says what was
@@ -345,6 +381,9 @@ fn main() -> Result<()> {
             commands::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)
         }
         Command::Facets { query: q, db, json } => facets(&config_path, db, &q, json),
+        Command::Timeline { query: q, db, buckets, drag, prefix, json } => {
+            commands::timeline(&config_path, db, &q, buckets, drag.as_deref(), prefix, json)
+        }
         Command::Pick { conv_id, query: q, db, source, limit, quiet, kind } => {
             commands::pick(&config_path, db, &conv_id, &q, source.as_deref(), limit, quiet, kind.as_deref())
         }

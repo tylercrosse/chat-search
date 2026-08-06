@@ -1,8 +1,9 @@
 # chat-search for macOS
 
 The Swift surface. A search field, a grouping control, a facet rail, a result list, a reader beside
-it, and a way back into the conversation — `chat-search-me9.8.2` onward is what makes it worth
-using. Two views, because three of the prototype's four were the same list cut differently.
+it, a timeline under all of it, and a way back into the conversation — `chat-search-me9.8.2` onward
+is what makes it worth using. Two views, because three of the prototype's four were the same list
+cut differently.
 
 ```bash
 cargo build --release                       # the app finds ./target/release/cs by itself
@@ -20,23 +21,25 @@ swift run -c release chat-search --db /tmp/scratch.db --config /tmp/scratch-conf
 swift run -c release chat-search --bin /path/to/cs --limit 30
 swift run -c release chat-search --size 720x480
 swift run -c release chat-search --group project --folded
+swift run -c release chat-search --no-timeline
 swift run -c release chat-search --settings
 swift run -c release chat-search --theme paper
 swift run -c release chat-search --appearance light --theme-light paper --theme-dark terminal
 ```
 
 `--size` opens the window at a stated size, `--group` opens the list already cut along an axis,
-`--folded` opens every group of it shut, and `--settings` opens the settings window beside it. All
-four are verification affordances rather than preferences — the row has to hold at several widths, a
-grouped list rebuilds sections where an ungrouped one rebuilds rows, a folded one draws heads where
-an open one draws heads and rows, and the settings window is behind a Cmd-comma no script can press,
-so `--measure` and `--shot` need a way into each of those modes. A window that always opens at one
-size, always ungrouped, or always open, makes checking any of them a manual drag nobody repeats.
-`--folded` moves the *default* rather than folding what is on screen at the time, so a group
-arriving on a later keystroke is folded too: an instrument that measured a list unfolding itself as
-it typed would not be measuring anything.
+`--folded` opens every group of it shut, `--no-timeline` opens the bottom drawer closed, and
+`--settings` opens the settings window beside it. All five are verification affordances rather than
+preferences — the row has to hold at several widths, a grouped list rebuilds sections where an
+ungrouped one rebuilds rows, a folded one draws heads where an open one draws heads and rows, an
+open drawer is a third `cs` per keystroke, and the settings window is behind a Cmd-comma no script
+can press, so `--measure` and `--shot` need a way into each of those modes. A window that always
+opens at one size, always ungrouped, or always open, makes checking any of them a manual drag
+nobody repeats. `--folded` moves the *default* rather than folding what is on screen at the time,
+so a group arriving on a later keystroke is folded too: an instrument that measured a list
+unfolding itself as it typed would not be measuring anything.
 
-The last four are the ones that are *not* instruments. They choose among the six directions
+The theme flags are the ones that are *not* instruments. They choose among the six directions
 compiled into the binary and which side of one you are looking at, and they stick, which is why
 they are the only flags here that change anything about the next launch. See
 [the theme seam](#the-theme-seam).
@@ -44,10 +47,10 @@ they are the only flags here that change anything about the next launch. See
 ## What it is made of
 
 **`Sources/CsKit`** — the decoder and the transport, and a library product rather than something
-private to the app. It is the repo's only non-Rust reader of [`docs/JSON-CONTRACT.md`] — both
-replies, `cs search --json` and `cs facets --json` — it is written once, and `poc/swift` consumes
-it so that `cs-spike contract` checks the same decoder this app is built on. The dependency points
-instrument at product; nothing here points back into `poc/`.
+private to the app. It is the repo's only non-Rust reader of [`docs/JSON-CONTRACT.md`] — all three
+replies, `cs search --json`, `cs facets --json` and `cs timeline --json` — it is written once, and
+`poc/swift` consumes it so that `cs-spike contract` checks the same decoder this app is built on.
+The dependency points instrument at product; nothing here points back into `poc/`.
 
 **`Sources/CsTheme`** — the token layer, and a target of its own so that "a view may read a token
 and may not author one" is a thing the compiler enforces rather than a thing a review notices.
@@ -59,7 +62,9 @@ keystroke with the previous one killed and no debounce, which is not an oversigh
 a debounce would be latency spent to save a cost that was measured and found small. With a
 conversation open that is two processes per keystroke rather than one, both cancellable: the
 median conversation is ~10 KB and the corpus's longest measured 50–90 ms end to end, against the
-~50 ms the search beside it already costs. Rows and messages both go through `List` because it is
+~50 ms the search beside it already costs. With the [bottom drawer](#the-bottom-drawer) open it is
+three, on the same terms and for the same reason — see there for what that one costs and what
+shutting it buys. Rows and messages both go through `List` because it is
 the only one of SwiftUI's three containers that recycles — 5.2 MB scrolling the whole corpus
 against `LazyVStack`'s 65.6 MB and `VStack`'s 566 MB. That question is answered, so the app does
 not offer the other two.
@@ -938,6 +943,132 @@ Three things this does not do:
   derivation over the corpus and not an index fact, so nothing on this wire carries one. Hiding the
   chip would say this corpus has four axes; drawing it live would need a grammar that does not
   exist. `chat-search-me9.18`, and `chat-search-6eb.18` for the discovery half.
+
+## The bottom drawer
+
+A track under all three panes: everything the filters keep, stacked by source below a baseline,
+and where this query landed raised above it. `poc/ui/DESIGN-BRIEF.md:59` asks for "a timeline of
+whatever survives the current filters, with a scrubber", and its own comment states the claim —
+it answers *when was I working on this* and *when did this query land* at once.
+
+**Nothing here counts anything.** That is the decision the bead (`chat-search-me9.8.20`) required
+be made and written down before a bar was drawn, and it is the only interesting thing about the
+drawer's plumbing. This window holds a `--limit 60` page; ranking is not chronological; so the
+page is a *biased sample of exactly the axis being drawn*, and the resulting picture would look
+like a picture. `cs timeline --json` counts over the whole matching set and hands back a
+fixed-size histogram — a picture's worth of numbers whatever the archive does, on a path that
+runs per keystroke. [`docs/JSON-CONTRACT.md`] is the wire; `cs_core::timeline` is the counting.
+
+### The drag is a keystroke
+
+Dragging the track calls `SearchModel.scrub`, which ends in `apply(chip:)` — the same call a
+facet chip makes. So the window lands in the *query box* as `date:2026-07-28..2026-08-02`, and the
+selection rectangle is then derived from the parsed query rather than kept beside it. Typing that
+range by hand moves the rectangle, which is the test that proves there is no second filter state.
+
+`poc/ui/NOTES.md` §17 is why that is worth this much care: the prototype kept its timeline range
+in a tuple that never appeared in the query line, and two rounds of the projects view were written
+against that state before anyone noticed. `docs/TUI-DESIGN.md` §5 and DESIGN-BRIEF both make it a
+bug condition — "a filter that narrows the list without appearing here would be a bug".
+
+**This app does not spell the `date:` token.** A rail can hand each chip the query text clicking
+it produces; a drag is two instants out of a continuum and cannot be enumerated that way, so
+`cs timeline --drag FROM..UNTIL` makes the trade backwards — instants over, finished text back.
+What that keeps on the far side is `Window::value_in`'s two lossy rules (each edge rounds outward
+to a whole second; an edge on a midnight writes as a bare date), and two behaviours fall out of it
+being `Query::toggling` underneath: dragging the window already in force takes it back off, and a
+drag that never leaves the bar it started in clears the filter rather than writing an empty one.
+That second one is `poc/ui`'s "a drag under 1% of the span clears the selection", reached through
+the grammar instead of through a magic fraction.
+
+The only thing this side contributes to the gesture is **snapping the two ends to bucket edges**.
+The picture is bars, so a selection finer than a bar is a selection nobody can see.
+
+### Four departures from the mockup
+
+- **A bar per bucket, not a mark per conversation.** The prototype drew 3,059 marks because it
+  had 3,059 conversations in memory.
+- **The bars are drawn with `date:` left out of them**, which the prototype also does
+  (`visible(true)`) and which is the whole reason a scrubber is worth having: a timeline narrowed
+  by its own selection draws a solid block and can never say what widening would get you. Only
+  the header's numbers move when you drag.
+- **Each half of the track is scaled to its own tallest bar.** 58 matches under 3,617
+  conversations on one shared scale is a row of nothing, and where the matches are is the question
+  the top half exists to answer. The absolute numbers are in the header, where a scale cannot
+  mislead about them.
+- **No 30d/90d/1y/all presets.** The facet rail's *When* section already offers four relative
+  spans, and a second vocabulary of them in the same window is one rule written twice. Clicking a
+  rail chip lights the selection here anyway — the selection is read out of the query text like
+  everything else — and "all" is the rail's All chip.
+
+**Log10 and not linear, measured rather than inherited.** Over this archive the tallest bucket
+holds 222 conversations and the median non-empty one holds 16, so a linear scale puts the median
+at 1.5 pt of a 21 pt half and draws three years of history as a flat line under two months of
+spike — `poc/ui/NOTES.md` §14's complaint about a sparkline, one level up. The cost is real and
+is stated where the scale is: a log axis understates magnitude, and 222 against 16 reads as
+roughly two to one.
+
+**Source hue comes off `Display.sourceHue` and nowhere else.** `chat-search-g6u` settled that a
+source id becomes a `--src-*` token in exactly one place; the row and the rail already read it,
+and a source the palette has no hue for is drawn in `--ink-3` rather than given a wrong one. That
+is why `google-takeout` — 1,280 conversations, a third of the corpus — is the grey band.
+
+### What it costs, and what `hide` buys
+
+Undebounced, on the same keystroke as the search, and that is a measurement rather than a habit.
+Warm, best of seven against the 358 MB index, the whole reply costs **1.2× what settling the same
+query's total costs** — 56 ms for the worst broad prefix (`the`) against 45 ms, and under 3 ms for
+anything narrower. Cold through a spawn it is **140–240 ms where the `cs search --prefix` on the
+same keystroke is 280–340 ms**. So a debounce would be staleness bought to save the smaller of two
+costs, which is the trade `SearchModel` already refuses for the search itself.
+
+What is offered instead is `hide`. A hidden drawer asks `cs` for nothing, and `--no-timeline`
+opens that way — an instrument affordance in the same family as `--group` and `--folded`, so
+`--measure` can take the keystroke number both ways. It is not remembered between launches, for
+the same reason those are not.
+
+**Shutting it cannot change the result set**, because it never narrowed one: the window it draws
+is a `date:` token in the query box, and hiding the drawer does not touch the box.
+
+### Seeing it
+
+`--shot` drives the drawer, because none of the three claims about it is a picture:
+
+```bash
+./.build/debug/chat-search --shot --query "borrow checker" --out /tmp/cs.png --size 1200x760
+```
+
+It drags the right-hand third of the track, prints what the query box then reads, clears it,
+retypes the same window by hand, and compares the bar heights before and after. Against the real
+index that is:
+
+```
+  timeline: 161 bars of 8d, 2023-02-02 → 2026-08-13 · 3617 in range · 58 selected · 4 undated
+    dragged → the box reads "date:2025-05-30..2026-06-02 borrow checker"
+    …which parsed back to 2025-05-30..2026-06-02, so the rectangle is derived from the text
+    bars unchanged by the window: true
+    in range 3617 → 1556, selected 58 → 0
+    cleared to no window: true; typed back by hand: 2025-05-30..2026-06-02
+    hidden → 58 rows against 58 open
+```
+
+Three frames beside the ordinary ones: `-scrubbed.png` with the selection standing, and
+`-no-timeline.png` with the drawer shut.
+
+### What it does not do
+
+- **No keyboard reach.** The arrows belong to the results list and this window has one focused
+  view, so hiding and dragging are both mouse-only. The same argument as the fold's, without the
+  key the fold found — and it matters less here, since a drawer can only ever draw and the window
+  it selects is typeable by hand. `chat-search-me9.8.26`.
+- **`undated` is a number and not a mark.** Four of 4,426 conversations have no ending and can be
+  in no bucket; the header says so and the track cannot show them.
+- **A negated `date:` draws no rectangle.** The complement of a window is not a rectangle, and
+  drawing it as one would put the selection over exactly the stretch the filter threw away. The
+  counts beside it are still right.
+- **`cs search --tools` has no timeline.** `cs timeline` takes `--prefix` and no other search
+  knob, so a query asked against tool traffic cannot be drawn — which on this corpus is where most
+  message-level matches land. `chat-search-me9.8.25`.
 
 ## Library: the half that is not derived
 

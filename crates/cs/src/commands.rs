@@ -273,6 +273,122 @@ fn log_search(
     });
 }
 
+/// When a query's answers happened, and what a drag on that axis would write.
+///
+/// The one search knob it takes is `--prefix`, because that one changes the answer: the two
+/// readings of a final word rank different sets, and a drawer under a list has to be describing
+/// that list. `--tools`, `--include-off-path` and `--source` are absent rather than defaulted —
+/// no client draws a timeline under them yet, and a flag on a published command is a promise.
+///
+/// **Nothing here is logged.** `cs search` records a need somebody had; this is a client asking
+/// what a picture looks like, once per keystroke, and every one of them would land in the log
+/// under the same text as the search beside it.
+pub fn timeline(
+    config_path: &Path,
+    db_path: Option<PathBuf>,
+    text: &str,
+    buckets: usize,
+    drag: Option<&str>,
+    prefix: bool,
+    json: bool,
+) -> Result<()> {
+    let cfg = Config::load(config_path)?;
+    let db_path = db_path.unwrap_or_else(|| cfg.default_db());
+    let index = open_index(&db_path, json)?;
+    let parsed =
+        if prefix { cs_core::Query::typeahead(text) } else { cs_core::Query::exact(text) };
+    let opts = cs_core::SearchOptions::new(cs_core::now_ms());
+    let dragged = drag.map(parse_drag).transpose()?;
+    let drawn = cs_core::timeline(&index, &parsed, &opts, buckets, dragged)?;
+
+    if json {
+        println!("{:#}", serde_json::to_value(&drawn)?);
+        return Ok(());
+    }
+    notes(&parsed.rejected(), drawn.index_state);
+    render_timeline(&drawn);
+    Ok(())
+}
+
+/// `FROM..UNTIL` in epoch milliseconds — the separator `date:` already uses for a span, since a
+/// client that has learned one has learned the other.
+///
+/// Refused loudly rather than ignored. A drag this cannot read is a gesture the reader made and
+/// the query line did not answer, which is worse than an error: they would drag again.
+fn parse_drag(text: &str) -> Result<(i64, i64)> {
+    let bounds = text
+        .split_once("..")
+        .and_then(|(a, b)| Some((a.trim().parse().ok()?, b.trim().parse().ok()?)));
+    bounds.with_context(|| format!("--drag {text:?}: expected two epoch millis, FROM..UNTIL"))
+}
+
+/// The distribution as a terminal can hold it: two strips over one axis.
+///
+/// Folded to [`STRIP`] columns rather than printed at the bucket count it was asked for. The
+/// bucket count is a *client's* resolution — the macOS drawer's default is 180 bars, which is
+/// four times what a terminal has room for — and folding here means the same reply serves both
+/// rather than a terminal needing its own request. Summing is the only fold that keeps the
+/// numbers true: sampling every third bucket would draw a corpus a third of its real size.
+fn render_timeline(t: &cs_core::Timeline) {
+    if t.buckets.is_empty() {
+        println!("nothing in this index has an ending, so there is no axis to draw");
+        return;
+    }
+    let day = |ms: i64| cs_core::local_ymd(ms).unwrap_or_else(|| "?".into());
+    println!(
+        "{} → {} · {} day{} a bar · {} in range · {} the query selects{}",
+        day(t.from),
+        day(t.until),
+        t.bucket_days,
+        if t.bucket_days == 1 { "" } else { "s" },
+        t.in_range,
+        t.total,
+        match t.undated {
+            0 => String::new(),
+            n => format!(" · {n} undated and unplaceable"),
+        }
+    );
+    let fold = |pick: fn(&cs_core::Bucket) -> usize| -> Vec<usize> {
+        let per = t.buckets.len().div_ceil(STRIP);
+        t.buckets.chunks(per).map(|c| c.iter().map(pick).sum()).collect()
+    };
+    let bars = fold(|b| b.conversations);
+    let hits = fold(|b| b.matches);
+    // Each strip against its own tallest column, which is the same choice the drawer makes and
+    // for the same reason: on one scale a handful of matches under thousands of conversations
+    // is a row of blanks, and where they landed is the question being asked.
+    println!("  hits   {}", strip(&hits));
+    println!("  all    {}", strip(&bars));
+    if let Some(w) = &t.window {
+        let edge = |ms: Option<i64>| ms.map(day).unwrap_or_else(|| "…".into());
+        println!("  window {} → {}", edge(w.from), edge(w.until));
+    }
+    if let Some(d) = &t.drag {
+        println!("  drag   {:?}", d.query);
+    }
+}
+
+/// How many columns [`render_timeline`] folds an axis into. Narrow enough to sit inside an
+/// 80-column terminal with the row labels beside it.
+const STRIP: usize = 68;
+
+/// Counts as eight heights, tallest column full.
+///
+/// A zero is a space rather than the lowest block: an empty stretch of the calendar and a
+/// stretch with one conversation in it are different answers, and the ramp's bottom step cannot
+/// tell them apart.
+fn strip(counts: &[usize]) -> String {
+    const RAMP: [char; 8] = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+    let top = counts.iter().copied().max().unwrap_or(0);
+    counts
+        .iter()
+        .map(|&n| match (n, top) {
+            (0, _) | (_, 0) => ' ',
+            (n, top) => RAMP[((n * (RAMP.len() - 1)) / top).min(RAMP.len() - 1)],
+        })
+        .collect()
+}
+
 /// Record that a search ended in opening a conversation, and print its resume command.
 ///
 /// The half of the log that carries ground truth. A search on its own says what was wanted;

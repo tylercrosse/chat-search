@@ -36,6 +36,16 @@ final class MarkedText {
     private var built: [String: Entry] = [:]
     private var answering: Question?
 
+    /// How many messages this has assembled, and how many it has handed back already assembled.
+    ///
+    /// Not private, for the reason `MinimapBands.renders` is not: the claim above is "once, not
+    /// once a frame", and the wall clock cannot check it — a fling's frame lag on this machine
+    /// swings further between runs of one build than the whole of this change is worth. These two
+    /// can. Their sum is what the computed property this replaced would have built in full, so
+    /// `reuses` is the work avoided, counted rather than inferred from a percentile.
+    private(set) var builds = 0
+    private(set) var reuses = 0
+
     private struct Entry {
         let fold: Fold
         let text: AttributedString
@@ -58,9 +68,13 @@ final class MarkedText {
             built.removeAll(keepingCapacity: true)
             answering = question
         }
-        if let entry = built[block.id], entry.fold == fold { return entry.text }
+        if let entry = built[block.id], entry.fold == fold {
+            reuses += 1
+            return entry.text
+        }
         let text = Self.mark(block, fold: fold, in: transcript.markOffsets, theme: theme)
         built[block.id] = Entry(fold: fold, text: text)
+        builds += 1
         return text
     }
 

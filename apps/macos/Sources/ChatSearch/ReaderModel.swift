@@ -30,7 +30,10 @@ final class ReaderModel {
     /// evaluation. Held here rather than on the view for the reason the folds are: a computed
     /// property on a `View` is rebuilt whenever SwiftUI feels like asking, and the fold that
     /// decides which string is marked already lives on this side of the line.
-    private let markedText = MarkedText()
+    ///
+    /// Not private, for the same reason `MinimapBands.renders` is not: `--shot` prints its two
+    /// counters, which is the only check there is on the claim it exists to make.
+    let markedText = MarkedText()
 
     /// The conversation as a map, laid out once per transcript rather than once per redraw: it is
     /// O(messages) to build and the view holding it is invalidated on every frame of a scroll.

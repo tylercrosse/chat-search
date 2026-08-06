@@ -25,9 +25,13 @@ struct Options {
     /// and it is a flag rather than a test because the Command Line Tools SDK has no test
     /// framework in it.
     var verifyTheme = false
-    /// Which direction to draw. The one flag here that *is* a preference — it sticks, where
-    /// `--size` and `--group` deliberately do not. See `ThemeChoice`.
+    /// The four that *are* preferences — they stick, where `--size` and `--group` deliberately do
+    /// not. A direction on both sides, a direction's colours on one side, and which side is drawn.
+    /// Kept as typed, because turning a name into a theme happens once, in `ThemeChoice`.
     var theme: String?
+    var themeLight: String?
+    var themeDark: String?
+    var appearance: String?
     /// Search, open the first result and draw the window to a PNG, then quit. The third
     /// non-affordance, and the only way to check the reader from a script: what it draws is a
     /// picture, and no exit code describes one.
@@ -84,8 +88,12 @@ func parse(_ argv: [String]) -> Options {
         case "--verify-theme": o.verifyTheme = true
         // Kept as typed rather than resolved here: a name this build does not carry gets a
         // sentence on stderr from `ThemeChoice`, which is also where the remembered one is read,
-        // so there is one place that turns a name into a theme and one place that complains.
+        // so there is one place that turns a name into a theme and one place that complains. The
+        // same for an appearance nobody has a reading for.
         case "--theme": o.theme = next()
+        case "--theme-light": o.themeLight = next()
+        case "--theme-dark": o.themeDark = next()
+        case "--appearance": o.appearance = next()
         case "--shot": o.shot = true
         case "--query": if let v = next() { o.shotQuery = v }
         case "--out": if let v = next() { o.shotPath = v }
@@ -95,8 +103,13 @@ func parse(_ argv: [String]) -> Options {
             print("""
                 chat-search [--db PATH] [--config PATH] [--bin PATH] [--limit N]
 
-                  --theme NAME         draw this direction, and remember it: \(names)
+                  --theme NAME         draw this direction on both sides, and remember it: \(names)
                                        remembered in \(ThemeChoice.location)
+                  --theme-light NAME   take the light side's colours from this direction instead
+                  --theme-dark NAME    the same for the dark side. Colours only: the type scale
+                                       and the row metrics come from --theme, for both sides
+                  --appearance WHICH   \(Appearance.names) — which side is drawn, whatever
+                                       macOS is doing. Also remembered
                   --measure            type the measurement phrases and print keystroke→frame
                   --interval MS        milliseconds between simulated keystrokes (default 100)
                   --verify-theme       re-measure every compiled-in direction and exit
@@ -140,8 +153,13 @@ if options.verifyTheme { exit(ThemeCheck.run(Theme.directions, as: .direction)) 
 
 // Resolved once, here, and handed down. Not read from the environment's default by each view: the
 // default is what the build ships and this is what the person chose, and only one of those two is
-// allowed to be the answer once a choice exists.
-let theme = ThemeChoice.resolve(named: options.theme, remember: !options.scripted)
+// allowed to be the answer once a choice exists. Two answers now — a theme, which may be one
+// direction's light beside another's dark, and the appearance it is drawn in.
+let (theme, appearance) = ThemeChoice.resolve(
+    ThemeChoice.Request(
+        direction: options.theme, light: options.themeLight, dark: options.themeDark,
+        appearance: options.appearance),
+    remember: !options.scripted)
 
 guard let binary = CsClient.locate(binary: options.binary) else {
     FileHandle.standardError.write(
@@ -159,15 +177,22 @@ final class AppHost: NSObject, NSApplicationDelegate {
     /// override is the whole of what several themes in one binary costs the views, which is what
     /// the token seam was built before the views to buy (`chat-search-me9.8.8`).
     let theme: Theme
+    /// And which of its two sides is drawn, which costs the views nothing at all.
+    let appearance: Appearance
     private var frames: FrameClock?
 
-    init(model: SearchModel, options: Options, theme: Theme) {
+    init(model: SearchModel, options: Options, theme: Theme, appearance: Appearance) {
         self.model = model
         self.options = options
         self.theme = theme
+        self.appearance = appearance
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        // Before the window, so nothing is drawn in one appearance and then re-drawn in another.
+        // `nil` for `system` is not a no-op worth skipping: it is what says this app has no opinion
+        // when nobody has expressed one, and it is what an override is cleared back to.
+        NSApp.appearance = appearance.nsAppearance
         model.group(by: options.group)
         // After the axis, because folding is a property of the groups that axis produced. It moves
         // the default rather than folding what is on screen now, so a group that arrives on a later
@@ -190,6 +215,14 @@ final class AppHost: NSObject, NSApplicationDelegate {
         // comparable with `poc/swift/RESULTS.md` §1, taken the same way. A latency measured in a
         // frontmost app and one measured in a background app are not the same measurement.
         if !options.scripted { NSApp.activate(ignoringOtherApps: true) }
+
+        // Taken off the hosting view rather than off the window, because the window's own chrome
+        // following an override says nothing about whether the colours did (`AppearanceProbe`).
+        // With the scripted runs, where the rest of the evidence is: a person looking at the
+        // window can already see which side they got.
+        if options.scripted {
+            print(AppearanceProbe.line(theme: theme, view: hosting, asked: appearance))
+        }
 
         if options.shot {
             // A display link under `--shot` as well as under `--measure`: the drawer is driven
@@ -239,6 +272,7 @@ let host = AppHost(
             binary: binary, db: options.db, config: options.config, driven: options.scripted),
         limit: options.limit),
     options: options,
-    theme: theme)
+    theme: theme,
+    appearance: appearance)
 app.delegate = host
 app.run()

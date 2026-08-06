@@ -92,6 +92,71 @@ public struct Theme: Sendable {
             appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? darkColor : lightColor
         }
     }
+
+    /// What a token comes back as when it is drawn in a given appearance, and which of the two
+    /// authored sides that colour turned out to be.
+    ///
+    /// The probe `chat-search-me9.8.22` asked for, and it samples rather than asserts because the
+    /// failure it looks for is invisible to an assertion: an appearance override that reached only
+    /// the window's own chrome leaves the frame dark and every colour inside it light, and nothing
+    /// tells that apart from a working override except the value the provider actually returned. A
+    /// `nil` side is that failure — a colour that is neither authored value means the provider was
+    /// asked with an appearance nobody set.
+    public func drawn(_ token: ColorToken, in appearance: NSAppearance) -> (rgb: RGB?, side: String?)
+    {
+        var sampled: RGB?
+        // Resolving a dynamic colour calls its provider with the appearance current *for drawing*,
+        // so this reads the same path a view takes rather than re-deriving it from the pair.
+        appearance.performAsCurrentDrawingAppearance {
+            sampled = RGB(sampling: self.resolved[token]!)
+        }
+        guard let sampled else { return (nil, nil) }
+        if sampled == light[token] { return (sampled, "light") }
+        if sampled == dark[token] { return (sampled, "dark") }
+        return (sampled, nil)
+    }
+}
+
+// MARK: - Composing one
+
+extension Theme {
+    /// One direction's colours on each side, and one direction's type and geometry for both.
+    ///
+    /// **Colour is the only thing that travels with a side**, and that is a decision
+    /// (`chat-search-me9.8.22`) rather than a limitation of this signature. A system appearance
+    /// flip is not somebody changing their mind about typography: it happens at sunset, unattended,
+    /// possibly mid-read. Colour changing then is the point of the setting; the reading measure
+    /// changing under someone's eyes is a bug — `poc/ui/DESIGN-BRIEF.md` names rows-per-screen
+    /// first on its list of what would actually break this, and `paper` is a serif face on warm
+    /// stock against `terminal`'s sans on slate, so a whole direction per side would make an
+    /// unattended flip a relayout. The alternative is recorded in `apps/macos/README.md`; it is one
+    /// line here on the day it is chosen.
+    ///
+    /// Additive on purpose. The generated `Tokens.swift` calls
+    /// `init(name:dark:light:type:geometry:)` and `chat-search-me9.8.17` is about to regenerate
+    /// that file, so changing the initialiser's shape is how these two would collide.
+    ///
+    /// Nothing here can produce an unmeasured combination. `ThemeCheck` fences each side on its
+    /// own and names the side in every failure, so a light half and a dark half taken from two
+    /// fenced directions are both already measured: mixing is closed under the fence.
+    public static func composed(light: Theme, dark: Theme, layout: Theme) -> Theme {
+        Theme(
+            name: composedName(light: light, dark: dark, layout: layout),
+            dark: dark.dark, light: light.light,
+            type: layout.type, geometry: layout.geometry)
+    }
+
+    /// What to call a mixture, in the one register that stays true: the direction, and what it
+    /// borrowed. An unmixed composition keeps the plain direction name, so a log line, a complaint
+    /// or a screenshot caption reads exactly as it did before this was possible.
+    private static func composedName(light: Theme, dark: Theme, layout: Theme) -> String {
+        let borrowed = [
+            light.name == layout.name ? nil : "\(light.name)'s light",
+            dark.name == layout.name ? nil : "\(dark.name)'s dark",
+        ].compactMap { $0 }
+        guard !borrowed.isEmpty else { return layout.name }
+        return "\(layout.name) with " + borrowed.joined(separator: " and ")
+    }
 }
 
 // MARK: - Tokens
@@ -286,6 +351,20 @@ public struct RGB: Sendable, Equatable {
         red = UInt8((hex >> 16) & 0xff)
         green = UInt8((hex >> 8) & 0xff)
         blue = UInt8(hex & 0xff)
+    }
+
+    /// A colour read back out of AppKit, in the space it was authored in.
+    ///
+    /// `usingColorSpace(.sRGB)` and not the components as they come: a dynamic colour resolves into
+    /// whatever space its provider handed back, and a value that has been through another one is no
+    /// longer a value these eight-bit measurements describe. `nil` for a colour that cannot be
+    /// converted at all, which is a pattern colour or an unresolved dynamic one.
+    public init?(sampling color: NSColor) {
+        guard let srgb = color.usingColorSpace(.sRGB) else { return nil }
+        func byte(_ component: CGFloat) -> UInt8 { UInt8((component * 255).rounded()) }
+        red = byte(srgb.redComponent)
+        green = byte(srgb.greenComponent)
+        blue = byte(srgb.blueComponent)
     }
 
     public var nsColor: NSColor {

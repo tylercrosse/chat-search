@@ -1,80 +1,223 @@
 import CsTheme
 import Foundation
 
-/// Which of the compiled-in directions this launch draws, and the one thing this app remembers
-/// between launches.
+/// What this launch draws, and everything this app remembers between launches.
 ///
-/// The seam under it needed nothing to make this possible — `Theme` is a plain `Sendable` value
-/// behind an environment key, so a second direction is an override at the root and no view change
-/// (`chat-search-me9.8.8`). What had to be decided is where the choice comes from and where it
-/// goes, and both answers are here rather than spread between a flag and a view.
+/// Three settings on two axes (`chat-search-me9.8.22`): an **appearance** of system, light or dark,
+/// and a **direction** for each side. `chat-search-me9.8.9` shipped one axis — a direction, with
+/// the system deciding which of its two palettes you saw — so "GitHub Light in the day and
+/// Solarized Dark at night" could not be said at all. Now it can.
+///
+/// The seam under it needed nothing to make either possible. `Theme` keeps `light` and `dark` as
+/// two independently solved `Palette`s and resolves each token through one dynamic `NSColor`, so a
+/// side is swapped by composing a value and an appearance is forced by one `NSApp.appearance` — no
+/// palette re-resolve, no view change (`chat-search-me9.8.8`). What had to be decided is where the
+/// three answers come from and where they go, and both are here rather than spread between four
+/// flags and a view.
+///
+/// ## What a side carries, and what it does not
+///
+/// A side override is **colour only**. The type scale and the geometry come from the direction,
+/// once, for both sides — `Theme.composed` carries the argument, and the short of it is that an
+/// appearance flip happens at sunset with nobody watching, so it may change what the window looks
+/// like and may not change where the words are.
 ///
 /// ## Why a flag is the affordance
 ///
 /// This app has no bundle, no Dock icon and no menu bar: it is launched by
 /// `swift run -c release chat-search`, so a terminal *is* its front door and a flag is the
-/// idiomatic control for it. `--theme` is not in the family of `--size`, `--group` and `--measure`
-/// for that reason — those are instruments, deliberately not preferences, and this one is a
-/// preference and sticks. An in-app picker is what this wants when the app grows a menu bar to put
-/// it in; `chat-search-me9.8.21`.
+/// idiomatic control for it. These four are not in the family of `--size`, `--group` and
+/// `--measure` — those are instruments, deliberately not preferences, and these stick. The settings
+/// window is `chat-search-me9.8.21`, and it is a surface over this rather than the way in.
 enum ThemeChoice {
-    /// The key, in this executable's own defaults domain.
-    static let key = "theme"
+    /// The direction: colour on both sides unless a side says otherwise, and the type scale and the
+    /// geometry for both sides always. The key `chat-search-me9.8.9` wrote, still meaning what it
+    /// meant then.
+    static let directionKey = "theme"
+    /// A direction whose *light* colours this app wears when it is drawing light. Nothing else of
+    /// that direction comes with them.
+    static let lightKey = "theme-light"
+    /// The same for the dark side.
+    static let darkKey = "theme-dark"
+    /// system, light or dark — which side is drawn, independently of where either side came from.
+    static let appearanceKey = "appearance"
 
-    /// Where the choice persists, said in the form somebody can actually go and look at.
+    /// Where the choices persist, said in the form somebody can actually go and look at.
     ///
     /// `UserDefaults` works without a bundle — probed, not assumed: a non-bundled executable gets
     /// a domain named after the executable, and `~/Library/Preferences/chat-search.plist` is
     /// written and read back across runs. The catch worth writing down is that the domain is the
-    /// *executable name*, so the day this app gains a bundle identifier the preference moves and
-    /// the old one is orphaned rather than migrated. That costs one re-pick of a theme, which is
-    /// why it did not buy a hand-rolled file under `~/.config/chat-search/` — that directory is
-    /// `cs`'s, this is the client's own state, and a plist is inspectable with `defaults read`
-    /// where a new dotfile format would be inspectable with nothing.
+    /// *executable name*, so the day this app gains a bundle identifier the preferences move and
+    /// the old ones are orphaned rather than migrated. That costs one re-pick, which is why it did
+    /// not buy a hand-rolled file under `~/.config/chat-search/` — that directory is `cs`'s, this
+    /// is the client's own state, and a plist is inspectable with `defaults read` where a new
+    /// dotfile format would be inspectable with nothing.
     static let location = "~/Library/Preferences/chat-search.plist"
 
-    /// The direction to draw, and the complaints that go with it.
+    /// What a command line asked for, kept as typed.
     ///
-    /// Order: what was asked for on the command line, then what was chosen last time, then the
-    /// direction the build ships. A name this build does not carry never silently becomes another
-    /// one — the flag that did nothing is the failure mode this whole function exists to avoid —
-    /// so it says so and leaves the previous answer standing.
+    /// Every field is optional and `nil` means *did not say*, which is not the same as anything it
+    /// could have said — that difference is the whole reason `Appearance` has a `system` case
+    /// rather than being absent when nothing is forced.
+    struct Request {
+        var direction: String?
+        var light: String?
+        var dark: String?
+        var appearance: String?
+
+        var isEmpty: Bool {
+            direction == nil && light == nil && dark == nil && appearance == nil
+        }
+    }
+
+    /// The theme to draw, the appearance to draw it in, and the complaints that go with both.
     ///
-    /// - Parameter remember: false for a scripted run. `--measure` and `--shot` take a picture or
-    ///   a number in whatever direction the script names, and neither is somebody choosing a
-    ///   theme; the same reason both stay out of the query log (`docs/DECISIONS.md` ADR 22).
+    /// Order for each setting: what was asked for on the command line, then what was chosen last
+    /// time, then what the build ships. A name this build does not carry never silently becomes
+    /// another one — the flag that did nothing is the failure mode this whole function exists to
+    /// avoid — so it says so and leaves the previous answer standing.
+    ///
+    /// - Parameter remember: false for a scripted run. `--measure` and `--shot` take a picture or a
+    ///   number in whatever direction and appearance the script names, and neither is somebody
+    ///   choosing a theme; the same reason both stay out of the query log (`docs/DECISIONS.md`
+    ///   ADR 22). It gates every write here, and there are now four of them.
     static func resolve(
-        named requested: String?,
+        _ asked: Request,
         remember: Bool,
         say: (String) -> Void = { FileHandle.standardError.write(Data(($0 + "\n").utf8)) }
-    ) -> Theme {
-        if let requested {
-            if let theme = Theme.direction(named: requested) {
-                if remember {
-                    UserDefaults.standard.set(theme.name, forKey: key)
-                    say(
-                        "theme: \(theme.name) — remembered in \(location). "
-                            + "`defaults delete chat-search \(key)` forgets it.")
-                }
-                return theme
+    ) -> (theme: Theme, appearance: Appearance) {
+        let store = UserDefaults.standard
+        // Read before anything is written, because writing is one of the things that changes it: a
+        // `theme` with nothing beside it is a preference written by a build that had one axis.
+        let oldShaped =
+            store.string(forKey: directionKey) != nil
+            && store.string(forKey: lightKey) == nil
+            && store.string(forKey: darkKey) == nil
+            && store.string(forKey: appearanceKey) == nil
+
+        // The direction. Both sides' colours unless a side is overridden, and both sides' type and
+        // geometry whatever happens.
+        var direction = Theme.shipped
+        var directionNamed = false
+        if let name = asked.direction, let theme = carried(name, say) {
+            direction = theme
+            directionNamed = true
+            if remember {
+                store.set(theme.name, forKey: directionKey)
+                // `--theme` means "this direction on both sides", so it clears the two side
+                // overrides rather than leaving one standing to contradict what it just said.
+                store.removeObject(forKey: lightKey)
+                store.removeObject(forKey: darkKey)
+                say(
+                    "theme: \(theme.name) on both sides — remembered in \(location). "
+                        + "`defaults delete chat-search \(directionKey)` forgets it.")
             }
-            say(
-                "no direction called \(requested). This build carries "
-                    + Theme.directionNames.joined(separator: ", ") + ".")
+        }
+        if !directionNamed,
+            let theme = remembered(directionKey, instead: "drawing \(Theme.shipped.name)", say)
+        {
+            direction = theme
         }
 
-        guard let remembered = UserDefaults.standard.string(forKey: key) else {
-            return .shipped
+        // Each side, colour only. A remembered override is ignored when this command line named a
+        // direction, for the same reason writing one clears it.
+        var light = direction
+        var dark = direction
+        if !directionNamed {
+            let instead = "that side keeps \(direction.name)'s"
+            if let theme = remembered(lightKey, instead: instead, say) { light = theme }
+            if let theme = remembered(darkKey, instead: instead, say) { dark = theme }
         }
-        guard let theme = Theme.direction(named: remembered) else {
-            // A build that dropped a direction somebody had chosen. Silence here would read as the
-            // preference having been forgotten, and it has not been — it is still in the plist,
-            // and it will come back the moment that direction is generated in again.
+        if let name = asked.light, let theme = carried(name, say) {
+            light = theme
+            if remember { keep(theme, forKey: lightKey, side: "light", store: store, say: say) }
+        }
+        if let name = asked.dark, let theme = carried(name, say) {
+            dark = theme
+            if remember { keep(theme, forKey: darkKey, side: "dark", store: store, say: say) }
+        }
+
+        // The appearance, which is not a direction's to have an opinion about.
+        var appearance = Appearance.system
+        if let name = asked.appearance, let value = Appearance(rawValue: name) {
+            appearance = value
+            if remember {
+                store.set(value.rawValue, forKey: appearanceKey)
+                say(
+                    "appearance: \(value.rawValue) — remembered in \(location). "
+                        + "`defaults delete chat-search \(appearanceKey)` forgets it.")
+            }
+        } else {
+            if let name = asked.appearance {
+                say("no appearance called \(name). This flag takes \(Appearance.names).")
+            }
+            if let name = store.string(forKey: appearanceKey) {
+                if let value = Appearance(rawValue: name) {
+                    appearance = value
+                } else {
+                    say(
+                        "the remembered appearance \(name) is not one this build knows; following "
+                            + "the system. It is still in \(location).")
+                }
+            }
+        }
+
+        // An old-shaped preference is READ rather than converted. A `theme` written by
+        // `chat-search-me9.8.9` meant "this direction on both sides, following the system", which
+        // is exactly what it still means here — so there is nothing to convert, and nothing is
+        // rewritten, because a launch that quietly writes a preference nobody asked for is what the
+        // scripted-run rule above exists to prevent. What is owed is the sentence: the same value
+        // now has two more axes beside it, and silence would leave them to be discovered.
+        if oldShaped && asked.isEmpty {
             say(
-                "the remembered theme \(remembered) is not in this build; drawing "
-                    + "\(Theme.shipped.name). It is still in \(location).")
-            return .shipped
+                "theme: \(direction.name) on both sides, appearance following the system — that is "
+                    + "what a `theme` set before this build means. `--theme-light NAME` and "
+                    + "`--theme-dark NAME` set a direction per side, `--appearance "
+                    + "\(Appearance.names)` overrides the system, and `--appearance system` records "
+                    + "this reading so this line stops.")
+        }
+
+        return (.composed(light: light, dark: dark, layout: direction), appearance)
+    }
+
+    /// A direction this build carries, or nil having said which ones it does.
+    private static func carried(_ name: String, _ say: (String) -> Void) -> Theme? {
+        guard let theme = Theme.direction(named: name) else {
+            say(
+                "no direction called \(name). This build carries "
+                    + Theme.directionNames.joined(separator: ", ") + ".")
+            return nil
         }
         return theme
+    }
+
+    /// A remembered direction, or nil having said what became of it.
+    ///
+    /// Silence about a name that is no longer compiled in would read as the preference having been
+    /// forgotten, and it has not been — it is still in the plist, and it comes back the moment that
+    /// direction is generated in again.
+    private static func remembered(
+        _ key: String, instead: String, _ say: (String) -> Void
+    ) -> Theme? {
+        guard let name = UserDefaults.standard.string(forKey: key) else { return nil }
+        guard let theme = Theme.direction(named: name) else {
+            say(
+                "the remembered \(key) \(name) is not in this build; \(instead). "
+                    + "It is still in \(location).")
+            return nil
+        }
+        return theme
+    }
+
+    /// One side's override, written down and said out loud — including what it does *not* bring
+    /// with it, which is the part somebody picking `paper` for one side will not expect.
+    private static func keep(
+        _ theme: Theme, forKey key: String, side: String, store: UserDefaults,
+        say: (String) -> Void
+    ) {
+        store.set(theme.name, forKey: key)
+        say(
+            "\(key): \(theme.name)'s \(side) colours, and only its colours — remembered in "
+                + "\(location). `defaults delete chat-search \(key)` forgets it.")
     }
 }

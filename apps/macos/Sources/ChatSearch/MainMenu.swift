@@ -8,10 +8,19 @@ import AppKit
 ///
 /// **One rule decides what is on it**, and it is `chat-search-me9.8.21`'s argument for Quit carried
 /// to the end rather than a template copied. macOS delivers a key equivalent through a menu and
-/// through nothing else, so an item earns its place here when a key somebody already presses is
-/// dead without it. An Edit menu is not a feature this app grew; it is the thing that was missing
-/// while Cmd-C did nothing in an entirely ordinary text field — the field was never broken, the bar
-/// was absent. `chat-search-me9.8.24`.
+/// through nothing else, so an item earns its place here when a key would otherwise reach nothing.
+/// That is one rule with two halves, and only the first was visible while every item on the bar was
+/// AppKit's:
+///
+/// - **A key somebody already presses is dead without it.** Quit, and then the whole Edit menu. An
+///   Edit menu is not a feature this app grew; it is the thing that was missing while Cmd-C did
+///   nothing in an entirely ordinary text field — the field was never broken, the bar was absent.
+///   `chat-search-me9.8.24`.
+/// - **Or this app can do a thing the keyboard cannot reach at all.** Hiding the bottom drawer was
+///   a button and nothing else, in a window whose only focused view is the query box — so there was
+///   no view to bind a key on that would not be taking that key away from the box. A menu is
+///   outside the responder chain and therefore outside that argument, which is what makes
+///   `View ▸ Hide Timeline` possible where an arrow pair was not. `chat-search-me9.8.26`.
 ///
 /// The rule cuts the other way just as hard, which is the half worth writing down. Every item a
 /// template would put here and this one does not — Zoom, Bring All to Front, the window list, Hide
@@ -33,18 +42,21 @@ import AppKit
 /// rather than quietly attributed to this app.
 @MainActor
 enum MainMenu {
-    /// The whole menu bar: three submenus.
+    /// The whole menu bar: four submenus.
     ///
     /// The first item of a main menu is the application menu whatever it is called — AppKit takes
     /// its title from the process rather than from here — which is why the outer item's title is
-    /// empty and the inner titles say the name themselves. The other two are titled, and `Edit` is
-    /// titled exactly that because AppKit matches the name when it decides where to insert the
+    /// empty and the inner titles say the name themselves. The other three are titled, and `Edit`
+    /// is titled exactly that because AppKit matches the name when it decides where to insert the
     /// input-method items it owns (see `Bar.suppressInputMethodItems`).
-    static func build(openSettings target: AnyObject, action: Selector) -> NSMenu {
+    ///
+    /// Both of this app's own items are aimed at one object, which is `AppHost`: it is the only
+    /// thing in the process that holds both the windows and the model.
+    static func build(target: AnyObject, settings: Selector, timeline: Selector) -> NSMenu {
         let bar = NSMenu()
         for (title, menu) in [
-            ("", application(openSettings: target, action: action)), ("Edit", edit()),
-            ("Window", window()),
+            ("", application(openSettings: target, action: settings)), ("Edit", edit()),
+            ("View", view(toggleTimeline: target, action: timeline)), ("Window", window()),
         ] {
             let item = NSMenuItem()
             item.title = title
@@ -137,6 +149,43 @@ enum MainMenu {
         menu.addItem(.separator())
         menu.addItem(
             withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        return menu
+    }
+
+    /// One item, and the first thing on this bar that is an act of this app's rather than AppKit's.
+    ///
+    /// The bottom drawer opens and shuts from a button in its own corner and from nowhere else,
+    /// which made it mouse-only — and `chat-search-me9.8.20` filed that as unfixable from where it
+    /// stood, because this window has exactly one focused view and any key bound beside it is a key
+    /// the query box stops getting. The fold escaped that only because Enter already belonged to the
+    /// list rather than to the field (`chat-search-me9.8.15`); nothing else is going spare, and
+    /// left/right in particular are how a caret moves through a query that is a grammar. A menu
+    /// resolves its key equivalents before the responder chain is consulted at all, so this is the
+    /// one place a new key can be bound in this window without taking it off something.
+    ///
+    /// **Cmd-T, and it is free here in a way it is not in most apps.** The platform spends it on New
+    /// Tab and on Show Fonts; this app has no tabs (nothing sets `newWindowForTab:`, so AppKit adds
+    /// no tab items either) and nothing rich enough to want a font panel, so it is dead weight
+    /// otherwise and it is the letter the drawer is named after. `--clipboard` presses it and reads
+    /// the drawer's state back, which is what makes that a measurement rather than a hope.
+    ///
+    /// **The title is a verb and it flips**, Finder's arrangement for Show/Hide Status Bar. Which
+    /// verb is right is a fact about the model and this file holds no model, so `AppHost` writes it
+    /// during validation — the same moment AppKit decides whether the item is live at all. Built
+    /// reading `Hide`, which `--no-timeline` makes momentarily wrong and the first validation
+    /// corrects before anybody can see it.
+    ///
+    /// **What is not on it, and it is one thing.** The grouping control is mouse-only in exactly the
+    /// way the drawer was, and a View menu is now the place it could live — but the axis is four
+    /// states rather than a toggle, and four items with four keys is a different argument that
+    /// wants making on its own. `chat-search-me9.8.40`.
+    private static func view(toggleTimeline target: AnyObject, action: Selector) -> NSMenu {
+        let menu = NSMenu()
+        let item = NSMenuItem(title: "Hide Timeline", action: action, keyEquivalent: "t")
+        // Explicit, for the reason `Settings…` is: this goes to the application's delegate, which
+        // is not a link in the chain a `nil` target walks.
+        item.target = target
+        menu.addItem(item)
         return menu
     }
 

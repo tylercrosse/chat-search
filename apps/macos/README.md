@@ -968,6 +968,112 @@ on "nothing moved"**: across the pair, every frame is identical outside a 162×1
 footer holding the query's own millisecond readout, which differs by as much between two runs of
 one build.
 
+### Markdown, set over the source
+
+The reader drew `**bold**`, `# headings` and fenced code as the characters they are. Measured over
+the live index — `on_head_path = 1`, counting messages that *contain* the sequence, which is a
+looser test than the scanner's and therefore a ceiling on what it styles:
+
+| band | messages | contain `**` | a line opening `#` | contain ``` ``` ``` |
+| --- | ---: | ---: | ---: | ---: |
+| assistant prose | 32,197 | 8,081 (25.1%) | 4,343 (13.5%) | 2,547 (7.9%) |
+| user prose | 13,595 | 595 (4.4%) | 1,643 (12.1%) | 945 (7.0%) |
+| reasoning | 14,178 | **11,105 (78.3%)** | 1 | 5 |
+| tool | 131,792 | 10,926 | 5,247 | 1,427 |
+
+Reasoning is the extreme case and the one that pays off the moment this is switched on: four fifths
+of it is asterisks, with essentially no code and no headings in it. The tool row is the argument
+for the gate below rather than for the feature — those are `#` and `*` as themselves.
+
+**Nothing may move a byte, and that is the whole design.** `Block.marks` are UTF-8 offsets into
+`text` and `runs(marking:in:)` slices the string by them, so a transform that deleted the `**`
+would move every offset after it and mark the wrong words — silently, in the one place a reader has
+gone to check why the conversation is on screen. `Model.swift` already records the hazard for a
+*one-character* substitution: `lineBreaksAsSpaces` is spelled in bytes so that "one byte in, one
+byte out, so every offset in marks still names the same characters afterwards."
+
+So the syntax is styled rather than deleted, and it is dimmed to `--ink-3` — the same quiet tier
+the tool traffic is drawn in — so it recedes without going anywhere. What is copied out of the
+reader is the message exactly as it arrived.
+
+| construct | what it gets |
+| --- | --- |
+| ```` ``` ```` fence | the whole block in the monospaced face, the delimiter lines dimmed |
+| `**bold**` | semibold between the markers, the markers dimmed |
+| `#` at the start of a line | the rest of the line semibold and one step up the scale, the hashes dimmed |
+
+**Existing tokens only** — `.mono`, `--ink-3`, semibold, and the same five-size scale everything
+else is set on. Nothing new reaches `ThemeCheck`, and no direction had to be re-solved. That is
+also why a code *ground* is not here: it would be two tokens across six directions and both sides
+through the contrast gate, and Solarized is the direction where the darkest colour published is the
+page itself.
+
+How much "one step up" is worth belongs to the direction and is honestly not much: `terminal` puts
+0.5pt between `body` and `head` and `paper` puts none at all, so a heading is carried by its weight
+and the size is a nudge where there is one to take. `SizeToken.larger` saturates at the top rather
+than inventing a sixth size.
+
+**That the scanner cannot corrupt anything is what makes a hand-rolled one safe here.** Get a line
+wrong and the failure mode is *no styling* — the reader draws it exactly as it drew it yesterday —
+never a wrong highlight and never lost text. Two gates keep it there:
+
+- **Never tool traffic.** 31,328 of the corpus's 131,792 tool messages contain a `#` or a `*`, and
+  almost none of it is markdown: a shell command, a diff, a glob and a JSON key all carry those
+  characters as themselves. On the conversation below, 100 of 388 tool messages are punctuated that
+  way and 0 are styled.
+- **Never a collapsed message.** A fold is one line with its line breaks spent as spaces, which
+  every line-oriented rule would read wrong — and a heading, a fence and a paragraph all draw as the
+  same truncated row anyway.
+
+Deliberately not read: italics, because a single `*` false-positives on globs and on
+multiplication where a doubled one is unambiguous; links, lists, blockquotes and tables, because
+nesting is where hand-rolled scanners actually break; and inline `` `code` ``, which is the one
+omission worth naming — it is common, and its delimiter is the character fences are made of, so it
+belongs to a scanner that shares state with the fence pass rather than one guessing beside it.
+Syntax highlighting is `chat-search-me9.8.38`'s question, not this one's.
+
+Bold does not cross a line, which CommonMark allows and this refuses: one unclosed `**` in a 40 KB
+message would otherwise style the rest of it, and confining that to its own line is worth more than
+the paragraph-spanning bold nobody writes.
+
+#### What `--shot` checks
+
+A frame shows a fence in the monospaced face. It cannot show that nothing moved, so the pass builds
+a fabricated message — a heading, a bold run and a fence, with a mark inside each, one of them
+straddling a `**` and one buried in the code — through the same `MarkedText` the drawer uses, and
+reads the drawing back. It is a printed pass rather than a test for the reason
+[`--verify-theme` is a flag](#why---verify-theme-and-not-a-test): the Command Line Tools SDK
+carries neither `Testing` nor `XCTest`. The fixture goes in as JSON through the contract's own
+decoder, so it is a fixture the contract can still reject.
+
+```
+markdown, over 563 drawn messages of claude-code:5b4f1d3c-…:
+  38 carry it — 37 with bold, 18 with a heading, 11 with a fence
+  of 388 tool messages, 100 contain a # or a *, and 0 are styled
+  collapsed, 0 of 563 are styled
+  a fabricated message with all three constructs and a mark inside each:
+    nothing moved: 275 bytes in, 275 out, identical true
+    the marks still name ["reader", "**deliberate**", "not bold"]
+    …which is what the offsets named before it was drawn: ["reader", "**deliberate**", "not bold"]
+    the scanner read 1 heading, 2 bold, 1 fenced block over 2 fence lines, 5 syntax runs
+    10 runs carry a face of their own
+    the same bytes as a tool result: 0 runs carry a face
+    the same bytes collapsed: 0 runs carry a face
+```
+
+The two mark lines are the claim: what the drawing says is marked, beside what the byte offsets
+named in the source before anything styled it. A run is read back as marked by the two attributes a
+mark spends and markdown never does — a ground and an underline — rather than by comparing colours,
+which would be a check on `Color`'s equality as much as on this.
+
+Markdown and the marks are two span sets over one string, so the cut is by both and the order says
+which wins. Markdown goes on first and owns the *face*: a fence is monospaced whether or not the
+query matched inside it. The mark goes on second and owns the *colour*, so a term landing on a `**`
+or inside a code block is still drawn as the reason the conversation is on screen. That is why
+`TextRun` carries a range rather than a copy of its text — a second styling pass has to intersect
+with the first, and finding a copy's way back into the string is a worse answer to a question the
+cut already had.
+
 ### The minimap
 
 Beside the transcript, the whole conversation as a column. Every message on the head path is a

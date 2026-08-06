@@ -19,10 +19,14 @@ measured. This is the map above it.
 
 ## Built
 
-Eighteen beads closed between 2026-07-29 and 2026-08-06, in four groups. They are groups rather
-than sprints: the epic's one hard ordering rule is that **the shell lands before anything fans
-out**, because "five agents told to build the app produce five incompatible skeletons — window,
-client state, transport and error handling all invented independently."
+Beads closed between 2026-07-29 and 2026-08-06, in five groups. They are groups rather than
+sprints: the epic's one hard ordering rule is that **the shell lands before anything fans out**,
+because "five agents told to build the app produce five incompatible skeletons — window, client
+state, transport and error handling all invented independently."
+
+The count that used to open this paragraph is gone rather than corrected. `bd list --parent
+chat-search-me9.8` has it, and a number maintained by hand beside a live one is a number that is
+wrong the first time somebody forgets.
 
 **1 · The shell.** `me9.8.1` promoted the `me9.22` spike rather than starting from a blank page,
 which is where the transport's threading fix came from — readability handlers instead of
@@ -49,6 +53,13 @@ and the drawer's key (`me9.8.26`) — which is the menu paying for itself: `me9.
 saying a window with one focused view has no key to spare, and a menu bar is where that stops
 being true.
 
+**5 · The reader's controls.** The per-frame `AttributedString` first (`me9.8.29`), because the
+next thing was going to add runs to that path, then the fidelity model itself (`me9.8.36`): four
+knobs over `Band`, three levels, four presets, and a run summarised in one line rather than listed.
+A port of `poc/ui`'s fifth iteration of that control and not a design — and the reason the ordering
+matters is that `me9.41` had to re-key `Density` onto `Band` first, since `{ user: expanded, agent:
+collapsed }` is unsayable in a table keyed on `kind` where both are `prose`.
+
 ---
 
 ## Next
@@ -56,6 +67,10 @@ being true.
 Five beads in the graph are children of **`chat-search-me9` (Clients)** rather than of this epic,
 because they change `cs-core` or the wire rather than the app: `me9.41`, `me9.42`, `me9.43`,
 `me9.44`, `me9.45`. `bd list --parent chat-search-me9.8` will not show them.
+
+The graph carries closed beads it should not — `me9.8.41` is the sweep, and it is filed rather than
+done here because a node drawn as pending work is the kind of error that spreads while it is being
+corrected one edge at a time.
 
 ```mermaid
 graph TD
@@ -74,7 +89,6 @@ graph TD
   end
 
   subgraph reader ["Reader"]
-    G36["me9.8.36<br/>fidelity: 4 bands"]
     G37["me9.8.37<br/>markdown scanner"]
     G38["me9.8.38<br/>spike: core spans?"]
     G45["me9.45<br/>segment rule → core"]
@@ -99,11 +113,7 @@ graph TD
   G27 --> G33
   G34 --> G35 --> G42 --> G43
   G33 --> G43
-  G29 --> G36
-  G41 --> G36
-  G29 --> G37
-  G36 --> G37 --> G38
-  G36 --> G45
+  G29 --> G37 --> G38
   X25 --> G19
   X14 --> G44
 
@@ -132,9 +142,7 @@ one bead making the next one cheap.
 | `27 → 33` | `ScrollPosition` is how a list keeps its place when a page is appended rather than jumping. |
 | `10 → 34` | Without a token set read at runtime, the type scale is one rebuild per guess. |
 | `34 → 35` | The header may stop colliding once `micro` is 10pt with less tracking — see what is left first. |
-| `29 → 36`, `29 → 37` | Both add runs to a path that currently rebuilds an `AttributedString` on every body evaluation. Fix it first or measure the wrong thing. |
-| `41 → 36` | `Density::default_fold` keys on `kind`, so it cannot express `user: expanded, agent: collapsed` — both are `prose`. |
-| `36 → 45` | The port computes segments client-side deliberately; the core rule then re-points it. |
+| `29 → 37` | It adds runs to a path that used to rebuild an `AttributedString` on every body evaluation. Fix it first or measure the wrong thing — the same edge `me9.8.36` was held behind. |
 | `35 → 42 → 43` | All three edit `Rail.swift`. |
 | `33 → 43` | Both edit `Grouping.swift`. |
 
@@ -147,7 +155,7 @@ files two or more open beads want:
 | --- | --- |
 | `Shell.swift`, `SearchView.swift` top | `me9.8.30`, `me9.8.31` |
 | `SearchView.swift` list, `Grouping.swift` | `me9.8.33`, `me9.43` |
-| `ReaderView.swift`, `BlockRow` | `me9.8.29`, `me9.8.36`, `me9.8.37` |
+| `ReaderView.swift`, `BlockRow` | `me9.8.37` — and `me9.45`, which replaces `Segments.swift` under it |
 | `Rail.swift` | `me9.8.35`, `me9.42`, `me9.43` |
 | `cs-core/src/blocks.rs` | `me9.41`, `me9.45`, `qyn` |
 | `poc/ui/tokens.py`, `Tokens.swift` | `me9.8.34` |

@@ -783,7 +783,7 @@ one you were looking for.
 | --- | --- | --- |
 | is this message drawn at all? | `drawn` | it was already worked out twice, in Rust and in the prototype's JavaScript |
 | which band is it? | `band` | `system` prose is the agent's side, and a call and its result are one stretch — two decisions that are easy to get wrong and impossible to notice wrong |
-| how does it fold? | `fold` | the fold is what makes a 900-message agent session legible; two clients folding differently is two different conversations |
+| how does it fold **by default**? | `fold` | the fold is what makes a 900-message agent session legible; two clients folding differently is two different conversations. The reader may then move it — see [the four knobs](#the-four-knobs) — because what somebody has opened is session state and core says so |
 | may a match claim it ranked? | `mark_kind` | a `reasoning` hit carries no postings, so marking it like a prose hit states something false in the one place a reader went to check |
 
 The last one is drawn as a *form* rather than a hue — a filled `--hit-bg` ground for a match that
@@ -807,10 +807,104 @@ Three departures from `poc/ui`'s drawer:
   and it is not on the wire yet, so a collapsed tool call reads as its raw argument. Honest, and
   not pretty. `chat-search-me9.20`.
 
-Not built, and each for a reason rather than for time: **outline mode**, which needs the same
-collapsed forms (`chat-search-me9.20`), and the mockup's **fidelity chips, segment summaries and
-work summary**, which need facts — segments, topics, touched files — that nothing on the wire
-carries. The **minimap** was in that list until `chat-search-me9.8.18`; it is below.
+Not built, and for a reason rather than for time: the mockup's **work summary**, which needs facts
+— topics, touched files — that nothing on the wire carries. The **minimap** was in that list until
+`chat-search-me9.8.18` and the **fidelity chips** until `chat-search-me9.8.36`; both are below.
+
+### The four knobs
+
+One fidelity for a whole corpus is one fidelity too few. A 2,553-message Codex session and a
+seven-message ChatGPT thread arrived on the same screen at the same density, and the only gesture
+against that was opening messages one at a time — `poc/ui/NOTES.md` costs that at "211 toggles on a
+211-message conversation".
+
+`poc/ui` had already iterated the control five times with the rejected arrangements written down,
+so `chat-search-me9.8.36` is a port and the paragraphs below are mostly its reasons rather than
+new ones.
+
+**Four knobs, over `cs_core::blocks::Band`.** You, agent, reasoning, tools — the same four the spine
+beside the text is coloured by, the minimap encodes as width and `ThemeCheck` fences on a ~1.8×
+luminance ramp. The vocabulary is not new, which is the point: nobody has to learn a fifth
+categorisation to use the control, and `me9.41` re-keyed `Density` onto exactly these so that
+`{ user: expanded, agent: collapsed }` became sayable at all — both are `prose`, so the old
+kind-keyed table could not say it.
+
+**Three levels: off, brief, full.** The wire has two. `hidden` is the client's, and stays the
+client's, for the reason the fold override does: core answers how much of a message to show and
+refuses to hold what a reader has done with the answer.
+
+**Two axes on one chip, deliberately.** Hiding a band is "is it on screen"; brief against full is
+"how much of it". Conflating them is why every arrangement of this control felt wrong — with a
+single three-cycle, one of the six transitions always costs two clicks. So the chip's body cycles
+off → brief → full → off, which is the path you actually walk (peek at the tools, read them, put
+them away), and its dot toggles visibility outright and restores whatever detail that band last
+had. Label, state and dot live in **one box**, because the 2×2 grid that preceded it put `you`'s
+control nearer to `agent`'s *label* than `agent`'s own control was: proximity pointed at the wrong
+thing on every read, and that was most of the fiddliness rather than the cycling. The state is a
+word and not a glyph — `○ ◐ ●` is a legend you have to learn, on an 18pt target.
+
+**Four presets, and no all-buttons.** There were three plus `expand all` and `collapse all`, of
+which two were the same command — `outline` set every kind to collapsed and so did `collapse all` —
+while `full` was *not* full, since it left reasoning and tools collapsed, and `expand all` was.
+
+| preset | what it says | on the corpus's longest conversation, 1,479 drawn messages |
+| --- | --- | --- |
+| `segments` | runs summarised | 84 rows, 41 of them summaries · 43 full, 345 brief, 1,091 off |
+| `outline` | one line per message | 1,479 rows · 0 full, 1,479 brief |
+| `read` | prose in full, the rest brief | 1,479 rows · 388 full, 1,091 brief |
+| `everything` | all of it | 1,479 rows · 1,479 full |
+
+Two of those four are `Density`'s two named points spelled in Swift: `read` is `Density::Full` and
+`outline` is `Density::Outline`. **That is the one rule this client spells twice**, so it is the one
+place the two can drift, and `--shot` checks it rather than leaving it to a comment — it reports
+`read` against the `fold` on every drawn block, 1,479 of 1,479 today. The other two have no
+counterpart and cannot: `everything` needs a level `Density` has no reason to name, and `segments`
+needs `hidden`, which is not a fold at all.
+
+**The drawer opens at `read`, which is what the wire already said.** The prototype opens at
+`segments` and then corrects per conversation with `defaultZoomFor`, and that is the one piece of
+this model deliberately left behind: it is broken there, and its prose > 0.5 test is ~87% predicted
+by the source badge already on the row — chatgpt 0.88, claude-code 0.30, codex 0.23 — so it is close
+to a source rule wearing a content costume. Without it, `segments` on a seven-message ChatGPT thread
+draws a summary line after every single turn, which is the defect `poc/ui/NOTES.md` names when it
+says the segment fold "is for agentic runs and actively harms conversational ones". So the drawer
+opens where the wire points and `segments` is one click away.
+
+**Opening another conversation does not move the knobs.** They are the reader's, not the
+conversation's; the per-message overrides and the open segments are the conversation's and go with
+it. `--shot` drives that too, because the absence of `defaultZoomFor` is invisible in every frame.
+
+#### Segments, and why this file is meant to be deleted
+
+`Segment` is a steer and the run it caused, summarised as `→ 12 calls · 2 failed · asked you 1×` —
+richer than a count, which is the difference between "something happened here" and "this is where
+it went wrong". A closed segment carries a `●` when the query matched inside it, and the drawer
+opens on that summary rather than on the message behind it, because a scroll to a row `List` does
+not have is a scroll that silently does not happen.
+
+**It is computed client-side, which is wrong, and it is filed.** The run rule belongs in core for
+the reason every rule in this neighbourhood does — the row's ribbon and this transcript draw the
+same conversation, and two derivations of "where does a run start" is the local-date bug's shape.
+`chat-search-me9.45` is that bead; when it lands, `Segments.swift` goes and the reader reads the
+answer. Until then, three things in it are this client's guesses and are labelled as such in the
+source: a run breaks on a user turn *and on a change of thread* (without the second, every subagent
+lands in whatever segment happened to be open, and where sidechains appear at all they average 52%
+of the conversation); calls are counted off `band` rather than `kind`, which works only because a
+successful `tool_result` is never drawn, so the drawn tool traffic is the calls plus the failures;
+and "asked you" is agent prose ending in a question mark, which is 4.6% of assistant prose in this
+corpus.
+
+#### What the knobs cost the minimap
+
+The map's scrub targets used to be the messages core draws. A band switched off leaves rows `List`
+no longer has, so a drag would have resolved onto a message and scrolled nowhere — silently, which
+is the worst way for a gesture to fail. `MinimapLayout` now takes the ids that have a row *right
+now*, which is also what dims the bands the knobs took away: dim rather than drop, so the scrollbar
+goes on describing the whole conversation while a knob takes two thirds of it off the screen.
+
+That merges two dims into one. A successful tool result and a band you switched off are drawn at
+the same 0.22, because they say the same thing to somebody looking at the map — there is a message
+here and you are not being shown it.
 
 ### The marked text, built once rather than once a frame
 
@@ -982,12 +1076,13 @@ a readable column has no number in it. `cacheDisplay(in:to:)` renders the view h
 bitmap with no window server and no screen-recording grant, so it runs from a script and on a
 machine nobody is sitting at.
 
-It writes eleven frames, and one line before any of them: what a row costs and how many of them
+It writes fifteen frames, and one line before any of them: what a row costs and how many of them
 the window holds, read off the list while nothing is open — [the row](#the-row) is where that
-reading is explained. The first frame is the drawer as it opens; the next two are the minimap's
-relationship checks — the drawer is driven half a document, then the map is dragged to 75% — and
-the fourth is after typing on with the conversation still open, which is the state a list-driven
-selection closes without being asked to. The last seven are two per grouping axis, open and folded,
+reading is explained. The first frame is the drawer as it opens; the next four are one per
+[preset](#the-four-knobs); the two after those are the minimap's relationship checks — the drawer
+is driven half a document, then the map is dragged to 75% — and the eighth is after typing on with
+the conversation still open, which is the state a list-driven selection closes without being asked
+to. The last seven are two per grouping axis, open and folded,
 plus Library. Each relationship frame prints where the transcript ended up and where the box went;
 on the corpus's longest conversation that is messages 0–8 at rest, 300–330 after the fling and
 1810–1818 after the drag, run to run. The grouped frames print group and residue counts beside them,
@@ -1017,6 +1112,28 @@ checks is everything downstream of the gesture and not the gesture itself — th
 minimap pass, whose keyboard half has no pointer to drive it and says so. That is why the head is a
 `Button` rather than a tap gesture on a section header: a hit test nobody can script is one to leave
 to the framework.
+
+**The fidelity model has the same shape: four pictures, and three claims no picture makes.** So the
+preset pass prints those three beside the frames. On the corpus's longest conversation:
+
+```
+presets, over 1479 drawn messages of claude-code:4579afb5-…:
+  segments   84 rows, 41 of them run summaries · 43 full, 345 brief, 1091 off
+  outline    1479 rows, 0 of them run summaries · 0 full, 1479 brief, 0 off
+  read       1479 rows, 0 of them run summaries · 388 full, 1091 brief, 0 off
+  everything 1479 rows, 0 of them run summaries · 1479 full, 0 brief, 0 off
+  read is `Density::Full` spelled in Swift, and agrees with the fold on the wire for 1479 of 1479
+  one message opened by hand: it is expanded while its user knob says brief, 1 override in hand
+  cleared: it is collapsed again
+  opened claude-code:5b4f1d3c-… with segments in force: the knobs are where they were left
+```
+
+The first of the three is the drift check on the one rule this client spells twice. The second is
+"a per-message override beats the band", driven against `outline` so that one message going full is
+unambiguous. The third is the absence of `defaultZoomFor`, driven with a preset the wire does not
+answer — a reader that re-derived the knobs from each transcript would land somewhere else and the
+line would say so. None of the three is visible in a PNG, and the first two are the kind of thing
+that stops being true quietly.
 
 **`--longest` opens the biggest conversation the query returned rather than the best one.** The
 map's hard case is length, no query puts the corpus's 2,431-message conversation first, and a

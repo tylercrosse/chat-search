@@ -80,7 +80,10 @@ docs/               vocabulary, decisions, architecture, backlog
 6. [docs/BACKLOG.md](docs/BACKLOG.md) — deferred work and the MVP definition.
 7. [docs/PULL-REQUESTS.md](docs/PULL-REQUESTS.md) — what a pull request has to carry, and how
    the TUI and the macOS app photograph themselves so a change to either arrives as a
-   screenshot. Applies to agents opening PRs as much as to people.
+   screenshot. Applies to agents opening PRs as much as to people. Its last section is
+   `scripts/sweep-worktrees.sh`, which reclaims the worktrees whose branches already landed —
+   worth knowing before a build dies on a full disk rather than after, because each parallel
+   worker leaves about 1.5 GB of `target/` behind and nothing collects it.
 
 ## Ideas worth knowing before reading the code
 

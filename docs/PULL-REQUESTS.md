@@ -117,14 +117,28 @@ per bead, for commits that are already in `main`. Nothing reclaims it on its own
 one command per review round:
 
 ```bash
+git fetch                             # the sweep does not, and merged means merged on the remote
 scripts/sweep-worktrees.sh            # what would go
 scripts/sweep-worktrees.sh --apply    # remove it
 ```
 
-It removes only worktrees under `.claude/worktrees/` that are merged into `main`, hold nothing
-uncommitted, and have no agent working in them. Read the header in that file before changing it —
-the liveness check is subtler than it looks, and getting it wrong deletes a running worker's
-tree out from under it.
+It removes worktrees that are merged, hold nothing uncommitted, and have no agent working in
+them. Read the header in that file before changing it — the liveness check is subtler than it
+looks, and getting it wrong deletes a running worker's tree out from under it.
+
+Two things it reports rather than does, both of which are the interesting output:
+
+**Merged is judged against `main` and `origin/main` together.** A branch that landed as a pull
+request is in `origin/main` immediately and in your local `main` only once you pull, so a sweep
+run against local `main` alone will keep worktrees whose commits are demonstrably in the remote.
+The `git fetch` above is the part the script deliberately leaves to you — a network call that
+changes which directories get deleted should be somebody's decision, not a side effect.
+
+**It sweeps a fixed list of roots** — `.claude/worktrees/`, `.codex/worktrees/`, and a sibling
+`.chat-search-worktrees/` — and prints any merged, idle worktree outside all of them as `outside`,
+with its size, instead of skipping it silently. Those lines are worktrees somebody made by hand
+somewhere else; the script will not delete them, and naming them is how the disk stays visible.
+If a run shows the same `outside` path every round, that is a new root worth adding to `ROOTS`.
 
 This is deliberately a command and not a merge hook. Whether a worktree is in use can only be
 read at the moment you look, so the safe time to sweep is when somebody is already reviewing.

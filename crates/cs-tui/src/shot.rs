@@ -82,7 +82,7 @@ pub struct Frame {
 ///
 /// The list is short on purpose. The Swift app takes eleven because it has two views, a drawer,
 /// three grouping axes and a fold state; the TUI's states that actually *render differently* are
-/// these three, and a fourth frame nobody looks at is a fourth frame to keep passing.
+/// these four, and a fifth frame nobody looks at is a fifth frame to keep passing.
 pub fn frames(db_path: std::path::PathBuf, opts: Opts, width: u16, height: u16) -> anyhow::Result<Vec<Frame>> {
     let reader = cs_core::open_for_read(&db_path)?;
     // Styled deliberately, even when the calling shell has NO_COLOR set: a shot taken with the
@@ -103,6 +103,24 @@ pub fn frames(db_path: std::path::PathBuf, opts: Opts, width: u16, height: u16) 
     // is a different render rather than a taller one.
     app.toggle_expand();
     out.push(capture("expanded", &app, width, height)?);
+
+    // Mid-word, which since `j1n` is a state of its own: a search defers reading the conversation
+    // that ranked first until the keyboard goes quiet, so between the keystroke and the quarter
+    // second after it the pane says what it is doing rather than drawing a conversation nobody
+    // asked to see. Nobody can photograph this by pausing a running TUI.
+    //
+    // Taken by replaying the query's last keystroke on a second `App`, so the frame is a real
+    // one rather than a state poked into place — and so it does not also carry the expansion the
+    // frame above it left set. A one-character query has no last keystroke to replay and is the
+    // recent list either way, so there is nothing here to show.
+    let mut partial = opts.clone();
+    if let Some((cut, last)) = opts.query.char_indices().next_back() {
+        partial.query = opts.query[..cut].to_string();
+        let reader = cs_core::open_for_read(&db_path)?;
+        let mut mid = state::App::new(reader, &partial, theme::Theme::indexed())?;
+        mid.insert_char(last);
+        out.push(capture("typing", &mid, width, height)?);
+    }
 
     Ok(out)
 }

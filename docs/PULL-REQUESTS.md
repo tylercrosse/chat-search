@@ -45,9 +45,13 @@ screen recording permission, a foreground window, or a human holding the machine
 cs tui --shot --db ~/.chat-archive/index.db --out /tmp/tui --size 140x40
 ```
 
-Writes `tui-{rest,no-preview,expanded}` in three formats each — the three states that render
-differently rather than merely taller. **Which format to reach for depends on the size of the
-change, and getting this wrong is how a review misses something.**
+Writes `tui-{rest,no-preview,expanded,typing}` in three formats each — the four states that render
+differently rather than merely taller. `typing` is the frame between a keystroke and the keyboard
+going quiet, which since `j1n` is a state of its own: the preview read is deferred, so the pane
+says so rather than drawing whatever ranked first. It is taken by replaying the query's last
+keystroke, which is the only way to catch a window a quarter of a second wide. **Which format to
+reach for depends on the size of the change, and getting this wrong is how a review misses
+something.**
 
 | | what it is | use it for |
 | --- | --- | --- |

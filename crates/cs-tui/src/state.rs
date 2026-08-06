@@ -337,12 +337,19 @@ impl App {
 
     /// Note which preview belongs on screen without reading it.
     ///
-    /// This is the whole of `j1n`. Reading a conversation is 2–55 ms against this corpus —
-    /// measured over the top hundred for a broad prefix, where the median is 6 ms and the
-    /// corpus's longest conversation is 34 — and which of those a keystroke pays is decided by
-    /// whatever happened to rank first, so typing a broad query fell steadily behind while the
-    /// search it was blamed on was answering in 11. Nobody reads a preview mid-word, so the
-    /// read waits for the keyboard: `catch_up` does it when typing stops.
+    /// This is the whole of `j1n`. Reading a conversation is 2–55 ms against this corpus — over
+    /// the top hundred for a broad prefix the median is 6 ms, and the corpus's longest measures
+    /// 32–55 depending on what else the process is doing — and which of those a keystroke pays
+    /// is decided by whatever happened to rank first, so typing a broad query fell steadily
+    /// behind while the search it was blamed on was answering in 11. Nobody reads a preview
+    /// mid-word, so the read waits for the keyboard: `catch_up` does it when typing stops.
+    ///
+    /// What that is worth, typing each word a character at a time against the 3,059-conversation
+    /// index at `--limit 50` (release, warm, median of nine): `borrow checker` cost 380 ms of
+    /// event loop and now costs 90, because seven of its fourteen keystrokes ranked that longest
+    /// conversation first; `there` 139 → 112, `commits` 93 → 82, `test` 68 → 59. What is left is
+    /// the search itself, which still spikes to 65–77 ms on a three-letter prefix — that is
+    /// `6eb.29`'s ranking limit, and this bead is what stopped the preview hiding it.
     ///
     /// The terms are half the key, not a detail of it. Keying on the conversation alone — which
     /// this did — left a still-selected row showing marks located against the previous query, so

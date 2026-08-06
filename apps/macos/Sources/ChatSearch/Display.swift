@@ -82,6 +82,30 @@ enum Display {
         }
     }
 
+    /// Whether a message's own words are prose — the mockup's split, and the reason a screen of
+    /// tool traffic does not read as a screen of conversation.
+    ///
+    /// Coarser than `band` on purpose: reasoning is drawn in the quiet monospaced tier beside the
+    /// tool traffic, because it is a machine talking to itself either way.
+    static func isProse(_ block: Block) -> Bool { block.band == .user || block.band == .agent }
+
+    /// The size and the face a message's text is set in before anything has styled it.
+    ///
+    /// Read by the row that draws the message *and* by `Markdown`, which sets a fence in the
+    /// monospaced face at this size and a heading one step above it. Two answers to that would be
+    /// the local-date bug in a smaller room: a heading a size up from a size nothing else uses
+    /// lands somewhere between the two, and nothing on screen would say which.
+    static func textFace(_ block: Block) -> TextFace {
+        isProse(block) ? TextFace(size: .body, face: .ui) : TextFace(size: .meta, face: .mono)
+    }
+
+    /// A size off the scale and one of the three faces — everything needed to ask a `Theme` for a
+    /// font, and nothing that decides one.
+    struct TextFace: Equatable, Sendable {
+        let size: SizeToken
+        let face: FaceToken
+    }
+
     /// `$HOME` collapsed to `~`, and `—` for a conversation that has no working directory.
     ///
     /// Mirrors `cs_tui::text::display_dir`, including the trap in it: a plain prefix test turns

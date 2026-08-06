@@ -110,7 +110,7 @@ enum Measure {
     /// of the app whose correctness is a thing you have to look at.
     @MainActor
     static func shot(
-        model: SearchModel, window: NSWindow, query: String, to path: String,
+        model: SearchModel, window: NSWindow, theme: Theme, query: String, to path: String,
         longest: Bool = false, frames: FrameClock? = nil
     ) async {
         print(drivenLine())
@@ -149,6 +149,11 @@ enum Measure {
         } else {
             print("  no transcript: \(model.reader.failure ?? "still reading")")
         }
+
+        // Before any of the driven passes, because it drives nothing: it reads the transcript that
+        // is already open and builds one fabricated message beside it, which is the only state
+        // this run has that nothing else has moved yet.
+        markdownPass(reader: model.reader, theme: theme)
 
         // Before the minimap is driven, so every preset is photographed at the same place in the
         // conversation and the pass that follows measures the scroll from where it always did.
@@ -365,6 +370,143 @@ enum Measure {
         reader.markedText.restoreCounters(builds: wasBuilt.0, reuses: wasBuilt.1)
         MinimapBands.renders = wasDrawn
     }
+
+    /// Markdown, and the four claims about it that no frame carries.
+    ///
+    /// A picture shows a fence set in the monospaced face and a heading a size up. What it cannot
+    /// show is the property the whole design rests on: that **nothing moved**. `Block.marks` are
+    /// UTF-8 offsets into `text`, so a transform that deleted the `**` would move every offset
+    /// after it and mark the wrong words — quietly, and in the one place a reader has gone to
+    /// check why the conversation is on screen. Styling over the source cannot do that, and this
+    /// is where that stops being an argument and becomes a reading.
+    ///
+    /// So: a fabricated message carrying a heading, a bold run and a fence, with a mark inside
+    /// each — including one that straddles a `**` and one buried in code — is built through the
+    /// same `MarkedText` the drawer uses, and the drawing is read back. The text has to be the
+    /// bytes that went in, the marks have to name the same words, the gate has to hold for the
+    /// same bytes delivered as tool traffic and for the same bytes collapsed. There is no test
+    /// target to put this in — the Command Line Tools SDK carries neither `Testing` nor `XCTest`,
+    /// which is [why `--verify-theme` is a flag](apps/macos/README.md) — and an invariant checked
+    /// by nobody is one that was true on the day it was written.
+    ///
+    /// The census above it is the other half: a fabricated message says the scanner works and says
+    /// nothing about whether the corpus contains anything for it to work on.
+    @MainActor
+    private static func markdownPass(reader: ReaderModel, theme: Theme) {
+        if let transcript = reader.transcript, let conv = reader.conv {
+            let drawn = transcript.drawnMessages
+            let styled = drawn.map { ($0, Markdown.styling($0.text, of: $0, fold: .expanded)) }
+            let carrying = styled.filter { !$0.1.isEmpty }
+            print("  markdown, over \(drawn.count) drawn messages of \(conv.convId):")
+            print("    \(carrying.count) carry it — \(styled.count { $0.1.count(.strong) > 0 }) "
+                + "with bold, \(styled.count { $0.1.count(.heading) > 0 }) with a heading, "
+                + "\(styled.count { $0.1.count(.code) > 0 }) with a fence")
+            // The gate, measured on the band it exists for. Nearly a quarter of the corpus's tool
+            // traffic contains a `#` or a `*` as itself, so "0 styled" is a number that had
+            // something to be wrong about.
+            let tools = drawn.filter { $0.band == .tool }
+            let punctuated = tools.count { $0.text.contains("#") || $0.text.contains("*") }
+            let styledTools = tools.count { !Markdown.styling($0.text, of: $0, fold: .expanded).isEmpty }
+            let styledFolds = drawn.count {
+                !Markdown.styling($0.text.lineBreaksAsSpaces, of: $0, fold: .collapsed).isEmpty
+            }
+            print("    of \(tools.count) tool messages, \(punctuated) contain a # or a *, and "
+                + "\(styledTools) are styled")
+            print("    collapsed, \(styledFolds) of \(drawn.count) are styled")
+        }
+
+        guard let sample = markdownSample, sample.messages.count == 2 else {
+            print("  markdown: the sample did not decode — nothing to check")
+            return
+        }
+        let prose = sample.messages[0]
+        let tool = sample.messages[1]
+        let source = prose.text
+        // A table of its own, so this pass leaves `chat-search-me9.8.29`'s two counters where it
+        // found them without having to put them back the way `presetPass` does.
+        let table = MarkedText()
+        let drawing = table.of(prose, fold: .expanded, in: sample, theme: theme)
+        let styling = Markdown.styling(source, of: prose, fold: .expanded)
+        let back = String(drawing.characters)
+
+        print("    a fabricated message with all three constructs and a mark inside each:")
+        print("      nothing moved: \(source.utf8.count) bytes in, \(back.utf8.count) out, "
+            + "identical \(back == source)")
+        print("      the marks still name \(MarkedText.Drawn.marks(of: drawing))")
+        print("      …which is what the offsets named before it was drawn: "
+            + "\(prose.marks.compactMap { source.range(of: $0, in: sample.markOffsets) }.map { String(source[$0]) })")
+        print("      the scanner read \(styling.count(.heading)) heading, "
+            + "\(styling.count(.strong)) bold, \(styling.count(.code)) fenced block over "
+            + "\(styling.count(.fence)) fence lines, \(styling.count(.syntax)) syntax runs")
+        print("      \(MarkedText.Drawn.faced(of: drawing)) runs carry a face of their own")
+        // The same bytes twice more, through the two gates. A tool result is the band that would
+        // be corrupted; a collapsed message is the string the line-oriented rules would misread.
+        print("      the same bytes as a tool result: "
+            + "\(MarkedText.Drawn.faced(of: table.of(tool, fold: .expanded, in: sample, theme: theme))) "
+            + "runs carry a face")
+        print("      the same bytes collapsed: "
+            + "\(MarkedText.Drawn.faced(of: table.of(prose, fold: .collapsed, in: sample, theme: theme))) "
+            + "runs carry a face")
+    }
+
+    /// A message with all three constructs in it and a mark inside each, as the wire would send it.
+    ///
+    /// Assembled as JSON and decoded rather than built as a `Block`, and not only because `Block`'s
+    /// memberwise initialiser is internal to `CsKit`: a fixture that went in through the decoder is
+    /// a fixture the contract can still reject, where a Swift value that resembles a block would go
+    /// on compiling after the wire had moved. The offsets are found in the text rather than typed,
+    /// so editing the sample cannot silently point a mark at the wrong word — which is the class of
+    /// mistake this pass exists to catch.
+    ///
+    /// The three marks are chosen for where they land rather than for what they say: one inside a
+    /// heading, one *straddling* a `**` so the two span sets have to interleave, and one inside the
+    /// fence, which is the stretch markdown restyles most and where a lost offset would be least
+    /// visible.
+    private static let markdownSample: Transcript? = {
+        let text = """
+            # What the reader draws
+
+            The scanner is **deliberate** about what it leaves alone: every asterisk stays where \
+            the wire put it, dimmed rather than deleted.
+
+            ```swift
+            let literal = "**not bold**"  // inside a fence, so it is code and not emphasis
+            ```
+
+            …and **back** to prose.
+            """
+        func span(_ needle: String) -> [String: Int]? {
+            guard let found = text.range(of: needle),
+                let start = found.lowerBound.samePosition(in: text.utf8)
+            else { return nil }
+            let offset = text.utf8.distance(from: text.utf8.startIndex, to: start)
+            return ["start": offset, "end": offset + needle.utf8.count]
+        }
+        let marks = ["reader", "**deliberate**", "not bold"].compactMap(span)
+        func message(_ id: String, kind: String, band: String) -> [String: Any] {
+            [
+                "msg_id": id, "role": "assistant", "kind": kind, "seq": 0, "on_path": true,
+                "text": text, "is_sidechain": false, "is_error": false, "thread_key": "main",
+                "marks": marks, "drawn": true, "mark_kind": "ranked", "band": band,
+                "fold": "expanded",
+            ]
+        }
+        let payload: [String: Any] = [
+            "v": 1, "conv_id": "markdown-sample", "terms": ["reader", "deliberate", "bold"],
+            "threads": 1, "count": 2, "drawn": 2, "mark_offsets": "utf8-bytes",
+            "messages": [
+                message("sample-prose", kind: "prose", band: "agent"),
+                message("sample-tool", kind: "tool_result", band: "tool"),
+            ],
+        ]
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard marks.count == 3,
+            let data = try? JSONSerialization.data(withJSONObject: payload),
+            let transcript = try? decoder.decode(Transcript.self, from: data)
+        else { return nil }
+        return transcript
+    }()
 
     /// The scrubber, driven from both ends — and the three claims about it that a PNG cannot make.
     ///

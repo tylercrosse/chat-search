@@ -450,6 +450,24 @@ line someone can edit where `date:2026-07-28T00:00:00..` is one they retype. How
 the macOS client, which spawns `cs` rather than linking it, is `me9.8.20`'s to answer — the rule
 now exists in one place for it to reach.
 
+**Answered, 2026-08-06 (`me9.8.20`), and the answer is a rail's trade made backwards.** A chip
+arrives carrying the query text clicking it produces because a rail can be *enumerated*; a drag is
+two instants out of a continuum and cannot be. So `cs timeline --drag FROM..UNTIL` takes the two
+instants in epoch millis, in whichever order the pointer visited them, and returns the finished
+query text under `drag.query`. The scrubber puts that string in the box the way a chip click does,
+and reads its own rectangle back out of the parsed query. One round trip per completed drag, which
+is a gesture that happens seconds apart, and it buys the property the whole of this section is
+about: there is nothing in the client that could narrow a list without appearing in the box.
+
+Two behaviours follow from the rewrite being `Query::toggling`, and both are the wanted ones.
+Dragging the window already in force takes it back off, which is what every chip does and is the
+only gesture that clears a selection without a control of its own. And a window that names no span
+— the ends meeting, which is what a drag narrower than one drawn bar produces once the client
+snaps to bar edges — clears the filter rather than writing an empty one. `poc/ui` spells that
+second rule as "a drag under 1% of the span clears the selection", a fraction kept in the drawing
+code; here it falls out of `DateSpec::between` refusing a span that ends where it starts, so there
+is no number to keep in step with a picture.
+
 **The rail is unchanged and says the honest thing already.** An absolute span is a `date:` value
 the four chips have no chip for, so it lights none of them and turns the All chip off: something
 is filtering, and it is not one of these. A second `date:` token still replaces rather than

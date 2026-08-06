@@ -754,6 +754,7 @@ enum Measure {
         }
         try? await Task.sleep(for: .milliseconds(400))
         print("    after scrolling  \(where_(reader)) — \(MinimapBands.renders) canvas renders")
+        print("    marked text      \(marked(reader)) since the drawer opened")
         if let frames { print("    main-thread lag  \(line(frames.lag)), "
             + "\(frames.missed) of \(frames.lag.count) vsyncs missed") }
         let scrolled = path.replacingOccurrences(of: ".png", with: "-scrolled.png")
@@ -779,9 +780,22 @@ enum Measure {
             try? await Task.sleep(for: .milliseconds(200))
         }
         print("    after three steps down  \(where_(reader))")
+        print("    marked text      \(marked(reader)) by the end of the pass")
         print("    \(footprintMB()) MB in this process, with the conversation open and scrolled")
         let scrubbed = path.replacingOccurrences(of: ".png", with: "-scrubbed.png")
         print("    \(scrubbed) \(capture(window, to: scrubbed))")
+    }
+
+    /// What the drawer spent turning marks into `AttributedString`s, and what it did not.
+    ///
+    /// The sum is what a computed property on the row would have assembled in full, because that
+    /// is what every one of these calls used to be — so the second number is the work this run
+    /// avoided rather than an inference off a percentile (`chat-search-me9.8.29`).
+    @MainActor
+    private static func marked(_ reader: ReaderModel) -> String {
+        let table = reader.markedText
+        return "\(table.builds) messages built, \(table.reuses) of "
+            + "\(table.builds + table.reuses) evaluations answered from the table"
     }
 
     /// Where the transcript is, in the only terms `List` can express it.

@@ -109,7 +109,7 @@ struct ReaderView: View {
                         List(blocks) { block in
                             BlockRow(
                                 block: block, fold: reader.fold(of: block),
-                                marks: transcript.markOffsets,
+                                marked: reader.marked(block, in: transcript, theme: theme),
                                 toggle: { reader.toggle(block) }
                             )
                             .listRowInsets(EdgeInsets(top: 0, leading: 12, bottom: 0, trailing: 12))
@@ -183,7 +183,10 @@ struct ReaderView: View {
 struct BlockRow: View {
     let block: Block
     let fold: Fold
-    let marks: MarkOffsets
+    /// The text with its matches marked, handed in already built. A row is given a drawing rather
+    /// than the parts of one because assembling it is the expensive thing this file used to do on
+    /// every body evaluation — `MarkedText` is where that argument and the two mark forms live.
+    let marked: AttributedString
     let toggle: () -> Void
     @Environment(\.theme) private var theme
 
@@ -237,33 +240,6 @@ struct BlockRow: View {
             .truncationMode(.tail)
             .textSelection(.enabled)
             .fixedSize(horizontal: false, vertical: true)
-    }
-
-    /// The message with its matches marked, in the units the transcript named.
-    ///
-    /// The two mark kinds are told apart by *form* and not by hue — a filled ground against an
-    /// underline — for the same reason the TUI spends a text modifier on them: `--hit` and
-    /// `--hit-bg` are one colour family, and a claim as consequential as "this is why the
-    /// conversation is on screen" should not rest on which shade of amber it happens to be.
-    private var marked: AttributedString {
-        // Line breaks become spaces one byte at a time when collapsed, which is what keeps every
-        // mark offset pointing at the character it was measured against.
-        let source = fold == .collapsed ? block.text.lineBreaksAsSpaces : block.text
-        var out = AttributedString()
-        for run in source.runs(marking: block.marks, in: marks) {
-            var piece = AttributedString(run.text)
-            if run.marked {
-                if block.markKind.claimsRanking {
-                    piece.backgroundColor = theme.color(.hitBg)
-                    piece.foregroundColor = theme.color(.ink)
-                } else {
-                    piece.underlineStyle = .single
-                    piece.foregroundColor = theme.color(.hit)
-                }
-            }
-            out.append(piece)
-        }
-        return out
     }
 
     /// The kind ramp, which was solved as an even luminance ramp against `--map-bg` so that four

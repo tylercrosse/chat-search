@@ -1,4 +1,6 @@
 import CsKit
+import CsTheme
+import Foundation
 import Observation
 
 /// What the drawer knows: which conversation is open, the transcript of it, and which messages
@@ -23,6 +25,15 @@ final class ReaderModel {
     /// conversation, because which messages someone has opened is session state — which is
     /// exactly why `cs_core::blocks` answers the default and refuses to model this.
     private var overrides: [String: Fold] = [:]
+
+    /// Every drawn message as an `AttributedString`, built once instead of once per body
+    /// evaluation. Held here rather than on the view for the reason the folds are: a computed
+    /// property on a `View` is rebuilt whenever SwiftUI feels like asking, and the fold that
+    /// decides which string is marked already lives on this side of the line.
+    ///
+    /// Not private, for the same reason `MinimapBands.renders` is not: `--shot` prints its two
+    /// counters, which is the only check there is on the claim it exists to make.
+    let markedText = MarkedText()
 
     /// The conversation as a map, laid out once per transcript rather than once per redraw: it is
     /// O(messages) to build and the view holding it is invalidated on every frame of a scroll.
@@ -85,6 +96,10 @@ final class ReaderModel {
         onScreen.removeAll()
         scrollRequest = nil
         lastScrubbed = nil
+        // The marked text goes too. It invalidates itself against whatever transcript is asking
+        // (see `MarkedText`), so this is not about staleness — it is that a shut drawer asks
+        // nothing, and a table nobody consults is a megabyte of a conversation nobody is reading.
+        markedText.forget()
         load(query: query)
     }
 
@@ -109,6 +124,14 @@ final class ReaderModel {
     func fold(of block: Block) -> Fold { overrides[block.id] ?? block.fold }
 
     func toggle(_ block: Block) { overrides[block.id] = fold(of: block).toggled }
+
+    /// The message as the drawer draws it: marked, and folded the way this reader has it.
+    ///
+    /// The transcript is passed in rather than read off `self` because the caller is drawing one,
+    /// and it carries the other half of what a marked message is an answer to — see `MarkedText`.
+    func marked(_ block: Block, in transcript: Transcript, theme: Theme) -> AttributedString {
+        markedText.of(block, fold: fold(of: block), in: transcript, theme: theme)
+    }
 
     // MARK: - The scroll relationship
 

@@ -104,11 +104,22 @@ pub fn shot(
 
     println!("{query:?} at {width}x{height}, nothing written to the query log");
     for frame in &frames {
-        let path = out.join(format!("tui-{}.txt", frame.name));
-        std::fs::write(&path, &frame.text)
-            .with_context(|| format!("writing {}", path.display()))?;
-        println!("  {} ({} lines)", path.display(), frame.text.lines().count());
+        // All three, always. They answer different questions and any one alone misleads: the
+        // text diffs but drops colour, the `.ans` is exact but renders as mojibake in a PR body,
+        // and the SVG renders but resolves named colours against a palette it had to choose.
+        for (ext, body) in [("txt", &frame.text), ("ans", &frame.ansi), ("svg", &frame.svg)] {
+            let path = out.join(format!("tui-{}.{ext}", frame.name));
+            std::fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
+        }
+        println!(
+            "  {}/tui-{}.{{txt,ans,svg}} ({} lines, {} KB of SVG)",
+            out.display(),
+            frame.name,
+            frame.text.lines().count(),
+            frame.svg.len() / 1024
+        );
     }
+    println!("`cat` an .ans in a terminal for the true colours; the .svg states the palette it chose.");
     Ok(())
 }
 

@@ -25,7 +25,9 @@ UI                → frames, below
 <!--
 Delete unless this changes something drawn.
 
-TUI  — `cs tui --shot --out /tmp/tui` and paste the frame in a fence
+TUI  — `cs tui --shot --out /tmp/tui` writes .txt, .ans and .svg per frame.
+       Small change → paste the .txt in a fence. Larger, or the styling IS the change →
+       the .svg (rsvg-convert it to PNG for here). Settle colour questions on the .ans.
 App  — `scripts/shot.sh --upload` and link the PNGs
 Both — `scripts/shot.sh` takes the before side too, by building the merge-base
 

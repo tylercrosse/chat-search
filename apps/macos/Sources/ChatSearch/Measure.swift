@@ -481,7 +481,12 @@ enum Measure {
             + bar.items.flatMap { menu in
                 (menu.submenu?.items ?? []).map { item in
                     let key = item.keyEquivalent.isEmpty ? "" : "  ⌘\(item.keyEquivalent)"
-                    return item.isSeparatorItem ? "  —" : "  \(item.title)\(key)"
+                    if item.isSeparatorItem { return "  —" }
+                    // A section header is neither an item nor a separator: it carries no action and
+                    // no key, so printing it like one would put a permanently grey line in a listing
+                    // whose whole point is which items are grey (`chat-search-me9.8.40`).
+                    if item.isSectionHeader { return "  ┈ \(item.title)" }
+                    return "  \(item.title)\(key)"
                 }
             }
     }
@@ -501,11 +506,13 @@ enum Measure {
     /// of them found no item, reached nothing and moved nothing; that is the whole of the bug, and
     /// it is why the check is on the menu rather than on the field, which was never broken.
     ///
-    /// It has since grown a key that is not the clipboard's and not AppKit's: Cmd-T, the View item
-    /// `chat-search-me9.8.26` added, whose effect is on this app's own model rather than on a text
-    /// system somebody else wrote. It belongs in this run and not in `--shot` for the same reason
-    /// everything else here does — what it moves is a boolean, and a picture of a shut drawer says
-    /// nothing about which of the three ways of shutting it did the shutting.
+    /// It has since grown the keys that are not the clipboard's and not AppKit's: Cmd-T from
+    /// `chat-search-me9.8.26` and Cmd-1 to Cmd-4 from `chat-search-me9.8.40`, whose effect is on
+    /// this app's own model rather than on a text system somebody else wrote. They belong in this
+    /// run and not in `--shot` for the same reason everything else here does — a picture of a shut
+    /// drawer says nothing about which of the three ways of shutting it did the shutting, and
+    /// `--shot` already photographs every axis, which leaves only *how the axis was reached*
+    /// unphotographed. That is a key equivalent and a checkmark, and both are text.
     ///
     /// **This is the one scripted run that takes the front, and that is what makes it a run.** A
     /// key equivalent is resolved against the key window's first responder and an inactive
@@ -653,6 +660,49 @@ enum Measure {
                 + "\(model.timeline.shown), the item now reads \"\(timelineVerb())\"")
         }
 
+        // ⌘1 to ⌘4, the drawer's argument at four states instead of two: the four chips above the
+        // query box were a click and nothing else, in the window whose one focused view is that box
+        // (`chat-search-me9.8.40`).
+        //
+        // **Every one of them is pressed, because the claim is a radio group and not four
+        // switches.** What has to be true is that the axis arrives *and* that exactly one item
+        // carries the mark afterwards — a press that grouped the list while leaving the checkmark
+        // on the axis you left would be a menu contradicting the screen, and it is the one way this
+        // can be wrong while every key still reports `matched true`. So the mark is read back
+        // beside the axis each time, through `update()` for the reason the verb above is: the state
+        // is written during validation and reading it without asking for one reports the state the
+        // bar was built with. The pass ends by pressing the digit of the axis it started on, which
+        // is the courtesy the drawer and the pasteboard both get.
+        //
+        // The key *codes* are the one thing here that cannot come off `Grouping`: a digit's keycode
+        // belongs to the keyboard rather than to the enum, so a fifth axis would arrive on the bar
+        // with ⌘5 and arrive here with nothing to press. It says so rather than skipping quietly.
+        @MainActor func axisMarks() -> String {
+            let menu = NSApp.mainMenu?.items.first { $0.title == "View" }?.submenu
+            menu?.update()
+            let on = (menu?.items ?? []).filter { $0.state == .on }.map(\.title)
+            return on.isEmpty ? "nothing" : on.joined(separator: " and ")
+        }
+        let codes: [String: UInt16] = ["1": 18, "2": 19, "3": 20, "4": 21]
+        let startedOn = Grouping.allCases.firstIndex(of: model.grouping)
+        for (position, axis) in Grouping.allCases.enumerated() {
+            let digit = "\(position + 1)"
+            guard let code = codes[digit] else {
+                print("  ⌘\(digit) (\(axis.label)) → this pass carries no keycode for that digit")
+                continue
+            }
+            let inForce = model.grouping == axis
+            print("  ⌘\(digit) → \(await key(digit, code)), the axis is \(model.grouping.label) "
+                + "with \(model.groups.count) group(s), and the item checked is \(axisMarks())"
+                + (inForce ? " — pressed on the axis already in force, which moves nothing" : ""))
+        }
+        if let home = startedOn, let code = codes["\(home + 1)"] {
+            print("  ⌘\(home + 1) again → \(await key("\(home + 1)", code)), the axis is "
+                + "\(model.grouping.label), where this run found it")
+        }
+        await front()
+        try? await Task.sleep(for: .milliseconds(600))
+
         // The transcript's half, and the honest shape of it. A selection there is made by dragging,
         // a drag is the one gesture nothing here can produce — the same wall the fold pass names
         // from the other side, and posting synthetic mouse events would need the Accessibility
@@ -714,14 +764,21 @@ enum Measure {
     /// with an empty box and with a phrase selected, because half of these are *supposed* to be
     /// grey in the first reading — a Copy that offered itself with nothing selected would be the
     /// same lie in the other direction.
+    ///
+    /// A `✓` is printed where an item's state is on, because the axis is a radio group and *which
+    /// one is marked* is the whole of what a radio group says. `update()` is what fills it in, the
+    /// same call that decides the greys (`AppHost.validateMenuItem`).
     @MainActor
     private static func validation(_ when: String) {
         print("  the menu \(when):")
         for menu in NSApp.mainMenu?.items.compactMap(\.submenu) ?? [] {
             menu.update()
             print("    \(menu.title.isEmpty ? "(application)" : menu.title): "
-                + menu.items.filter { !$0.isSeparatorItem && !$0.isAlternate }
-                    .map { "\($0.title)\($0.isEnabled ? "" : " [grey]")" }
+                + menu.items
+                    .filter { !$0.isSeparatorItem && !$0.isAlternate && !$0.isSectionHeader }
+                    .map {
+                        "\($0.state == .on ? "✓" : "")\($0.title)\($0.isEnabled ? "" : " [grey]")"
+                    }
                     .joined(separator: ", "))
         }
     }

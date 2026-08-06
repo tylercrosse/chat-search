@@ -456,6 +456,12 @@ enum Measure {
     /// of them found no item, reached nothing and moved nothing; that is the whole of the bug, and
     /// it is why the check is on the menu rather than on the field, which was never broken.
     ///
+    /// It has since grown a key that is not the clipboard's and not AppKit's: Cmd-T, the View item
+    /// `chat-search-me9.8.26` added, whose effect is on this app's own model rather than on a text
+    /// system somebody else wrote. It belongs in this run and not in `--shot` for the same reason
+    /// everything else here does — what it moves is a boolean, and a picture of a shut drawer says
+    /// nothing about which of the three ways of shutting it did the shutting.
+    ///
     /// **This is the one scripted run that takes the front, and that is what makes it a run.** A
     /// key equivalent is resolved against the key window's first responder and an inactive
     /// application has no key window, so a pass that presses keys has to be frontmost — which is
@@ -578,6 +584,29 @@ enum Measure {
         window.deminiaturize(nil)
         await front()
         try? await Task.sleep(for: .milliseconds(600))
+
+        // Cmd-T, and it is the only key on this bar whose action is this app's own — every other
+        // one resolves into AppKit. `chat-search-me9.8.26`: the drawer opened and shut from a button
+        // in its corner and from nowhere else, and this window's one focused view is the query box,
+        // so the menu is the only place the key could be bound.
+        //
+        // **Pressed twice, because the claim is a toggle.** One press proves a key matched an item;
+        // it does not distinguish "the drawer shut" from "the drawer was already shut", and the
+        // second press is what says the item is a switch rather than a one-way trip. The pair also
+        // leaves the drawer as this run found it, which is the same courtesy the pasteboard gets.
+        //
+        // The title is read back through `update()` rather than off the item, because the verb is
+        // written during validation and reading it without asking for one would report the title
+        // this bar was *built* with (`AppHost.validateMenuItem`).
+        @MainActor func timelineVerb() -> String {
+            let menu = NSApp.mainMenu?.items.first { $0.title == "View" }?.submenu
+            menu?.update()
+            return menu?.items.first?.title ?? "there is no View menu"
+        }
+        for press in ["⌘T", "⌘T again"] {
+            print("  \(press) → \(await key("t", 17)), the drawer is open: "
+                + "\(model.timeline.shown), the item now reads \"\(timelineVerb())\"")
+        }
 
         // The transcript's half, and the honest shape of it. A selection there is made by dragging,
         // a drag is the one gesture nothing here can produce — the same wall the fold pass names

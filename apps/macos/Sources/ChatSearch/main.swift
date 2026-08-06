@@ -149,7 +149,8 @@ func parse(_ argv: [String]) -> Options {
                   --group AXIS         open grouped by none|project|run|source (default none)
                   --folded             open with every group folded (needs --group)
                   --no-timeline        open with the bottom drawer shut, so a keystroke spawns
-                                       two processes rather than three
+                                       two processes rather than three. Cmd-T is the same
+                                       switch while the app is running
                 """)
             exit(0)
         default: break
@@ -206,7 +207,7 @@ guard let binary = CsClient.locate(binary: options.binary) else {
 /// Owns the windows and, under `--measure`, the display link. None of them exists under
 /// `swift run` unless something makes them.
 @MainActor
-final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuItemValidation {
     let model: SearchModel
     let options: Options
     /// The direction and the side in force, injected at the root rather than reached for in a
@@ -236,7 +237,9 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Cmd-Q into keys that do something. Installed in every run rather than only in the ones a
         // person is looking at: an accessory app does not draw a menu bar, which makes this inert
         // under `--shot` and `--measure` rather than a second behaviour to reason about.
-        NSApp.mainMenu = MainMenu.build(openSettings: self, action: #selector(showSettings(_:)))
+        NSApp.mainMenu = MainMenu.build(
+            target: self, settings: #selector(showSettings(_:)),
+            timeline: #selector(toggleTimeline(_:)))
         model.group(by: options.group)
         // After the axis, because folding is a property of the groups that axis produced. It moves
         // the default rather than folding what is on screen now, so a group that arrives on a later
@@ -357,6 +360,29 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.center()
         window.makeKeyAndOrderFront(sender)
         settingsWindow = window
+    }
+
+    /// Cmd-T, and the keyboard's only way into the bottom drawer.
+    ///
+    /// It calls exactly what the drawer's own button calls, which is the point: the menu is a second
+    /// route to one act and not a second implementation of it. What `--no-timeline` opens with, this
+    /// key takes back, and neither touches the query box — so shutting the drawer still cannot
+    /// change which conversations the list holds (`TimelineModel.toggle`).
+    @objc func toggleTimeline(_ sender: Any?) { model.toggleTimeline() }
+
+    /// The verb on the View item, written at the moment AppKit asks whether the item is live.
+    ///
+    /// `MainMenu` holds no model and should not: which of *Hide* and *Show* is true right now is a
+    /// fact about this window, and validation is the one callback that runs both before the menu is
+    /// drawn and before a key equivalent fires. Everything else on the bar goes to `nil` and up the
+    /// responder chain, so this is asked only about the two items aimed here by name — and both are
+    /// always live, which is the answer that keeps them off the grey list `MainMenu` is built to
+    /// avoid.
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(toggleTimeline(_:)) {
+            item.title = model.timeline.shown ? "Hide Timeline" : "Show Timeline"
+        }
+        return true
     }
 
     /// What has to change outside SwiftUI when a control moves. Everything else is the environment.

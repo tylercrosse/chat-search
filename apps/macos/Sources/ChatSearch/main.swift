@@ -21,9 +21,13 @@ struct Options {
     /// the instrument that first took it.
     var measure = false
     var interval = Duration.milliseconds(100)
-    /// Re-measure the shipped tokens and exit. Also not a user affordance: it is the gate, and it
-    /// is a flag rather than a test because the Command Line Tools SDK has no test framework in it.
+    /// Re-measure every compiled-in direction and exit. Also not a user affordance: it is the gate,
+    /// and it is a flag rather than a test because the Command Line Tools SDK has no test
+    /// framework in it.
     var verifyTheme = false
+    /// Which direction to draw. The one flag here that *is* a preference — it sticks, where
+    /// `--size` and `--group` deliberately do not. See `ThemeChoice`.
+    var theme: String?
     /// Search, open the first result and draw the window to a PNG, then quit. The third
     /// non-affordance, and the only way to check the reader from a script: what it draws is a
     /// picture, and no exit code describes one.
@@ -67,16 +71,23 @@ func parse(_ argv: [String]) -> Options {
         // changes what it is measuring is worse than one that ignores you.
         case "--group": if let v = next(), let axis = Grouping(rawValue: v) { o.group = axis }
         case "--verify-theme": o.verifyTheme = true
+        // Kept as typed rather than resolved here: a name this build does not carry gets a
+        // sentence on stderr from `ThemeChoice`, which is also where the remembered one is read,
+        // so there is one place that turns a name into a theme and one place that complains.
+        case "--theme": o.theme = next()
         case "--shot": o.shot = true
         case "--query": if let v = next() { o.shotQuery = v }
         case "--out": if let v = next() { o.shotPath = v }
         case "--help", "-h":
+            let names = Theme.directionNames.joined(separator: "|")
             print("""
                 chat-search [--db PATH] [--config PATH] [--bin PATH] [--limit N]
 
+                  --theme NAME         draw this direction, and remember it: \(names)
+                                       remembered in \(ThemeChoice.location)
                   --measure            type the measurement phrases and print keystroke→frame
                   --interval MS        milliseconds between simulated keystrokes (default 100)
-                  --verify-theme       re-measure the shipped tokens and exit
+                  --verify-theme       re-measure every compiled-in direction and exit
                   --shot               search, open the first result, write the window to --out
                   --query TEXT         what --shot searches for (default "borrow checker")
                   --out PATH           where --shot writes its PNG (default /tmp/chat-search.png)
@@ -106,10 +117,17 @@ let options = parse(Array(CommandLine.arguments.dropFirst()))
 // Before `cs` is looked for, and before there is a window: the tokens are checkable without an
 // index, and a gate that needed a built binary and a live archive would be a gate people skip.
 //
-// `as: .direction` is named rather than defaulted, here and everywhere else: what is compiled into
-// this binary is what the project ships, and shipping is what makes these measurements binding
-// (docs/DECISIONS.md ADR 25). A token set that arrived some other way is a different promise.
-if options.verifyTheme { exit(ThemeCheck.run(.shipped, as: .direction)) }
+// Every direction and not `.shipped`, because any of them can be chosen at launch and a picker
+// that offers an unmeasured palette is a fence with a gate left open. `as: .direction` is named
+// rather than defaulted, here and everywhere else: what is compiled into this binary is what the
+// project ships, and shipping is what makes these measurements binding (docs/DECISIONS.md ADR 25).
+// A token set that arrived some other way is a different promise.
+if options.verifyTheme { exit(ThemeCheck.run(Theme.directions, as: .direction)) }
+
+// Resolved once, here, and handed down. Not read from the environment's default by each view: the
+// default is what the build ships and this is what the person chose, and only one of those two is
+// allowed to be the answer once a choice exists.
+let theme = ThemeChoice.resolve(named: options.theme, remember: !options.scripted)
 
 guard let binary = CsClient.locate(binary: options.binary) else {
     FileHandle.standardError.write(
@@ -123,11 +141,16 @@ guard let binary = CsClient.locate(binary: options.binary) else {
 final class AppHost: NSObject, NSApplicationDelegate {
     let model: SearchModel
     let options: Options
+    /// The direction in force, injected at the root rather than reached for in a view. One
+    /// override is the whole of what several themes in one binary costs the views, which is what
+    /// the token seam was built before the views to buy (`chat-search-me9.8.8`).
+    let theme: Theme
     private var frames: FrameClock?
 
-    init(model: SearchModel, options: Options) {
+    init(model: SearchModel, options: Options, theme: Theme) {
         self.model = model
         self.options = options
+        self.theme = theme
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
@@ -139,9 +162,9 @@ final class AppHost: NSObject, NSApplicationDelegate {
         window.title = "chat-search"
         // The one colour SwiftUI does not own. It shows through for a frame during a live resize,
         // and the system default is a grey nobody in this app chose.
-        window.backgroundColor = Theme.shipped.nsColor(.bg)
+        window.backgroundColor = theme.nsColor(.bg)
         window.center()
-        let hosting = NSHostingView(rootView: Shell(model: model))
+        let hosting = NSHostingView(rootView: Shell(model: model).environment(\.theme, theme))
         window.contentView = hosting
         window.orderFrontRegardless()
         // A scripted run does not steal focus — `.accessory` above — which also keeps the number
@@ -188,6 +211,7 @@ let host = AppHost(
         client: CsClient(
             binary: binary, db: options.db, config: options.config, driven: options.scripted),
         limit: options.limit),
-    options: options)
+    options: options,
+    theme: theme)
 app.delegate = host
 app.run()

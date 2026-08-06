@@ -99,6 +99,7 @@ stylesheets and exits non-zero if one stops holding.
 | `directions.html` · `directions.js` | four visual directions on the row and the ribbon at real size, in both themes, with what each costs |
 | `directions.css` | those four as token sets — palette, faces, sizes, rhythm, radii; nothing structural |
 | `palette.py` | solves each direction's luminance ramp, and re-measures the stylesheets with `--verify` |
+| `tokens.py` | emits the named directions as the macOS app's `Tokens.swift`, so the app and the mockup read one authored copy |
 | `styles.css` | tokens, the three views, the annotation layer |
 | `data.js` | mock conversations, collections, sittings, annotation copy |
 | `app.js` | rendering, the collection rule evaluator, interaction |

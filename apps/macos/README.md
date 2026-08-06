@@ -13,13 +13,14 @@ No Xcode project, no asset catalog, no bundle: the Command Line Tools SDK and no
 same terms `poc/swift` was built on. When something here needs a bundle — a Dock icon, a login
 item, a URL scheme — that is the moment to add one.
 
-Flags, all of which exist so this can be exercised without touching real data:
+Flags, most of which exist so this can be exercised without touching real data:
 
 ```bash
 swift run -c release chat-search --db /tmp/scratch.db --config /tmp/scratch-config.toml
 swift run -c release chat-search --bin /path/to/cs --limit 30
 swift run -c release chat-search --size 720x480
 swift run -c release chat-search --group project
+swift run -c release chat-search --theme paper
 ```
 
 `--size` opens the window at a stated size and `--group` opens the list already cut along an axis.
@@ -27,6 +28,10 @@ Both are verification affordances rather than preferences — the row has to hol
 and a grouped list rebuilds sections where an ungrouped one rebuilds rows, so `--measure` needs a
 way into that mode. A window that always opens at one size, or always ungrouped, makes checking
 either of those a manual drag nobody repeats.
+
+`--theme` is the one that is *not* an instrument. It picks one of the four directions compiled into
+the binary and it sticks, which is why it is the only flag here that changes anything about the
+next launch. See [the theme seam](#the-theme-seam).
 
 ## What it is made of
 
@@ -178,40 +183,87 @@ which ADR 22 is clear nothing can.
 ## The theme seam
 
 No view names a colour, a size or a face. Every one is a token read off the environment, and the
-values live in exactly one generated file:
+values for every direction the app carries live in exactly one generated file:
 
 ```bash
-python3 poc/ui/tokens.py terminal -o apps/macos/Sources/CsTheme/Tokens.swift
+python3 poc/ui/tokens.py terminal paper blueprint ink \
+    -o apps/macos/Sources/CsTheme/Tokens.swift
 cd apps/macos && swift run -c release chat-search --verify-theme
 ```
 
 `Tokens.swift` is generated from `poc/ui/styles.css` and `poc/ui/directions.css` — the same files
 the prototype renders, read through the same cascade `palette.py --verify` reads them through —
-so there is one authored copy of this palette rather than two that agree until they don't. It is
+so there is one authored copy of these palettes rather than two that agree until they don't. It is
 checked in because the app must build from a checkout with no Python in it, and it is provenance
 rather than a dependency: nothing in `apps/` reads `poc/` at build or at run time.
 
-**Changing the whole palette is one file and no views.** Not asserted — measured, by generating
-each of the other three directions over the shipped one:
+### Four directions in one build, and `--theme` picks one
 
-| direction | `git diff --shortstat` | builds | `--verify-theme` |
-| --- | --- | --- | --- |
-| `paper` | 1 file changed, 75 insertions(+), 75 deletions(−) | 0 warnings | holds |
-| `blueprint` | 1 file changed, 76 insertions(+), 76 deletions(−) | 0 warnings | holds |
-| `ink` | 1 file changed, 74 insertions(+), 74 deletions(−) | 0 warnings | holds |
+The first name on that command line is what the app draws when nobody has chosen; the rest it
+carries and offers. **The list is generated as well as the values**, and that is the part worth
+defending. The other shape was a file per direction plus a hand-written file binding them together,
+and the binding is the one piece that has to agree with the set — so it is the piece that rots.
+Generated, a direction that is compiled in *is* a direction the app can draw and *is* a direction
+the gate measures, with no second list anywhere to disagree.
 
-The generated file also declares which direction is `shipped`, which is why none of those touched
-a view: the name of the direction in force appears in that file and nowhere else.
+Switching is not a rebuild, and was never a view change. The whole of it on the app's side is one
+`.environment(\.theme, theme)` at the root, because `Theme` is a plain value behind an environment
+key with a default — which is what the seam was put in before the views to buy. Demonstrated rather
+than asserted, four pictures out of one binary:
+
+```bash
+for d in terminal paper blueprint ink; do
+  swift run -c release chat-search --shot --theme $d --out /tmp/theme-$d.png
+done
+```
+
+`paper` comes out set in a serif reading face on warm stock with a blue selection where `terminal`
+is sans on slate with a teal one, and nothing under `Sources/ChatSearch` differs between the two
+runs.
+
+### Where the choice lives
+
+`--theme` sticks, which is what separates it from `--size` and `--group`. It sticks in
+`~/Library/Preferences/chat-search.plist`:
+
+```bash
+defaults read chat-search theme      # what the next launch will draw
+defaults delete chat-search theme    # back to the direction the build ships
+```
+
+`UserDefaults` without a bundle was probed rather than assumed: a non-bundled executable gets a
+defaults domain named after the executable, and the value is written and read back across runs. The
+catch worth knowing is that the domain **is** the executable name, so the day this app grows a
+bundle identifier the preference moves and the old one is orphaned rather than migrated. That costs
+one re-pick of a theme, which is why it did not buy a hand-rolled file under
+`~/.config/chat-search/`: that directory is `cs`'s, this is the client's own state, and a plist is
+inspectable with `defaults read` where a new dotfile format would be inspectable with nothing.
+
+Two rules around it, both of which exist to stop the flag lying. A name this build does not carry
+never quietly becomes another one — it says so on stderr and leaves the previous answer standing,
+because a flag that silently does nothing is the failure this is most likely to have. And a
+scripted run never writes the preference: `--measure` and `--shot` draw in whatever direction a
+script names them, and neither is somebody choosing a theme. Same rule and the same reason as both
+staying out of the query log.
+
+A flag is the affordance because a terminal is this app's front door — no bundle, no Dock icon, no
+menu bar. A picker *inside* the app wants a menu bar to hang itself on, which this executable has
+never built, so it is filed rather than half-done: `chat-search-me9.8.21`.
 
 ### Why `--verify-theme` and not a test
 
 There are no tests to put it in. This package builds against the Command Line Tools SDK, where
 neither `Testing` nor `XCTest` exists, so `swift test` cannot run at all — the same reason
-`cs-spike contract` is a subcommand. It re-measures what shipped, in both themes: the kind ramp
-at 2.2 / 4.0 / 7.2 / 13.0 against `--map-bg` with even ~1.8× steps, the three act shades ordered
-inside the tool band, and every text tier against the 4.5:1 AA floor on **both** grounds it lands
-on. That last one is not pedantry: `--ink-3` was fixed once against `--bg` and was still at
-4.23:1 on `--panel`, which is where most of that text actually is.
+`cs-spike contract` is a subcommand. It re-measures **every direction the build carries**, in both
+themes: the kind ramp at 2.2 / 4.0 / 7.2 / 13.0 against `--map-bg` with even ~1.8× steps, the three
+act shades ordered inside the tool band, and every text tier against the 4.5:1 AA floor on **both**
+grounds it lands on. That last one is not pedantry: `--ink-3` was fixed once against `--bg` and was
+still at 4.23:1 on `--panel`, which is where most of that text actually is.
+
+Every direction and not just the default, because measuring only the default would fence the one
+palette least likely to be wrong — it is the one somebody is looking at — and leave the other three
+offered and checked by nobody. One miss anywhere fails the run, and the verdict names which
+direction missed: "FAILED" over four palettes says nothing about which one to go and re-solve.
 
 It exists for the reason `palette.py --verify` exists. Solving a colour and writing it down are
 two events, and generating adds a third — so what ships is now two steps from what was solved,
@@ -225,9 +277,10 @@ A theme is not a list of hexes here. Half of one is *solved*: the four message k
 on an even luminance ramp against the ribbon track, because hue is the channel that degrades
 fastest at the ~2px those bands are drawn at, and the quiet tier has to clear 4.5:1 at 9–11px.
 So the path for Solarized is to add its hues to `DIRECTIONS` in `poc/ui/palette.py`, let that
-solve the eight fenced tokens, write the rest into `directions.css`, and run `tokens.py`. A theme
-that skips the solve will fail `--verify-theme`, which is the check doing its job rather than
-being in the way.
+solve the eight fenced tokens, write the rest into `directions.css`, and name it on the `tokens.py`
+line above — at which point the app offers it to `--theme` and the gate measures it, both because
+it is in the generated list and for no other reason. A theme that skips the solve will fail
+`--verify-theme`, which is the check doing its job rather than being in the way.
 
 **Which is a real cost, because the published palettes miss.** Solarized's kinds read
 2.79 / 3.43 / 4.75 / 5.61 against `base03` where the ramp asks for 2.20 / 4.00 / 7.20 / 13.00, and
@@ -242,8 +295,8 @@ sitting ~1.11× above the targets — and its light side is 0.09 out.
 (docs/DECISIONS.md ADR 25). A **direction** is compiled in and offered by the app: fenced, and one
 that misses does not ship. A **user theme** is one you load off your own disk: measured by the same
 code, and then drawn whatever the readings say, with the misses on stderr and the class beside the
-name. `--verify-theme` prints which it measured on its first line, and its last line says which of
-those two consequences applies.
+name. `--verify-theme` prints the class beside every name it measures, and its last line says which
+of those two consequences applies.
 
 That leaves three routes for a named palette, and none of them pretends to be another: load it as
 a user theme exactly as published; ship it as `solarized-derived` / `gruvbox-derived` with its hues
@@ -253,10 +306,9 @@ holds as authored, which neither of these two is.
 
 Three things this seam does **not** do yet, each filed:
 
-- **One theme per binary.** `Tokens.swift` holds the direction in force; picking between several
-  at runtime needs them to coexist, plus a flag and a preference. Every one of them is a direction,
-  so `--verify-theme` has to measure all of them and not only the one in force.
-  `chat-search-me9.8.9`.
+- **Picking one means relaunching.** `--theme` chooses at launch and the app remembers it; changing
+  your mind while looking at the window does not. That wants a menu bar this executable has never
+  built. `chat-search-me9.8.21`.
 - **Nothing loads at runtime.** Dialling in type and spacing is edit, regenerate, rebuild, relaunch.
   Reading a token set from a file would make it edit and relaunch — and that file is the user-theme
   class, so it is measured on load, drawn regardless, and a file that cannot be *read* falls back to

@@ -312,6 +312,25 @@ public struct RGB: Sendable, Equatable {
     }
 }
 
+// MARK: - Choosing one
+
+extension Theme {
+    /// The compiled-in direction with this name, or nil if this build does not carry it.
+    ///
+    /// The only place a name becomes a theme, so `--theme`, a remembered preference and anything
+    /// later that offers a list all resolve the same way — and all of them are limited to what
+    /// `directions` actually holds. Nil rather than a fallback: what to do about a name this build
+    /// has never heard of is the caller's to say out loud, and a silent substitution is how a typo
+    /// becomes "the flag does nothing".
+    public static func direction(named name: String) -> Theme? {
+        directions.first { $0.name == name }
+    }
+
+    /// Every direction's name, in the order the generated file declares them. For a `--help` line
+    /// or a complaint about a name that missed.
+    public static var directionNames: [String] { directions.map(\.name) }
+}
+
 // MARK: - The environment
 
 private struct ThemeKey: EnvironmentKey {

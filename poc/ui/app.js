@@ -549,21 +549,36 @@
   const RIBBON_W = 200;
   const FOUR_HOURS = 4 * 3600000;
 
+  /* What the ribbon is an axis of: the messages a reader draws, which is not all of them.
+     A successful tool result is not drawn — the call implies it — so a 937-message
+     conversation is 563 positions long, and the row's `n msgs` is the wrong denominator
+     for anything on this graphic. The rule is cs_core::blocks::drawn, carried per message
+     by export.py; the fixtures predate it and are all drawn. */
+  const drawnMsgs = (conv) => conv.msgs.filter((m) => m.drawn !== false);
+
   /* The ribbon used to draw 236px whether the conversation held 10 messages or 2,553,
      so the one mark that could carry scale was the one mark that refused to. The track
      now takes a share of the cell by log length: linear would render everything under
      ~200 messages as a stub, since the corpus spans 4 to 2,553. Floor at 14% so a short
      conversation is still a shape rather than a dot; the cell keeps its full width, so
      the columns either side stay on the grid. */
-  const LONGEST = Math.max(120, ...CONVERSATIONS.map((c) => c.n));
+  const LONGEST = Math.max(120, ...CONVERSATIONS.map((c) => drawnMsgs(c).length));
   const ribbonWidth = (n) =>
     RIBBON_W * Math.max(0.14, Math.min(1, Math.log(Math.max(n, 2)) / Math.log(LONGEST)));
 
-  /* Four categories, matching the four fidelity knobs and the four ribbon colours. */
+  /* cs's four band names in the class names the four stylesheets spell. `reasoning` is
+     the only one that differs, and only because `--k-reason` is already the token. */
+  const BAND_CLASS = { user: 'user', agent: 'agent', reasoning: 'reason', tool: 'tool' };
+
+  /* Four categories, matching the four fidelity knobs and the four ribbon colours.
+     Real conversations arrive with the band already decided (cs_core::blocks::band, via
+     `cs show --json` and the export); the derivation below is what the invented fixtures
+     fall back to, and it is the only copy of that rule left in the prototype. */
   const bandClass = (m) =>
-    m.kind === 'prose' ? (m.role === 'user' ? 'user' : 'agent')
-    : m.kind === 'reasoning' ? 'reason'
-    : 'tool';
+    BAND_CLASS[m.band] ||
+    (m.kind === 'prose' ? (m.role === 'user' ? 'user' : 'agent')
+     : m.kind === 'reasoning' ? 'reason'
+     : 'tool');
 
   const KINDS = [
     { k: 'user',   label: 'you' },
@@ -667,11 +682,45 @@
     return out;
   }
 
+  /* The same bands, for a conversation that came out of the index: `cs search --json`
+     emits `kind_runs` per row (me9.19) and export.py carries it here untouched, so the
+     boundaries the ribbon draws are the ones the terminal would draw beside the same
+     conversation rather than a second opinion that happens to agree today.
+
+     Nothing is run-length encoded on this side. The loop walks cs's runs and only
+     subdivides a tool run where the act changes — a refinement inside a run, never a
+     boundary cs did not send — which is what keeps the act channel above from costing the
+     shape its provenance. */
+  function wireRuns(conv, msgs) {
+    const out = [];
+    let carried = null;
+    let i = 0;
+    conv.shape.forEach(([band, len]) => {
+      const k = BAND_CLASS[band] || 'agent';
+      for (let j = 0; j < len; j++, i++) {
+        const m = msgs[i];
+        if (m && m.act) carried = m.act;
+        const a = k === 'tool' ? ((m && m.act) || carried || 'run') : null;
+        // `j` is what stops two runs cs sent apart from fusing here when the acts inside
+        // them agree. Off-path bands cannot arise: `kind_runs` is the head path.
+        if (j && out[out.length - 1].a === a) out[out.length - 1].len++;
+        else out.push({ k, a, len: 1, off: false, start: i });
+      }
+    });
+    return out;
+  }
+
   function ribbon(conv, withTicks) {
     // Hidden kinds are dimmed, not dropped. Removing them from the axis was worse:
     // the default preset hides tools and reasoning, so every ribbon collapsed to the
     // same teal/white alternation and the list stopped being triageable at all.
-    const shown = conv.msgs;
+    //
+    // Undrawn messages *are* off the axis, and that is a different question: nobody hid
+    // them with a knob, cs never put them on it. Both channels are then measured in that
+    // one space — 563 positions on a 937-message conversation — because a body drawn in
+    // drawn-message counts under ticks placed in message counts is the trap me9.25
+    // records for `match_seqs`, arriving on the axis by the other door.
+    const shown = drawnMsgs(conv);
     const n = shown.length || 1;
     const W = ribbonWidth(n);
     // The track is the length cue: it is the thing that ends early, so a short
@@ -679,20 +728,29 @@
     let html = `<div class="rb-track" style="width:${W.toFixed(1)}px">`;
 
     let x = 0;
-    runs(conv.msgs).forEach((r) => {
+    // The fixtures in data.js have no index behind them and so carry no shape; that
+    // fallback is the only place this prototype still encodes its own runs.
+    (conv.shape ? wireRuns(conv, shown) : runs(shown)).forEach((r) => {
       const w = (r.len / n) * W;
       // A steer is one message; give it a floor so it stays a visible separator.
-      const drawn = r.k === 'user' ? Math.max(2, w) : Math.max(0.7, w - 0.4);
+      const px = r.k === 'user' ? Math.max(2, w) : Math.max(0.7, w - 0.4);
       const dim = state.fidelity[r.k] === 'hidden' ? ' dim' : '';
       const act = r.a ? ` a-${r.a}` : '';
       html += `<div class="rb-band ${r.k}${act}${r.off ? ' off' : ''}${dim}" ` +
-              `style="left:${x.toFixed(2)}px;width:${drawn.toFixed(2)}px"></div>`;
+              `style="left:${x.toFixed(2)}px;width:${px.toFixed(2)}px"></div>`;
       x += w;
     });
     html += '</div>';
 
-    shown.forEach((m, i) => {
-      const x = (i / n) * W;
+    // Over every message, not just the drawn ones, but positioned by how many drawn
+    // messages precede it: a mark on something cs does not draw belongs at the position it
+    // sits in front of, not nowhere. Rare and real — one pause in a 93-conversation
+    // sample, a tool that took four hours to answer — and dropping it silently would be a
+    // hole in the graphic rather than a decision about it.
+    let at = 0;
+    conv.msgs.forEach((m) => {
+      const x = (at / n) * W;
+      if (m.drawn !== false) at++;
       if (withTicks && m.match) {
         html += `<div class="rb-tick" style="left:${x.toFixed(2)}px"></div>`;
       }

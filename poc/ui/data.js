@@ -320,6 +320,13 @@ function adaptReal(data) {
       const gap = prev && m.t && prev.ts ? m.t - prev.ts : 0;
       const out = {
         i, kind, role,
+        // cs's two answers about this message, carried by export.py and never recomputed
+        // here: which band it is in, and whether a reader draws it at all. `drawn` is
+        // false for a successful tool result — the call implies it — and that is what the
+        // ribbon's axis is made of, so a second opinion about it here would put the bands
+        // and the marks over the same axis in two different coordinate spaces.
+        band: m.b || null,
+        drawn: !m.nd,
         len: Math.max(m.n || text.length || 1, 1),
         ts: m.t || null,
         paused: gap > FOUR_H,
@@ -380,6 +387,11 @@ function adaptReal(data) {
         : '',
       matches: [],
       msgs,
+      // The shape, exactly as `cs search --json` emitted it: [[band, count], …] over the
+      // drawn messages in reading order. The ribbon draws these runs rather than encoding
+      // its own; the fixtures below have no index behind them and so have no `shape`,
+      // which is what app.js's fallback is for.
+      shape: c.runs || null,
       segments: segmentize(msgs),
       model: c.model || null,
       files: c.files || [],

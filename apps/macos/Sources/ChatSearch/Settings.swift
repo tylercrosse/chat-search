@@ -59,6 +59,23 @@ final class ThemeSettings {
         self.remembers = remembers
     }
 
+    /// A token set read off the file again, because the file changed under the running app
+    /// (`chat-search-me9.8.39`). What that is worth saying about is `ThemeReload`'s; this is the
+    /// assignment.
+    ///
+    /// The three settings below it are untouched, because the file supersedes them rather than
+    /// joining them and they keep resolving underneath — so the window's two menus still say what
+    /// comes back when it goes. Nothing is remembered, for the reason nothing was remembered at
+    /// launch: the file is the memory.
+    func draw(user theme: Theme, from url: URL) {
+        user = theme
+        userFile = url
+        self.theme = ThemeChoice.Choice(
+            light: light, dark: dark, layout: layout, user: theme, appearance: appearance
+        ).theme
+        onChange?()
+    }
+
     func choose(appearance: Appearance) {
         guard appearance != self.appearance else { return }
         self.appearance = appearance

@@ -45,6 +45,12 @@ struct Options {
     /// has to be complete (ADR 25), so dialling one in starts from a direction rather than a blank
     /// page. It writes values `poc/ui/palette.py` solved and this build already carries.
     var writeTheme = false
+    /// Save a theme file the ways an editor saves one and print what the app drew after each. The
+    /// sixth, and the only check the watch (`chat-search-me9.8.39`) can have: what it claims is
+    /// that a save redraws a running app and that a half-written one does not, and neither an exit
+    /// code nor a picture states either. It writes and edits a file of its own, for the reason
+    /// `--verify-theme` measures nothing outside the binary.
+    var watchTheme = false
     /// Search, open the first result and draw the window to a PNG, then quit. The third
     /// non-affordance, and the only way to check the reader from a script: what it draws is a
     /// picture, and no exit code describes one.
@@ -93,7 +99,7 @@ struct Options {
     /// it decides the rest: `--shot` draws what the script named it, and a frame that changed
     /// because of a file in somebody's home directory is a frame of that home directory.
     /// `--write-theme` is here because it must not remember whatever it was told to write out.
-    var scripted: Bool { measure || shot || clipboard || writeTheme }
+    var scripted: Bool { measure || shot || clipboard || writeTheme || watchTheme }
 
     /// ...and all but one stay out of the *front*, so they can be run beside whatever a person is
     /// actually doing, and so a latency taken here is comparable with `poc/swift/RESULTS.md` §1,
@@ -139,6 +145,7 @@ func parse(_ argv: [String]) -> Options {
         case "--theme-file": if let v = next() { o.themeFile = URL(fileURLWithPath: v) }
         case "--no-theme-file": o.noThemeFile = true
         case "--write-theme": o.writeTheme = true
+        case "--watch-theme": o.watchTheme = true
         case "--shot": o.shot = true
         case "--query": if let v = next() { o.shotQuery = v }
         case "--out": if let v = next() { o.shotPath = v }
@@ -161,6 +168,9 @@ func parse(_ argv: [String]) -> Options {
                   --no-theme-file      ignore that file for this run and draw a direction
                   --write-theme        write the theme this launch would draw to the theme
                                        file's path, as the file --theme-file reads, and exit
+                  --watch-theme        save a theme file the ways an editor saves one and print
+                                       what the app drew after each. Writes its own file, under
+                                       --theme-file's path when one is named
                   --settings           open the settings window at launch. All three settings
                                        are on it, and it is Cmd-comma the rest of the time
                   --clipboard          press the Edit menu's keys in the search field and print
@@ -231,7 +241,7 @@ func parseSize(_ text: String) -> CGSize? {
     return CGSize(width: w, height: h)
 }
 
-let options = parse(Array(CommandLine.arguments.dropFirst()))
+var options = parse(Array(CommandLine.arguments.dropFirst()))
 
 // Before `cs` is looked for, and before there is a window: the tokens are checkable without an
 // index, and a gate that needed a built binary and a live archive would be a gate people skip.
@@ -259,6 +269,38 @@ if options.verifyTheme {
     }
 }
 
+// `--watch-theme` saves a theme file nine ways and reports what the app drew after each, so the
+// file has to be there before the theme is resolved: this run has to *draw* it for there to be a
+// watch on it to check. Its own file under the temporary directory, for the reason `--verify-theme`
+// measures nothing outside the binary — a check that saved over `~/.config/chat-search/theme.css`
+// would cost whoever ran it an afternoon of nudging. `--theme-file` names somewhere else, and
+// `writeTheme` refuses either way when something is already there.
+// A directory of its own and not a file in the temporary directory, for two reasons: the watch
+// listens to the directory the file sits in, and pointed at `$TMPDIR` it would hear every other
+// process on the machine; and the file's stem is the theme's name, so `theme.css` in a directory
+// nobody else uses is a run whose output says `theme` rather than a pid.
+if options.watchTheme {
+    let path =
+        options.themeFile
+        ?? URL(fileURLWithPath: NSTemporaryDirectory())
+            .appending(path: "chat-search-watch-\(getpid())/theme.css")
+    let status = writeTheme(Theme.shipped, to: path)
+    if status != 0 { exit(status) }
+    options.themeFile = path
+}
+
+// What the command line asked for, kept in one value because two things read it: the theme is
+// resolved from it, and the file to *follow* is derived from it (`ThemeChoice.file`). Deriving that
+// twice is how a run ends up drawing one file and watching another.
+let asked = ThemeChoice.Request(
+    direction: options.theme, light: options.themeLight, dark: options.themeDark,
+    appearance: options.appearance,
+    file: options.themeFile ?? ThemeFile.standardLocation,
+    fileNamed: options.themeFile != nil,
+    // The run that is about to write a theme file does not first read the one it is about to
+    // overwrite, which would make `--write-theme` a copy of itself.
+    ignoreFile: options.noThemeFile || options.writeTheme)
+
 // Resolved once, here, and handed down. Not read from the environment's default by each view: the
 // default is what the build ships and this is what the person chose, and only one of those two is
 // allowed to be the answer once a choice exists. Two answers now — a theme, which may be one
@@ -268,17 +310,7 @@ if options.verifyTheme {
 // window moves these while the app is running (`chat-search-me9.8.21`), so what the launch settled
 // on is this object's starting state rather than the last word.
 let settings = ThemeSettings(
-    ThemeChoice.resolve(
-        ThemeChoice.Request(
-            direction: options.theme, light: options.themeLight, dark: options.themeDark,
-            appearance: options.appearance,
-            file: options.themeFile ?? ThemeFile.standardLocation,
-            fileNamed: options.themeFile != nil,
-            // The run that is about to write a theme file does not first read the one it is about
-            // to overwrite, which would make `--write-theme` a copy of itself.
-            ignoreFile: options.noThemeFile || options.writeTheme),
-        remember: !options.scripted),
-    remembers: !options.scripted)
+    ThemeChoice.resolve(asked, remember: !options.scripted), remembers: !options.scripted)
 
 // After the theme is resolved, because what this writes is what this launch would have drawn —
 // `--theme paper --write-theme` is how you start from paper. Before `cs` is looked for, with
@@ -303,16 +335,24 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuIt
     /// view. One override is the whole of what several themes in one binary costs the views, which
     /// is what the token seam was built before the views to buy (`chat-search-me9.8.8`).
     let settings: ThemeSettings
+    /// The theme file this run reads, when it reads one. Held rather than resolved here, because
+    /// which file that is — or whether there is one at all — is `ThemeChoice`'s answer and not a
+    /// second reading of the flags (`chat-search-me9.8.39`).
+    let watching: URL?
     private var window: NSWindow?
     /// Built the first time Cmd-comma is pressed and kept afterwards, so the window comes back
     /// where it was left rather than centred again.
     private var settingsWindow: NSWindow?
     private var frames: FrameClock?
+    /// What follows the theme file. Held for as long as the app runs: a watch nobody retains is a
+    /// watch that is cancelled the moment `applicationDidFinishLaunching` returns.
+    private var reload: ThemeReload?
 
-    init(model: SearchModel, options: Options, settings: ThemeSettings) {
+    init(model: SearchModel, options: Options, settings: ThemeSettings, watching: URL?) {
         self.model = model
         self.options = options
         self.settings = settings
+        self.watching = watching
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
@@ -370,6 +410,30 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuIt
             print(
                 AppearanceProbe.line(
                     theme: settings.theme, view: hosting, asked: settings.appearance))
+        }
+
+        // After the window, because the first thing a reload does is redraw one, and before the
+        // scripted passes below, because one of them is the check on it. Exactly the file this run
+        // read, or nothing at all for a run that read none: `--no-theme-file` is not followed
+        // either, or the flag would ignore a file and then draw it a second later.
+        if let watching {
+            let reload = ThemeReload(settings: settings, url: watching)
+            reload.start()
+            self.reload = reload
+        }
+
+        // The watch's own pass. Nine saves of the kinds an editor makes, and what the app drew
+        // after each — the check `chat-search-me9.8.39` needed, and it comes before the reader's
+        // for the reason the settings window's does: what it has to show is a file changing under
+        // a running app, and twenty seconds of scrolling first says nothing about that.
+        if options.watchTheme, let reload, let file = watching {
+            Task { @MainActor in
+                await Measure.themeFile(
+                    model: model, settings: settings, reload: reload, view: hosting, file: file,
+                    query: options.shotQuery, to: options.shotPath)
+                NSApp.terminate(nil)
+            }
+            return
         }
 
         // The settings window's own pass, and it replaces the reader's rather than following it:
@@ -506,6 +570,7 @@ let host = AppHost(
             binary: binary, db: options.db, config: options.config, driven: options.scripted),
         limit: options.limit, timeline: options.timeline),
     options: options,
-    settings: settings)
+    settings: settings,
+    watching: ThemeChoice.file(asked, scripted: options.scripted))
 app.delegate = host
 app.run()

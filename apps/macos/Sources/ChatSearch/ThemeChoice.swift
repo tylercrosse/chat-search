@@ -240,23 +240,33 @@ enum ThemeChoice {
 
     // MARK: - The token set that is not compiled in
 
-    /// A theme read off disk, measured and announced — or nil, having said why not.
+    /// The file this run reads, and therefore the file it watches, or nil for a run that reads
+    /// neither.
     ///
-    /// Resolved last, after the three directions above it, for one reason: a file that turns out
-    /// not to be a theme owes the sentence "drawing terminal instead", and until the directions are
-    /// settled there is nothing to name there.
+    /// One question and one place. `chat-search-me9.8.39` put a watch on the same file
+    /// (`ThemeReload`), and a run that drew a file it did not follow — or followed one it never
+    /// drew — would be two answers to a question with one answer.
     ///
     /// - Parameter scripted: `--measure`, `--shot` and `--clipboard`, which read *no* file unless a
     ///   flag named one. Same rule and the same reason as the four preferences they refuse to
     ///   write: a scripted run draws what the script named it, and a picture that changed because
     ///   of a file in somebody's home directory is a picture of that home directory. A flag naming
     ///   the file is the script naming it, so that case loads.
+    static func file(_ asked: Request, scripted: Bool) -> URL? {
+        guard !asked.ignoreFile, !scripted || asked.fileNamed else { return nil }
+        return asked.file
+    }
+
+    /// A theme read off disk, measured and announced — or nil, having said why not.
+    ///
+    /// Resolved last, after the three directions above it, for one reason: a file that turns out
+    /// not to be a theme owes the sentence "drawing terminal instead", and until the directions are
+    /// settled there is nothing to name there.
     private static func userTheme(
         _ asked: Request, instead direction: String, scripted: Bool, _ say: (String) -> Void
     ) -> Theme? {
-        guard !asked.ignoreFile else { return nil }
-        if scripted, !asked.fileNamed {
-            if FileManager.default.isReadableFile(atPath: asked.file.path) {
+        guard let url = file(asked, scripted: scripted) else {
+            if !asked.ignoreFile, FileManager.default.isReadableFile(atPath: asked.file.path) {
                 say(
                     "theme file: \(asked.file.path) is not loaded — a scripted run draws what its "
                         + "flags name, the same reason it writes none of the four preferences. "
@@ -267,7 +277,7 @@ enum ThemeChoice {
 
         let theme: Theme
         do {
-            theme = try ThemeFile.load(asked.file)
+            theme = try ThemeFile.load(url)
         } catch {
             guard let unreadable = error as? ThemeFile.Unreadable else { return nil }
             // An absent file at the standard location is this app's ordinary state and says
@@ -279,6 +289,25 @@ enum ThemeChoice {
             return nil
         }
 
+        // Always measured, by ThemeCheck and not by a second copy of these rules, and drawn
+        // whatever the readings say (docs/DECISIONS.md ADR 25).
+        announce(theme, from: url, ThemeCheck.measure(theme, as: .userTheme), say)
+        return theme
+    }
+
+    /// What a token set off disk has to say the first time it is drawn.
+    ///
+    /// Said here rather than at the two places that draw one, because a launch and a reload
+    /// (`ThemeReload`) are the same event the first time a given file reaches the screen — a file
+    /// written into place while the app is up has had nothing said about it either. What differs
+    /// is the *second* time, which is that other file's subject.
+    ///
+    /// The failures are whole sentences on stderr rather than the table `--verify-theme` prints:
+    /// nobody who has just launched an app has a table in front of them, and there is no modal and
+    /// no banner because the only person who can be nagged here is the one who wrote the file.
+    static func announce(
+        _ theme: Theme, from url: URL, _ report: ThemeCheck.Report, _ say: (String) -> Void
+    ) {
         // A file called `paper.css` beside a direction called `paper` is not an error and not a
         // collision — nothing resolves a user theme by name — but two things on one screen with
         // one name is worth one sentence.
@@ -287,24 +316,16 @@ enum ThemeChoice {
                 "the theme file is called \(theme.name), which is also a direction this build "
                     + "carries. The file is what is drawn.")
         }
-
-        // Always measured, by ThemeCheck and not by a second copy of these rules, and drawn
-        // whatever the readings say (docs/DECISIONS.md ADR 25). The failures are whole sentences
-        // on stderr rather than the table `--verify-theme` prints: nobody who has just launched an
-        // app has a table in front of them, and there is no modal and no banner because the only
-        // person who can be nagged here is the one who wrote the file.
-        let report = ThemeCheck.measure(theme, as: .userTheme)
-        say("theme: \(theme.name) · \(ThemeClass.userTheme.label), from \(asked.file.path).")
+        say("theme: \(theme.name) · \(ThemeClass.userTheme.label), from \(url.path).")
         guard !report.holds else {
             say("  It clears the same fence a shipped direction has to.")
-            return theme
+            return
         }
         report.failures.forEach { say("  \($0)") }
         say(
             "  Drawn anyway, because you loaded it and it is your screen — what that costs is "
-                + "docs/DECISIONS.md ADR 25. `--theme-file \(asked.file.path) --verify-theme` "
+                + "docs/DECISIONS.md ADR 25. `--theme-file \(url.path) --verify-theme` "
                 + "prints the whole table.")
-        return theme
     }
 
     // MARK: - Writing the same four keys from somewhere that is not a flag

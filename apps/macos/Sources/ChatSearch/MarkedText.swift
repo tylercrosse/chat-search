@@ -23,11 +23,12 @@ import SwiftUI
 ///   Both arrive with the transcript, which is why the query is not passed in: a re-read against
 ///   the same query produces the same marks and may reuse them, and a re-read against a different
 ///   one arrives with different `terms`.
-/// - **Which direction is drawing**, since a mark bakes in three colour tokens. Named by
-///   `Theme.name`, which is what `ThemeSettings.choose(light:)` already treats as a direction's
-///   identity. Appearance is deliberately not part of it: every token is one dynamic `NSColor`
-///   that picks its own side where it is drawn, so a light/dark flip repaints these without
-///   rebuilding them.
+/// - **The three colour tokens a mark bakes in**, both sides of each, by value. Not `Theme.name`,
+///   which is what this keyed on until `chat-search-me9.8.39` put a watch on the theme file: a
+///   reloaded file keeps its name — the name *is* the file's stem — so a save that moved `--hit-bg`
+///   changed every mark on screen and changed nothing this table could see. Appearance is
+///   deliberately not part of it: every token is one dynamic `NSColor` that picks its own side
+///   where it is drawn, so a light/dark flip repaints these without rebuilding them.
 ///
 /// The first two are per entry. The last two invalidate every entry at once, which is what makes
 /// a stale mark unreachable rather than merely unlikely.
@@ -68,14 +69,29 @@ final class MarkedText {
     private struct Question: Equatable {
         let conv: String
         let terms: [String]
-        let direction: String
+        let marking: Marking
+    }
+
+    /// The colours a mark is made of, as values.
+    ///
+    /// Both sides of each, because a mark holds the dynamic colour rather than the side it is being
+    /// drawn on — so a theme that moves only its light `--hit-bg` has changed these even while the
+    /// screen is dark, and the entry it built has to go. Three tokens and not the whole palette:
+    /// what is cached is text with a ground, a foreground and an underline on it, and a table keyed
+    /// on tokens no mark reads would throw itself away when a direction moved its window chrome.
+    private struct Marking: Equatable {
+        let values: [RGB]
+
+        init(_ theme: Theme) {
+            values = [ColorToken.hit, .hitBg, .ink].flatMap { [theme.light[$0], theme.dark[$0]] }
+        }
     }
 
     /// The message as it is drawn: off the table when it is there, built and kept when it is not.
     func of(_ block: Block, fold: Fold, in transcript: Transcript, theme: Theme) -> AttributedString
     {
         let question = Question(
-            conv: transcript.convId, terms: transcript.terms, direction: theme.name)
+            conv: transcript.convId, terms: transcript.terms, marking: Marking(theme))
         if answering != question {
             built.removeAll(keepingCapacity: true)
             answering = question

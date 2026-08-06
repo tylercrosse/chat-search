@@ -578,6 +578,207 @@ enum Measure {
         UserDefaults.standard.removePersistentDomain(forName: name)
     }
 
+    /// The theme file, saved the ways an editor saves one, and what the app drew after each.
+    ///
+    /// The check `chat-search-me9.8.39` could not get any other way. What the watch claims is that
+    /// **a save redraws a running app** and that **a save caught mid-write does not**, and neither
+    /// is a picture or an exit code: the first is a difference between two frames a second apart,
+    /// and the second is the *absence* of a difference at a moment nothing marks. So the saves are
+    /// made here, from inside the app they are aimed at, and what was on screen afterwards is
+    /// printed beside each one.
+    ///
+    /// **The saves are the real ones.** `write(atomically: false)` truncates the file and writes it
+    /// again, which is an editor saving in place; `write(atomically: true)` writes a temporary file
+    /// and renames it over, which is vim's default on macOS and the case that kills a watch
+    /// registered on a descriptor. The inode is printed for that reason — a run where it never
+    /// changes is a run that never checked the case the watch exists for.
+    ///
+    /// Three of the eleven states are photographed, because two of the claims are about colour and
+    /// one is about the type scale, which is a relayout rather than a repaint.
+    ///
+    /// Its own file, under a directory of its own: a pass that watched `/tmp` would hear every
+    /// other process on the machine, and one that saved over `~/.config/chat-search/theme.css`
+    /// would cost whoever ran it an afternoon.
+    @MainActor
+    static func themeFile(
+        model: SearchModel, settings: ThemeSettings, reload: ThemeReload, view: NSView, file: URL,
+        query: String, to path: String
+    ) async {
+        print(drivenLine())
+        // The dark side, forced, so that the colour this reads back off the theme is the colour on
+        // the screen whatever the machine's own appearance is. A scripted run remembers none of it.
+        settings.choose(appearance: .dark)
+        // Rows, and a conversation open behind them: a theme redrawing an empty window is a picture
+        // of a background colour, and the marks in the transcript are the one thing on screen that
+        // is *built* from tokens rather than drawn in them (`MarkedText`).
+        model.query = query
+        model.queryChanged()
+        try? await Task.sleep(for: .seconds(2))
+        if let conv = model.conversations.first {
+            model.reader.open(conv, query: query)
+            try? await Task.sleep(for: .seconds(2))
+        }
+        print("\"\(query)\" → \(model.conversations.count) rows, "
+            + "\(model.reader.transcript?.drawn ?? 0) messages in the drawer")
+        print("theme file: \(file.path)")
+
+        let source = ThemeFile.text(for: .shipped)
+        var heard = 0
+        var built = model.reader.markedText.builds
+
+        /// What is on screen, what the file is now, and what the reload had to say about it.
+        func drew(_ what: String, shot: String? = nil) {
+            print("  \(what)")
+            let theme = settings.theme
+            let klass = settings.user == nil ? ThemeClass.direction : .userTheme
+            // The four this pass moves, and the dark side of each because the appearance is forced
+            // above — so these are the values on the screen and not one of the two it could be.
+            print("    drawing \(theme.name) · \(klass.label) — --bg \(theme.dark[.bg].hex), "
+                + "--ink-3 \(theme.dark[.ink3].hex), --hit-bg \(theme.dark[.hitBg].hex), "
+                + "--fs-body \(fmt2(theme.size(.body)))pt")
+            let marks = model.reader.markedText.builds
+            print("    \(marks - built) messages re-marked, \(node(file))")
+            built = marks
+            let fresh = reload.spoken[heard...]
+            heard = reload.spoken.count
+            if fresh.isEmpty {
+                print("    said nothing")
+            } else {
+                fresh.forEach { print("    said: \($0.trimmingCharacters(in: .whitespaces))") }
+            }
+            guard let shot else { return }
+            let out = path.replacingOccurrences(of: ".png", with: "-\(shot).png")
+            print("    \(out) \(capture(view, to: out))")
+        }
+
+        /// A save. `atomically: false` truncates the file and writes it again — an editor saving in
+        /// place; `true` writes a temporary file and renames it over, which replaces the inode.
+        func save(_ text: String, atomically: Bool = false) {
+            do {
+                try text.write(to: file, atomically: atomically, encoding: .utf8)
+            } catch {
+                print("    could not write \(file.path): \(error.localizedDescription)")
+            }
+        }
+
+        /// Long enough for the watch to have settled and — when the file did not parse — to have
+        /// looked a second time before saying so. Two quiet periods and some slack.
+        func settle() async { try? await Task.sleep(for: .milliseconds(700)) }
+
+        // Every edit is made on the last one rather than on the file `--write-theme` wrote, which is
+        // what dialling a theme in actually looks like: nobody starts over between nudges, and a
+        // value that moved two saves ago has to still be on screen three saves later.
+        var text = source
+        func edit(_ token: String, _ line: String) { text = rewrite(text, token, as: line) }
+
+        drew("as launched", shot: "watch-as-launched")
+
+        edit("--bg", "--bg: #2a1a3a;")
+        save(text)
+        await settle()
+        drew("saved in place — truncated and written again, the same inode")
+
+        edit("--bg", "--bg: #102030;")
+        edit("--fs-body", "--fs-body: 16px;")
+        save(text, atomically: true)
+        await settle()
+        drew(
+            "saved atomically — a new file renamed over the old one, and the type scale moved",
+            shot: "watch-after-a-save")
+
+        // Two writes with a gap an editor's own truncate-then-write is well inside of, which is the
+        // ordinary case and the one the quiet period is for: one reload, and nothing said about the
+        // half-written file in the middle of it. `--hit-bg` because the marks in the drawer are
+        // built from it and cached — the count beside each state is what says they were rebuilt.
+        edit("--hit-bg", "--hit-bg: #7a3d00;")
+        save(String(text.prefix(text.count / 2)))
+        try? await Task.sleep(for: .milliseconds(10))
+        save(text)
+        await settle()
+        drew("saved in two writes 10ms apart — half the file, then all of it")
+
+        // The same two writes with the quiet period between them, which no interval can coalesce.
+        // This is the state the acceptance criterion is about: what is on screen must not become
+        // the shipped direction because somebody's editor was caught halfway.
+        edit("--hit-bg", "--hit-bg: #14503c;")
+        save(String(text.prefix(text.count / 2)))
+        await settle()
+        drew("caught between the two writes — half a file on disk")
+        save(text)
+        await settle()
+        drew("and the second write lands")
+
+        // A file that is whole and still not a theme. Two complaints from one typo, because a
+        // mistyped name is both a token this build has never heard of and a hole where the real
+        // one should have been.
+        let typo = rewrite(text, "--ink-3", as: "--ink3: #8a9396;")
+        save(typo)
+        await settle()
+        drew("a typo — `--ink3` for `--ink-3`, which is a name and a hole")
+        save(typo)
+        await settle()
+        drew("the same typo saved again")
+
+        edit("--ink-3", "--ink-3: #1e2426;")
+        save(text)
+        await settle()
+        drew(
+            "a whole theme that misses the fence — the quiet tier at the page's own colour",
+            shot: "watch-unfenced")
+        save(text)
+        await settle()
+        drew("the same unfenced theme saved again")
+
+        try? FileManager.default.removeItem(at: file)
+        await settle()
+        drew("the file removed")
+
+        edit("--ink-3", "--ink-3: #8a9396;")
+        save(text)
+        await settle()
+        drew("and written back")
+
+        // The watch goes before the file does, so that clearing up is not itself an event this run
+        // reports on. The directory goes only when this run is the one that made it and nothing
+        // else ended up in it: `--theme-file` can point anywhere, and `deletingLastPathComponent`
+        // on a path somebody else chose is a directory this pass is not entitled to remove.
+        reload.stop()
+        try? FileManager.default.removeItem(at: file)
+        let scratch = file.deletingLastPathComponent()
+        let mine = scratch.lastPathComponent.hasPrefix("chat-search-watch-")
+        let empty = (try? FileManager.default.contentsOfDirectory(atPath: scratch.path))?.isEmpty
+        if mine, empty == true {
+            try? FileManager.default.removeItem(at: scratch)
+            print("  \(scratch.path) removed")
+        } else {
+            print("  \(file.path) removed")
+        }
+    }
+
+    /// The same file with one declaration rewritten, which is what an edit is.
+    ///
+    /// The first occurrence, which is the dark block — `--write-theme` writes `:root` before
+    /// `:root.light` — so what this changes is what `theme.dark` reads back. The whole replacement
+    /// line rather than a value, because two of the edits above change the token's *name*, which is
+    /// the commonest way a hand-typed file stops being a theme.
+    private static func rewrite(_ text: String, _ token: String, as line: String) -> String {
+        var lines = text.components(separatedBy: "\n")
+        guard
+            let at = lines.firstIndex(where: {
+                $0.trimmingCharacters(in: .whitespaces).hasPrefix(token + ":")
+            })
+        else { return text }
+        lines[at] = "  \(line)"
+        return lines.joined(separator: "\n")
+    }
+
+    /// Which file is at that path, as the number that says whether it is still the same one.
+    private static func node(_ url: URL) -> String {
+        var info = stat()
+        guard stat(url.path, &info) == 0 else { return "nothing at that path" }
+        return "inode \(info.st_ino), \(info.st_size) bytes"
+    }
+
     /// A key equivalent as AppKit would deliver it, minus the hardware.
     private static func press(_ character: String, code: UInt16, shift: Bool = false) -> NSEvent {
         NSEvent.keyEvent(

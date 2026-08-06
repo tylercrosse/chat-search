@@ -160,8 +160,18 @@ fi
 # Epics are containers, not work. A bead with no acceptance criteria has no
 # definition of done, so unattended it would burn a whole session only to come
 # back as an ambiguous-bead gate -- cheaper to skip it and say so.
+#
+# Triage is enforced HERE, and not by bd. The bd-worker contract makes every
+# bead a worker files carry --labels triage and says the label "keeps it out of
+# bd ready until a human or a triage sweep has looked at it" -- but `bd ready`
+# lists labelled beads by default and --exclude-label is opt-in, so for as long
+# as this line did not pass it the claim was simply untrue. chat-search-me9.8.40
+# was filed by a worker, never read by anyone, and dispatched to another worker.
+#
+# Which is the guard this file exists for rather than an edge of it: the beads a
+# worker filed are the ones least likely to have been looked at.
 
-CANDIDATES=$("$BD" ready --json --exclude-type=epic --limit 40 2>/dev/null | "$PY" -c '
+CANDIDATES=$("$BD" ready --json --exclude-type=epic --exclude-label triage --limit 40 2>/dev/null | "$PY" -c '
 import json, sys
 want = int(sys.argv[1])
 try:
@@ -174,10 +184,24 @@ for i in eligible[:want]:
     print("PICK\t" + i["id"] + "\t" + (i.get("title") or "")[:48])
 ' "$WORKERS" 2>/dev/null)
 
+# How much is being held back, asked separately rather than subtracted from the
+# selection above. --limit 40 caps that query, so excluding four beads just
+# pulls four more up from below the cap and the difference between the two
+# counts is zero however big the pile gets. This asks bd for the pile itself.
+HELD=$("$BD" list --label triage --status open --json 2>/dev/null | "$PY" -c '
+import json, sys
+try:
+    print(len(json.load(sys.stdin)))
+except Exception:
+    print(0)
+' 2>/dev/null) || HELD=0
+
 # Queue health belongs in the log. If eligible ever reaches zero this job goes
 # quiet forever, and a silent no-op every 5 hours looks identical to success.
+# The triage count is here for the same reason and not as a curiosity: work held
+# back invisibly is indistinguishable from work nobody filed.
 echo "$CANDIDATES" | grep '^FLOOR' | while IFS=$'\t' read -r _ ok bad; do
-  log "queue: $ok eligible, $bad ready but lacking acceptance criteria"
+  log "queue: $ok eligible, $bad ready but lacking acceptance criteria, ${HELD:-0} held in triage"
 done
 
 PICKS=$(echo "$CANDIDATES" | grep '^PICK' || true)

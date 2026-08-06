@@ -21,9 +21,13 @@ struct Options {
     /// the instrument that first took it.
     var measure = false
     var interval = Duration.milliseconds(100)
-    /// Re-measure the shipped tokens and exit. Also not a user affordance: it is the gate, and it
-    /// is a flag rather than a test because the Command Line Tools SDK has no test framework in it.
+    /// Re-measure every compiled-in direction and exit. Also not a user affordance: it is the gate,
+    /// and it is a flag rather than a test because the Command Line Tools SDK has no test
+    /// framework in it.
     var verifyTheme = false
+    /// Which direction to draw. The one flag here that *is* a preference — it sticks, where
+    /// `--size` and `--group` deliberately do not. See `ThemeChoice`.
+    var theme: String?
     /// Search, open the first result and draw the window to a PNG, then quit. The third
     /// non-affordance, and the only way to check the reader from a script: what it draws is a
     /// picture, and no exit code describes one.
@@ -38,6 +42,15 @@ struct Options {
     /// above: the row's column plan has to hold at several widths (`chat-search-me9.8.2`), and a
     /// window that always opens at one size makes checking that a manual drag nobody repeats.
     var size = CGSize(width: 900, height: 620)
+    /// Which axis the list opens grouped by. The same kind of affordance as `--size`: a grouped
+    /// list rebuilds sections on every keystroke where an ungrouped one rebuilds rows, and
+    /// `--measure` cannot take that number on a mode it has no way to enter.
+    var group = Grouping.none
+
+    /// Nobody is typing into this run. Both scripted modes stay out of the front, so they can be
+    /// run beside whatever a person is actually doing — and out of the query log, because their
+    /// queries are a benchmark's rather than a need somebody had. See `CsClient.driven`.
+    var scripted: Bool { measure || shot }
 }
 
 func parse(_ argv: [String]) -> Options {
@@ -57,23 +70,35 @@ func parse(_ argv: [String]) -> Options {
         case "--interval": if let v = next(), let n = Int(v) { o.interval = .milliseconds(n) }
         case "--measure": o.measure = true
         case "--size": if let v = next(), let size = parseSize(v) { o.size = size }
+        // An axis this build has no name for leaves the list ungrouped rather than guessing at
+        // one, for the reason `--size` ignores a malformed value: an instrument that quietly
+        // changes what it is measuring is worse than one that ignores you.
+        case "--group": if let v = next(), let axis = Grouping(rawValue: v) { o.group = axis }
         case "--verify-theme": o.verifyTheme = true
+        // Kept as typed rather than resolved here: a name this build does not carry gets a
+        // sentence on stderr from `ThemeChoice`, which is also where the remembered one is read,
+        // so there is one place that turns a name into a theme and one place that complains.
+        case "--theme": o.theme = next()
         case "--shot": o.shot = true
         case "--query": if let v = next() { o.shotQuery = v }
         case "--out": if let v = next() { o.shotPath = v }
         case "--longest": o.longest = true
         case "--help", "-h":
+            let names = Theme.directionNames.joined(separator: "|")
             print("""
                 chat-search [--db PATH] [--config PATH] [--bin PATH] [--limit N]
 
+                  --theme NAME         draw this direction, and remember it: \(names)
+                                       remembered in \(ThemeChoice.location)
                   --measure            type the measurement phrases and print keystroke→frame
                   --interval MS        milliseconds between simulated keystrokes (default 100)
-                  --verify-theme       re-measure the shipped tokens and exit
+                  --verify-theme       re-measure every compiled-in direction and exit
                   --shot               search, open the first result, write the window to --out
                   --query TEXT         what --shot searches for (default "borrow checker")
                   --out PATH           where --shot writes its PNG (default /tmp/chat-search.png)
                   --longest            --shot opens the longest conversation, not the best
                   --size WxH           open the window at this size (default 900x620)
+                  --group AXIS         open grouped by none|project|run|source (default none)
                 """)
             exit(0)
         default: break
@@ -97,7 +122,18 @@ let options = parse(Array(CommandLine.arguments.dropFirst()))
 
 // Before `cs` is looked for, and before there is a window: the tokens are checkable without an
 // index, and a gate that needed a built binary and a live archive would be a gate people skip.
-if options.verifyTheme { exit(ThemeCheck.run(.shipped)) }
+//
+// Every direction and not `.shipped`, because any of them can be chosen at launch and a picker
+// that offers an unmeasured palette is a fence with a gate left open. `as: .direction` is named
+// rather than defaulted, here and everywhere else: what is compiled into this binary is what the
+// project ships, and shipping is what makes these measurements binding (docs/DECISIONS.md ADR 25).
+// A token set that arrived some other way is a different promise.
+if options.verifyTheme { exit(ThemeCheck.run(Theme.directions, as: .direction)) }
+
+// Resolved once, here, and handed down. Not read from the environment's default by each view: the
+// default is what the build ships and this is what the person chose, and only one of those two is
+// allowed to be the answer once a choice exists.
+let theme = ThemeChoice.resolve(named: options.theme, remember: !options.scripted)
 
 guard let binary = CsClient.locate(binary: options.binary) else {
     FileHandle.standardError.write(
@@ -111,14 +147,20 @@ guard let binary = CsClient.locate(binary: options.binary) else {
 final class AppHost: NSObject, NSApplicationDelegate {
     let model: SearchModel
     let options: Options
+    /// The direction in force, injected at the root rather than reached for in a view. One
+    /// override is the whole of what several themes in one binary costs the views, which is what
+    /// the token seam was built before the views to buy (`chat-search-me9.8.8`).
+    let theme: Theme
     private var frames: FrameClock?
 
-    init(model: SearchModel, options: Options) {
+    init(model: SearchModel, options: Options, theme: Theme) {
         self.model = model
         self.options = options
+        self.theme = theme
     }
 
     func applicationDidFinishLaunching(_ note: Notification) {
+        model.group(by: options.group)
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: options.size),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -126,15 +168,15 @@ final class AppHost: NSObject, NSApplicationDelegate {
         window.title = "chat-search"
         // The one colour SwiftUI does not own. It shows through for a frame during a live resize,
         // and the system default is a grey nobody in this app chose.
-        window.backgroundColor = Theme.shipped.nsColor(.bg)
+        window.backgroundColor = theme.nsColor(.bg)
         window.center()
-        let hosting = NSHostingView(rootView: SearchView(model: model))
+        let hosting = NSHostingView(rootView: Shell(model: model).environment(\.theme, theme))
         window.contentView = hosting
         window.orderFrontRegardless()
         // A scripted run does not steal focus — `.accessory` above — which also keeps the number
         // comparable with `poc/swift/RESULTS.md` §1, taken the same way. A latency measured in a
         // frontmost app and one measured in a background app are not the same measurement.
-        if !scripted { NSApp.activate(ignoringOtherApps: true) }
+        if !options.scripted { NSApp.activate(ignoringOtherApps: true) }
 
         if options.shot {
             // A display link under `--shot` as well as under `--measure`: the drawer is driven
@@ -166,16 +208,24 @@ final class AppHost: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ app: NSApplication) -> Bool { true }
 
-    /// Nobody is typing into this run. Both scripted modes stay out of the front so they can be
-    /// run beside whatever a person is actually doing.
-    private var scripted: Bool { options.measure || options.shot }
+    /// The last thing this process does, and the only place §6's other event can be emitted.
+    ///
+    /// A window is what knows a query went unanswered, and it knows it right up to here: quit
+    /// with something in the box and nothing opened, and the log gets one `Search`. Without it
+    /// this app records only the searches that worked (`chat-search-pdw`).
+    func applicationWillTerminate(_ note: Notification) {
+        model.recordAbandonment()
+    }
 }
 
 let app = NSApplication.shared
-app.setActivationPolicy(options.measure || options.shot ? .accessory : .regular)
+app.setActivationPolicy(options.scripted ? .accessory : .regular)
 let host = AppHost(
-    model: SearchModel(client: CsClient(binary: binary, db: options.db, config: options.config),
+    model: SearchModel(
+        client: CsClient(
+            binary: binary, db: options.db, config: options.config, driven: options.scripted),
         limit: options.limit),
-    options: options)
+    options: options,
+    theme: theme)
 app.delegate = host
 app.run()

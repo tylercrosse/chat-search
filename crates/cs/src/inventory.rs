@@ -40,7 +40,7 @@ pub fn source_by_id<'a>(cfg: &'a Config, drift: &'a Drift, id: &str) -> Option<&
     cfg.sources.iter().chain(drift.unconfigured.iter()).find(|s| s.id == id)
 }
 
-/// The census: what is watched, with the index counts folded in if the index can be read.
+/// One read against the index, or `None` and a word about why.
 ///
 /// **An unreadable index costs the counts and nothing else.** A `cs status` that failed
 /// because there is no index yet would be useless on the run where it is needed most, and the
@@ -49,10 +49,13 @@ pub fn source_by_id<'a>(cfg: &'a Config, drift: &'a Drift, id: &str) -> Option<&
 /// — are already named by the `index_state` both commands report beside this, so a zero under
 /// either is unambiguous. The other two are not, and say so on stderr rather than letting a
 /// real corpus report itself as empty.
-pub fn census(db: &Path, watched: &[Watched]) -> Vec<cs_core::SourceCoverage> {
+fn counted<T>(
+    db: &Path,
+    read: impl FnOnce(&rusqlite::Connection) -> rusqlite::Result<T>,
+) -> Option<T> {
     match cs_core::open_for_read(db) {
-        Ok(reader) => match cs_core::inventory::of(&reader.conn, watched) {
-            Ok(inventory) => return inventory,
+        Ok(reader) => match read(&reader.conn) {
+            Ok(counts) => return Some(counts),
             Err(e) => eprintln!("counting conversations: {e} — the counts read 0"),
         },
         Err(e) => {
@@ -65,5 +68,37 @@ pub fn census(db: &Path, watched: &[Watched]) -> Vec<cs_core::SourceCoverage> {
             }
         }
     }
-    cs_core::inventory::join(watched, &[])
+    None
+}
+
+/// The census: what is watched, with the index counts folded in if the index can be read.
+pub fn census(db: &Path, watched: &[Watched]) -> Vec<cs_core::SourceCoverage> {
+    counted(db, |conn| cs_core::inventory::of(conn, watched))
+        .unwrap_or_else(|| cs_core::inventory::join(watched, &[]))
+}
+
+/// Every census a facet rail needs, through one connection.
+///
+/// Three reads rather than three opens: `cs facets` runs once per keystroke in the macOS app, and
+/// the rail is already a second process on that path (`chat-search-me9.8.5`).
+///
+/// The other two have no config half to fall back on, so an unreadable index leaves them empty —
+/// which `cs_core::facets` reads as no directories and four spans at zero, rather than as a
+/// corpus with no history.
+pub fn rails(
+    db: &Path,
+    watched: &[Watched],
+    dirs: usize,
+    now_ms: i64,
+) -> (Vec<cs_core::SourceCoverage>, cs_core::DirCensus, Vec<cs_core::DateCoverage>) {
+    counted(db, |conn| {
+        Ok((
+            cs_core::inventory::of(conn, watched)?,
+            cs_core::inventory::dirs(conn, dirs)?,
+            cs_core::inventory::dates(conn, now_ms)?,
+        ))
+    })
+    .unwrap_or_else(|| {
+        (cs_core::inventory::join(watched, &[]), cs_core::DirCensus::default(), Vec::new())
+    })
 }

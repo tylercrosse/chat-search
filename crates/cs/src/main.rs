@@ -88,6 +88,10 @@ enum Command {
         /// What to search for, filters included: `agent:claude,codex`, `-agent:codex`,
         /// `dir:!web-app`, `date:<3h`, `date:today`.
         ///
+        /// A value holding a space or a comma goes in double quotes — `dir:"~/Mobile
+        /// Documents"` — since without them whitespace ends the word and a comma ends the
+        /// value. Quote the value, not the whole token, and mind your shell's quoting too.
+        ///
         /// A filter value that names nothing selectable is reported rather than applied, and
         /// a half-typed one is searched as text — never an error.
         // clap renders the doc comment above as `--help`, so the reason lives down here
@@ -172,6 +176,28 @@ enum Command {
         /// different one.
         #[arg(long = "in")]
         kind: Option<String>,
+    },
+    /// Record that a search ended in nothing being opened.
+    ///
+    /// The other half of `cs pick`, for a client whose search runs in another process. A
+    /// `Search` with no `Pick` after it is the abandonment signal — the ranking showed nothing
+    /// worth opening — and it is the only thing this log ever learns that is not a success
+    /// (docs/TUI-DESIGN.md §6). A typeahead client cannot get one out of `cs search`, which
+    /// logs on the non-`--prefix` path only.
+    Abandon {
+        /// The search that was given up on. Same syntax as `cs search`.
+        // `allow_hyphen_values` for the reason `cs pick --query` needs it: `-agent:codex` is
+        // one of the DSL's two negation spellings, and a query this cannot carry is a query
+        // whose abandonment is silently never recorded.
+        #[arg(allow_hyphen_values = true)]
+        query: String,
+        #[arg(long)]
+        db: Option<PathBuf>,
+        #[arg(long)]
+        source: Option<String>,
+        /// How deep the list that was given up on went.
+        #[arg(long, default_value = "200")]
+        limit: i64,
     },
     /// What you have searched for, and what answered it.
     ///
@@ -315,6 +341,9 @@ fn main() -> Result<()> {
         Command::Facets { query: q, db, json } => facets(&config_path, db, &q, json),
         Command::Pick { conv_id, query: q, db, source, limit, quiet, kind } => {
             commands::pick(&config_path, db, &conv_id, &q, source.as_deref(), limit, quiet, kind.as_deref())
+        }
+        Command::Abandon { query: q, db, source, limit } => {
+            commands::abandon(&config_path, db, &q, source.as_deref(), limit)
         }
         Command::Needs { limit, json, log, driven, why } => {
             commands::needs(&config_path, log, limit, json, driven.as_deref(), why.as_deref())
@@ -936,7 +965,13 @@ fn facets(config_path: &PathBuf, db_path: Option<PathBuf>, text: &str, json: boo
     // anything below anyway. The two readings differ only in whether the final term expands,
     // which reaches `match_expr` and nothing the projection touches.
     let query = cs_core::Query::typeahead(text);
-    let rail = cs_core::facets::sources(&query, &inventory::census(&db, &watched));
+    // One clock for the whole reply, so that no two spans can be counted either side of a
+    // midnight and no chip can be labelled from a different day than the one it counted.
+    let (sources, dirs, dates) =
+        inventory::rails(&db, &watched, DIR_CHIPS, cs_core::now_ms());
+    let source_rail = cs_core::facets::sources(&query, &sources);
+    let dir_rail = cs_core::facets::dirs(&query, &dirs);
+    let date_rail = cs_core::facets::dates(&query, &dates);
 
     if json {
         println!(
@@ -947,25 +982,71 @@ fn facets(config_path: &PathBuf, db_path: Option<PathBuf>, text: &str, json: boo
                 // — the same field, for the same reason, as the search envelope's.
                 "query": query.raw(),
                 "index_state": cs_core::IndexState::of(&db).as_str(),
-                "sources": rail,
+                "sources": source_rail,
+                "dirs": dir_rail,
+                "dates": date_rail,
             })
         );
     } else {
-        println!("  {:<6} {:<14} {:>7}  {:<12} {}", "", "source", "convs", "coverage", "click");
-        let all = if rail.all.selected { "[all]" } else { " all " };
-        println!("  {all:<6} {:<14} {:>7}  {:<12} {:?}", "", "", "", rail.all.query);
-        for c in &rail.values {
-            let mark = match c.state {
-                cs_core::ChipState::Include => "[on]",
-                cs_core::ChipState::Exclude => "[not]",
-                cs_core::ChipState::Off => "",
-            };
-            println!(
-                "  {mark:<6} {:<14} {:>7}  {:<12} {:?}",
-                c.value, c.conversations, c.coverage, c.query
-            );
+        // Drawn in the order a client draws them: recency first, because `ended_at` answers for
+        // every conversation and `cwd` for a third of them (`poc/ui`'s sidebar orders by coverage
+        // rather than by how interesting the facet is).
+        section("when", date_rail.keyword, &format!("{} spans", date_rail.values.len()));
+        row(chip_mark(date_rail.all.selected), "any time", "", &date_rail.all.query);
+        for c in &date_rail.values {
+            row(mark(c.state), c.label, &c.conversations.to_string(), &c.query);
+        }
+
+        section("sources", source_rail.keyword, "config ∪ index");
+        row(chip_mark(source_rail.all.selected), "all sources", "", &source_rail.all.query);
+        for c in &source_rail.values {
+            let count = format!("{} {}", c.conversations, c.coverage);
+            row(mark(c.state), &c.value, &count, &c.query);
+        }
+
+        section(
+            "directories",
+            dir_rail.keyword,
+            &format!("{} of {} indexed · {} record none", dir_rail.values.len(), dir_rail.indexed, dir_rail.undirected),
+        );
+        row(chip_mark(dir_rail.all.selected), "anywhere", "", &dir_rail.all.query);
+        for c in &dir_rail.values {
+            row(mark(c.state), &c.value, &c.conversations.to_string(), &c.query);
         }
     }
     Ok(())
+}
+
+/// How many directories the rail carries.
+///
+/// A rail rather than a list. `chat-search-6eb.26` measured a large share of this corpus's
+/// directories to be per-conversation scratch dirs, so the tail is worth counting and not worth
+/// drawing — and `indexed` beside the chips says how much of it was left out.
+const DIR_CHIPS: usize = 12;
+
+fn section(label: &str, keyword: &str, meta: &str) {
+    println!("\n{label}  {keyword} · {meta}");
+}
+
+/// One chip. The click is last because a path can be wider than any column, and the column that
+/// then runs on is the one nobody is reading down.
+fn row(mark: &str, value: &str, count: &str, click: &str) {
+    println!("  {mark:<5} {value:<52} {count:>13}  {click:?}");
+}
+
+fn mark(state: cs_core::ChipState) -> &'static str {
+    match state {
+        cs_core::ChipState::Include => "[on]",
+        cs_core::ChipState::Exclude => "[not]",
+        cs_core::ChipState::Off => "",
+    }
+}
+
+fn chip_mark(selected: bool) -> &'static str {
+    if selected {
+        "[on]"
+    } else {
+        ""
+    }
 }
 

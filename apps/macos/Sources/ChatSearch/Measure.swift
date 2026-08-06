@@ -72,7 +72,8 @@ enum Measure {
     @MainActor
     static func typing(model: SearchModel, frames: FrameClock, interval: Duration) async {
         print("keystroke → frame, on the promoted app. \(machineLine())")
-        print("  \(fmt(interval.ms)) ms per character, no debounce, one `cs search --json` each\n")
+        print("  \(fmt(interval.ms)) ms per character, no debounce, one `cs search --json` each")
+        print("  \(drivenLine())\n")
 
         for phrase in phrases {
             model.query = ""
@@ -111,6 +112,7 @@ enum Measure {
         model: SearchModel, window: NSWindow, query: String, to path: String,
         longest: Bool = false, frames: FrameClock? = nil
     ) async {
+        print(drivenLine())
         model.query = query
         model.queryChanged()
         try? await Task.sleep(for: .seconds(2))
@@ -158,6 +160,32 @@ enum Measure {
             + (model.reader.conv == nil
                 ? "closed" : "still open on \(model.reader.transcript?.count ?? 0) messages"))
         print("  \(after) \(capture(window, to: after))")
+
+        // The same answer, cut three ways. A frame each, because a grouping is exactly the kind of
+        // thing that has no number: whether a residue group of 41 rows reads as information or as
+        // a dumping ground is a question about a picture. The counts are printed beside them for
+        // the half a picture cannot state — which axis placed how much, and how much it could not.
+        model.query = query
+        model.queryChanged()
+        try? await Task.sleep(for: .seconds(2))
+        for axis in Grouping.allCases where axis != .none {
+            model.group(by: axis)
+            try? await Task.sleep(for: .milliseconds(400))
+            let residue = model.groups.first(where: \.isResidue)?.items.count ?? 0
+            let file = path.replacingOccurrences(of: ".png", with: "-by-\(axis.rawValue).png")
+            print("  by \(axis.rawValue) → \(model.groups.count) groups over "
+                + "\(model.conversations.count) rows, \(residue) in the residue")
+            print("  \(file) \(capture(window, to: file))")
+        }
+        model.group(by: .none)
+
+        // The second view. Empty by design and not by accident — there is no store to author into
+        // (`chat-search-6eb.14`) — so what there is to check is that every shelf says which.
+        model.surface = .library
+        try? await Task.sleep(for: .milliseconds(400))
+        let library = path.replacingOccurrences(of: ".png", with: "-library.png")
+        print("  library → \(capture(window, to: library)) \(library)")
+        model.surface = .search
     }
 
     /// The scroll relationship, driven from both ends.
@@ -323,6 +351,19 @@ enum Measure {
         let sorted = values.sorted()
         let rank = max(0, min(sorted.count - 1, Int((q * Double(sorted.count)).rounded(.up)) - 1))
         return sorted[rank]
+    }
+
+    /// Printed by both scripted modes, because a run that deliberately records nothing should be
+    /// the one saying so.
+    ///
+    /// This matters more since the app started recording abandonments. A scripted run quits with
+    /// its last phrase still in the box and nothing opened, which is the exact shape of a person
+    /// giving up on a search — so without `CsClient.driven` every `--measure` would append a need
+    /// nobody had, to a file that cannot be rebuilt from anything. Nothing downstream could tell
+    /// those lines apart afterwards either: `cs_core::querylog::Event::Driven` exists because
+    /// that mistake is only ever fixable by hand, and this run avoids making it.
+    static func drivenLine() -> String {
+        "nothing here reaches queries.jsonl: CS_LOG_QUERIES=0 on every `cs` this run spawns"
     }
 
     /// Printed with the numbers. This is a working laptop with browsers and several agents on it,

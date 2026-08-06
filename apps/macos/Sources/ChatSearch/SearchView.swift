@@ -2,10 +2,12 @@ import CsKit
 import CsTheme
 import SwiftUI
 
-/// A search field, a facet rail, a result list, a reader, and a way back into a conversation.
+/// A search field, a grouping control, a facet rail, a result list, a reader, and a way back into
+/// a conversation.
 ///
-/// The row's anatomy is `ResultRow` and the drawer is `ReaderView`; what lives here is the seam
-/// between them — selection, opening, and where the reader sits beside the results.
+/// The row's anatomy is `ResultRow`, the drawer is `ReaderView`, the group head is `GroupHeader`;
+/// what lives here is the seam between them — selection, opening, and where the reader sits beside
+/// the results.
 ///
 /// Nothing below names a colour, a size or a face. Every one is a token off `\.theme`
 /// (`chat-search-me9.8.8`), which is what makes a change of direction a change to one generated
@@ -19,21 +21,17 @@ struct SearchView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            field
+            searchBar
             rule
             indexBanner
             unappliedBanner
             openBanner
             HStack(spacing: 0) {
-                SourceRail(model: model)
+                Rail(model: model)
                 Rectangle().fill(theme.color(.rule)).frame(width: 1)
                 content
             }
-            rule
-            footer
         }
-        .frame(minWidth: 720, minHeight: 480)
-        .background(theme.color(.bg))
         .onAppear { focused = true }
         // The fallback half of the arrangement below: this fires only when the focused view did
         // not handle Return, which is exactly the case where a click has moved focus into the
@@ -64,6 +62,74 @@ struct SearchView: View {
             })
     }
 
+    /// The group control leads the query it modifies, which is `poc/ui`'s arrangement and its
+    /// reasoning: it reads in the order it applies — group by project, *then* narrow with the
+    /// query — where on the right it sat between the query and the count and read as status.
+    private var searchBar: some View {
+        HStack(spacing: 12) {
+            groupControl
+            field
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+    }
+
+    /// The axis, as five chips of which four are offered.
+    ///
+    /// **`topic` is drawn and cannot be clicked**, which is the prototype's rule for a narrowing
+    /// with no grammar behind it — dashed, not hidden and not faked. Hiding it would say this
+    /// corpus has four axes; drawing it live would need a taxonomy that is a `poc/ui` export
+    /// rather than an index fact. A dashed chip with the reason on it says the true thing, which
+    /// is that the axis exists and this wire cannot carry it.
+    private var groupControl: some View {
+        HStack(spacing: 2) {
+            Text("GROUP")
+                .font(theme.font(.micro, .mono))
+                .tracking(1.4)
+                .foregroundStyle(theme.color(.ink3))
+                .padding(.trailing, 3)
+            ForEach(Grouping.allCases) { axis in
+                Button {
+                    model.group(by: axis)
+                    // A click anywhere but the field is a click that took focus off it, and the
+                    // arrangement this app is built on is one box that never gives it up.
+                    focused = true
+                } label: {
+                    chip(axis.label, on: model.grouping == axis, dashed: false)
+                }
+                .buttonStyle(.plain)
+                .help(axis.note)
+            }
+            chip("topic", on: false, dashed: true)
+                .opacity(0.55)
+                .help(
+                    "a seeded taxonomy over the corpus — 26 seeds, and 37% of conversations match "
+                        + "none of them. Derived by poc/ui/export.py, not an index fact, and not "
+                        + "on this wire (chat-search-me9.18)")
+        }
+        .fixedSize()
+    }
+
+    /// `poc/ui`'s `.group button`: monospaced meta in a hairline box, `--sel` on `--sel-bg` when it
+    /// is the axis in force.
+    private func chip(_ text: String, on: Bool, dashed: Bool) -> some View {
+        Text(text)
+            .font(theme.font(.meta, .mono, weight: on ? .semibold : .regular))
+            .foregroundStyle(theme.color(on ? .sel : .ink3))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(
+                RoundedRectangle(cornerRadius: theme.metric(.r3))
+                    .fill(on ? theme.color(.selBg) : .clear))
+            .overlay(
+                RoundedRectangle(cornerRadius: theme.metric(.r3))
+                    .strokeBorder(
+                        theme.color(on ? .sel : .rule2),
+                        style: StrokeStyle(lineWidth: 1, dash: dashed ? [2.5, 2.5] : []))
+                    .opacity(on || dashed ? 1 : 0))
+            .contentShape(Rectangle())
+    }
+
     private var field: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(theme.color(.ink3))
@@ -89,8 +155,6 @@ struct SearchView: View {
                 .onKeyPress(.upArrow) { model.moveSelection(by: -1); return .handled }
                 .onKeyPress(.downArrow) { model.moveSelection(by: 1); return .handled }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
     }
 
     /// The half of the index states that arrive *with* an answer, and therefore cannot be drawn
@@ -238,37 +302,119 @@ struct SearchView: View {
         }
     }
 
+    /// One list, cut along whichever axis is in force. **Not two lists and not two views**: the
+    /// rows, the row component, the selection and the drawer are the same in both arrangements,
+    /// which is the whole of `chat-search-4ar.10` — three of the prototype's views were `GROUP BY`
+    /// over one set, so what was a place became a setting.
+    ///
     /// `List` and not `ScrollView { LazyVStack }`: `chat-search-me9.22` measured the whole corpus
     /// through all three containers and this is the only one that recycles — 5.2 MB scrolling
     /// 3,200 rows against LazyVStack's 65.6 MB and plain VStack's 566 MB. The question is
-    /// answered, so the app does not offer the others.
+    /// answered, so the app does not offer the others. Sections keep that: a grouped list is one
+    /// `List` with headers in it, not a stack of lists.
     private var results: some View {
-        List(model.conversations, selection: opened) { conv in
-            // `marks` travels with the rows it describes: the offsets in a snippet are only
-            // readable in the units the envelope that carried them named.
-            ResultRow(conv: conv, marks: model.marks)
-                .listRowInsets(
-                    EdgeInsets(
-                        top: theme.metric(.rowPaddingTop),
-                        leading: theme.metric(.rowPaddingX),
-                        bottom: theme.metric(.rowPaddingBottom),
-                        trailing: theme.metric(.rowPaddingX))
-                )
-                // The keyboard cursor is `--sel-bg` and not the system's selection colour,
-                // which is chosen somewhere this app cannot see. A click synchronises this id
-                // through `opened` before opening the reader.
-                .listRowBackground(theme.color(model.selected == conv.id ? .selBg : .bg))
-                // Double-click and Enter reopen externally; a single click opens the reader.
-                .onTapGesture(count: 2) { model.open(conv) }
-                .contextMenu { openMenu(conv) }
+        VStack(spacing: 0) {
+            if model.grouping != .none { groupKey }
+            List(selection: opened) {
+                if model.grouping == .none {
+                    ForEach(model.conversations) { row($0) }
+                } else {
+                    ForEach(model.groups) { group in
+                        Section {
+                            ForEach(group.items) { row($0) }
+                        } header: {
+                            GroupHeader(group: group, axis: model.grouping)
+                                .listRowInsets(EdgeInsets())
+                                .listRowSeparator(.hidden)
+                        }
+                    }
+                }
+            }
+            .listStyle(.plain)
+            // The list is the page, so it takes the page's ground rather than the system's list
+            // ground. `.plain` and not `.inset` for the same reason the insets below are set by
+            // hand: the row's margin is `--row-px`, which a direction gets to move.
+            .scrollContentBackground(.hidden)
+            .background(theme.color(.bg))
         }
-        .listStyle(.plain)
-        // The list is the page, so it takes the page's ground rather than the system's list
-        // ground. `.plain` and not `.inset` for the same reason the insets above are set by hand:
-        // the row's margin is `--row-px`, which a direction gets to move.
-        .scrollContentBackground(.hidden)
-        .background(theme.color(.bg))
         .frame(minWidth: 280)
+    }
+
+    /// One row, drawn identically grouped and ungrouped.
+    private func row(_ conv: Conversation) -> some View {
+        // `marks` travels with the rows it describes: the offsets in a snippet are only readable
+        // in the units the envelope that carried them named.
+        ResultRow(conv: conv, marks: model.marks)
+            .listRowInsets(
+                EdgeInsets(
+                    top: theme.metric(.rowPaddingTop),
+                    leading: theme.metric(.rowPaddingX),
+                    bottom: theme.metric(.rowPaddingBottom),
+                    trailing: theme.metric(.rowPaddingX))
+            )
+            // The keyboard cursor is `--sel-bg` and not the system's selection colour, which is
+            // chosen somewhere this app cannot see. A click synchronises this id through `opened`
+            // before opening the reader.
+            .listRowBackground(theme.color(model.selected == conv.id ? .selBg : .bg))
+            // Double-click and Enter reopen externally; a single click opens the reader.
+            .onTapGesture(count: 2) { model.open(conv) }
+            .contextMenu { openMenu(conv) }
+    }
+
+    /// What the axis did to this answer, above the list it did it to.
+    ///
+    /// The prototype's `.ribbon-key`, and it exists for the residue: a count of groups says
+    /// nothing about the rows that landed in none of them, and on `project` that is two thirds of
+    /// the corpus. It also states the set being grouped — the rows in hand, which is the `--limit`
+    /// window of the answer and not the corpus — because a group header showing `12` cannot say
+    /// which of the two it counted.
+    private var groupKey: some View {
+        // Three facts, in the order they may be given up in. The reader pane leaves this column
+        // ~400pt at the window's floor, which is about seventy characters of the micro face, so
+        // the last of them elides — and every one of them carries the whole sentence on hover.
+        HStack(spacing: 12) {
+            ViewThatFits(in: .horizontal) {
+                Text("\(model.groups.count) groups · \(model.conversations.count) rows in hand")
+                    .fixedSize()
+                Text("\(model.groups.count) groups · \(model.conversations.count) rows")
+                    .fixedSize()
+            }
+            .help(
+                "grouped over the rows this query returned, which is the --limit window of the "
+                    + "answer and not the corpus")
+            .layoutPriority(1)
+            if let residue = model.groups.first(where: \.isResidue),
+                let named = model.grouping.residue
+            {
+                // The count inline and the reason on hover: `codex and claude-code carry one,
+                // chatgpt and gemini-cli never do` is what makes the number mean something, and
+                // it is three times the length of the line it would have to sit in.
+                Text("\(residue.items.count) with \(named.label)")
+                    .foregroundStyle(theme.color(.hit))
+                    .help(named.why)
+                    .layoutPriority(2)
+            }
+            // Whole or not at all, as in the group head: half a measurement is not a measurement,
+            // and the chip that turned this axis on carries the same sentence on hover.
+            ViewThatFits(in: .horizontal) {
+                Text(model.grouping.note)
+                    .foregroundStyle(theme.color(.ink3).opacity(0.7))
+                    .fixedSize()
+                Color.clear.frame(width: 0, height: 0)
+            }
+            Spacer(minLength: 0)
+        }
+        .font(theme.font(.micro, .mono))
+        .tracking(0.6)
+        .foregroundStyle(theme.color(.ink3))
+        .lineLimit(1)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.color(.bg))
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(theme.color(.rule)).frame(height: 1)
+        }
     }
 
     /// Where this conversation can be reopened, best first — and, when that list is empty, the
@@ -324,32 +470,5 @@ struct SearchView: View {
                 .strokeBorder(theme.color(.rule2), style: StrokeStyle(lineWidth: 1, dash: [3, 3])))
         .padding(40)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-
-    private var footer: some View {
-        HStack(spacing: 14) {
-            // `total` is only a number when `settled`; otherwise it is a floor, and a poor one —
-            // the typeahead `the` came back at 1,025 against a true 4,243 — so it is ranged
-            // rather than printed. Saying "1,025 matches" when the answer is four times that is
-            // the one thing this field exists to stop a client doing.
-            Text("\(model.conversations.count) of \(model.settled ? "\(model.total)" : "\(model.total)+")")
-                .foregroundStyle(theme.color(.ink2))
-            Spacer()
-            // Kept because it costs nothing: `cs` measures its own query time and the client
-            // already has a clock around the spawn, so the two numbers are decoded rather than
-            // taken. A latency you cannot see while you type is a latency you will argue about.
-            if let t = model.lastTiming {
-                Text(String(format: "%.0f ms", t.total))
-                Text(String(format: "%.1f in sqlite", t.serverMs))
-            }
-        }
-        // Monospaced at `--fs-meta`, which is the mockup's rule for everything tabular: a number
-        // that changes every keystroke has to stop the line reflowing while you read it.
-        .font(theme.font(.meta, .mono))
-        .foregroundStyle(theme.color(.ink3))
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(theme.color(.panel))
     }
 }

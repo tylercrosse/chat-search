@@ -125,7 +125,7 @@ public enum ColorToken: String, CaseIterable, Sendable {
 
     /// The kind ramp: four categories on an even luminance ramp against `mapBg`, because hue is
     /// the channel that degrades fastest at the ~2px the bands are drawn at. `ThemeCheck` holds
-    /// the ratios; `poc/ui/NOTES.md` §3 is the argument.
+    /// the ratios; `poc/ui/NOTES.md` §2 is the argument.
     case kUser = "--k-user"
     case kAgent = "--k-agent"
     case kReason = "--k-reason"
@@ -310,6 +310,25 @@ public struct RGB: Sendable, Equatable {
         let a = luminance, b = other.luminance
         return (max(a, b) + 0.05) / (min(a, b) + 0.05)
     }
+}
+
+// MARK: - Choosing one
+
+extension Theme {
+    /// The compiled-in direction with this name, or nil if this build does not carry it.
+    ///
+    /// The only place a name becomes a theme, so `--theme`, a remembered preference and anything
+    /// later that offers a list all resolve the same way — and all of them are limited to what
+    /// `directions` actually holds. Nil rather than a fallback: what to do about a name this build
+    /// has never heard of is the caller's to say out loud, and a silent substitution is how a typo
+    /// becomes "the flag does nothing".
+    public static func direction(named name: String) -> Theme? {
+        directions.first { $0.name == name }
+    }
+
+    /// Every direction's name, in the order the generated file declares them. For a `--help` line
+    /// or a complaint about a name that missed.
+    public static var directionNames: [String] { directions.map(\.name) }
 }
 
 // MARK: - The environment

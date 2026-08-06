@@ -369,6 +369,56 @@ projects the rail here and hands each chip the query text clicking it produces. 
 Swift side assembles an `agent:` token, which is what keeps this section's rule true across the
 language boundary rather than only inside it. The shape is in docs/JSON-CONTRACT.md.
 
+**The other two facets, 2026-08-05 (`1ld`).** `agent:` reached a rail on one verb because its
+values are enum members that union. The other two are not, and the differences are decisions
+about the grammar, so they live in `cs_core::query` with it rather than in either client:
+
+- **A second `date:` chip replaces the first.** Date tokens *intersect* — that is what lets two
+  bounds describe a range — so a rail that widened would hand back `date:today date:>1mo`, whose
+  overlap is empty. `Facet::tokens_intersect` is the rule, one line beside the keyword, so
+  `Query::toggling` stays one verb and no client learns that the facets differ.
+- **A `date:` chip is lit by the window, not by the text.** `date:week` and `date:<7d` are one
+  selection written two ways. `Query::selection` answers for `date:` now — it read only
+  `FilterKind::Names` before, so a date chip could never light and toggling one always added.
+- **One `dir:` token lights every directory beneath it**, because `dir:` is a substring in the
+  SQL. Comparison for every rail goes through `Facet::selects`, which states each facet's own
+  comparison once; clicking a lit directory off removes whatever was lighting it.
+- **A directory whose click cannot be written is not offered.** The click is reparsed and dropped
+  if the round trip does not name it. The chips are `cwd`s and not project names: `6eb.26` was
+  closed by its own measurements, and what it leaves is the column `dir:` already selects on.
+
+The `dir:` rail is the busiest twelve of 128 directories, and carries both that number and the
+3,303 conversations recording none — `6eb.26`'s finding that a facet two thirds of the corpus
+cannot answer has to say so rather than look like missing data.
+
+**Quoting, 2026-08-05 (`me9.8.16`).** A `dir:` token can now carry a path with a space or a comma:
+`dir:"/Users/t/Mobile Documents"` is one token naming one directory. Without it whitespace ended
+the word and a comma ended the value, so that path parsed as the filter `dir:/users/t/mobile`
+*plus* the free term `documents` — it filtered, it did not say so, and it looked like it had
+worked. It is what this section already recorded fast-resume supporting, and it is why the rail
+above had a directory it could count and not offer.
+
+Three rules and no more: inside a quoted run whitespace and commas are ordinary characters; `""`
+inside one is a literal quote, which is the doubling `Query::match_expr` already does for FTS5
+rather than a second escaping scheme to learn; an unterminated run reaches the end of the text,
+because half-typed is the normal state of a typeahead and parsing may not fail. **Quoting is
+lexical, not semantic** — a quoted run of *free text* tokenises into exactly the terms it did
+unquoted, so this buys no phrase search and moves no ranking, and all 31 pinned expressions in
+`query.rs` are unchanged by it. That bound is what let a change to the word splitter be a bug fix.
+
+The rewriters quote on the way out only where the value would otherwise end early, because the box
+is the one place a filter is visible and `dir:"/x/y"` where `dir:/x/y` would do is the bar
+restyling text the user also types in. `facets::dirs` did not change: its round-trip check was
+written as the grammar's own reading rather than a list of forbidden characters, so the directory
+it used to drop now passes it, and what is left is a guard with no counterexample.
+
+**What quoting does not buy, and what it costs a client.** There is no phrase search: `"deep
+learn"` still ranks as two terms, and a future phrase operator would be a *semantic* reading of
+the same quotes rather than an extension of this one. The syntax highlighting this section
+specifies has a case it did not have — an open run, which is a value still being typed and not an
+error — and the ghost-text completion of a `dir:` value now has to quote what it inserts. Both are
+`cs_core::query`'s rules to state and neither is written yet.
+
 **Done, 2026-08-01 (`me9.16`).** `App` has no source field: a chip click calls
 `Query::toggling`, which returns the query *text* with the `agent:` token added or taken back
 out, and the bar draws itself from `Query::selection`. So a source chosen from the bar is

@@ -167,13 +167,34 @@ pub struct SearchOptions {
     ///
     /// Off by default because it is the one field whose cost scales with the *conversations*
     /// returned rather than with the matches in them: it reads every head-path message of
-    /// every row. Measured against the real index, it adds 4–30 ms at the 20–50 rows a
-    /// terminal holds and 205 ms at 354 rows for a broad prefix — and the TUI, which is the
-    /// caller that runs this on every keystroke, draws [`match_density`] rather than a band
-    /// strip and would be paying that for nothing.
+    /// every row, which at the TUI's own limit of 100 is 10k–58k messages per keystroke.
     ///
-    /// A covering index would make it close to free and let this flag go away; that is
-    /// chat-search-me9.26, filed with these numbers.
+    /// **It stays a flag, and that was decided with the covering index in place rather than
+    /// before it** (chat-search-me9.26). `idx_message_reading` covers this query and did what
+    /// it was built for — the constant fell from ~520 ns per message to ~180 — but the work is
+    /// still proportional to the messages read, so what is left is real. Measured in-process
+    /// at limit 100 against 4,490 conversations / 207,857 messages, medians of 10 alternating
+    /// runs on one connection, which is what the TUI holds:
+    ///
+    /// ```text
+    ///                          search    +shape         without the index
+    /// timezone         49 rows  0.41  ->   2.22 ms      0.47 ->  5.88 ms
+    /// borrow checker   72 rows  0.56  ->   3.14 ms      0.58 ->  8.47 ms
+    /// schema migration 67 rows  0.75  ->   4.91 ms      0.84 -> 13.46 ms
+    /// commits         100 rows  6.88  ->  15.57 ms      6.91 -> 31.25 ms
+    /// the             100 rows 75.24  ->  85.00 ms     76.79 -> 107.20 ms
+    /// ```
+    ///
+    /// The absolute cost is small and it is not the argument. An ordinary query at that limit
+    /// searches in 0.4–0.8 ms, so filling the shape unconditionally would make a keystroke
+    /// **5–7× longer** — for a strip the TUI does not draw, since it draws [`match_density`]
+    /// instead. The multiple is worst exactly where the search is already fast; the broad
+    /// queries that cost the most in milliseconds are the ones where the shape is a rounding
+    /// error. A default chosen for the broad case would be paid for on every other one.
+    ///
+    /// So the surface that draws the strip asks for it (`cs search --json`), and the surface
+    /// that cannot use it does not pay. What changed is that the flag is now a measured
+    /// choice rather than a placeholder waiting on an index.
     pub shape: bool,
 }
 
@@ -908,6 +929,22 @@ pub struct Group {
     pub hits: Vec<Hit>,
 }
 
+/// The shape query, named so the test that pins its plan reads the statement [`kind_runs`]
+/// runs rather than a copy of it.
+///
+/// The columns are the whole point and a copy would not notice losing them: every one of
+/// these sits in `idx_message_reading`, which is what keeps this an index-only read. Adding a
+/// fourth would drop it back to walking the table, and the difference does not show up as a
+/// failure — only as a slower keystroke that nothing complains about.
+pub(crate) fn kind_runs_sql() -> String {
+    format!(
+        "SELECT role, kind, is_error FROM message
+         WHERE conv_id = ?1 AND on_head_path = 1
+         {}",
+        crate::blocks::READING_ORDER
+    )
+}
+
 /// One conversation's shape — see [`Group::kind_runs`].
 ///
 /// Three narrow columns and no `text`. That matters more than it looks: `message` stores its
@@ -918,12 +955,7 @@ pub struct Group {
 /// an `IN (...)` list sized to the result count would be a new statement per query and would
 /// lose the cache on every keystroke.
 fn kind_runs(conn: &Connection, conv_id: &str) -> rusqlite::Result<Vec<crate::blocks::Run>> {
-    let mut stmt = conn.prepare_cached(&format!(
-        "SELECT role, kind, is_error FROM message
-         WHERE conv_id = ?1 AND on_head_path = 1
-         {}",
-        crate::blocks::READING_ORDER
-    ))?;
+    let mut stmt = conn.prepare_cached(&kind_runs_sql())?;
     let rows = stmt
         .query_map(params![conv_id], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)? != 0))

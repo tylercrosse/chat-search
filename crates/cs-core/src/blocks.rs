@@ -239,6 +239,22 @@ impl Block {
     }
 }
 
+/// The transcript read, named so the test that pins its plan reads the statement [`load`] runs
+/// rather than a copy of it.
+///
+/// [`READING_ORDER`] is shared rather than repeated because the shape on a search row has to
+/// come out in the same order as this. Unlike the shape's query this one selects `text`, so it
+/// can never be index-only — what `idx_message_reading` buys here is the ordering, which is
+/// the temp b-tree it used to build over every message of the conversation before returning
+/// the first one.
+pub(crate) fn load_sql() -> String {
+    format!(
+        "SELECT id, role, kind, seq, on_head_path, text, is_sidechain, thread_key, is_error
+         FROM message WHERE conv_id = ?1 AND on_head_path = 1
+         {READING_ORDER}"
+    )
+}
+
 /// Read one conversation's messages, with `terms` located in each.
 ///
 /// Head path only. A message edited away is still searchable and still indexed, but returning it
@@ -249,13 +265,7 @@ impl Block {
 /// caller marks exactly what the ranker matched, trailing prefix star included. An empty slice
 /// marks nothing, which is the honest state for a query that was never run.
 pub fn load(conn: &Connection, conv_id: &str, terms: &[String]) -> rusqlite::Result<Vec<Block>> {
-    // [`READING_ORDER`] carries why this is not `ORDER BY seq`, and is shared rather than
-    // repeated because the shape on a search row has to come out in the same order as this.
-    let mut stmt = conn.prepare_cached(&format!(
-        "SELECT id, role, kind, seq, on_head_path, text, is_sidechain, thread_key, is_error
-         FROM message WHERE conv_id = ?1 AND on_head_path = 1
-         {READING_ORDER}"
-    ))?;
+    let mut stmt = conn.prepare_cached(&load_sql())?;
     let mut blocks = stmt
         .query_map(rusqlite::params![conv_id], |r| {
             Ok(Block {

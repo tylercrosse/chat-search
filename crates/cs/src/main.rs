@@ -82,6 +82,26 @@ enum Command {
         /// whenever stdin or stdout is not a terminal, so `eval "$(cs tui)"` still works.
         #[arg(long)]
         print: bool,
+        /// Draw frames to text files under `--out` and exit, without entering the terminal.
+        ///
+        /// Not a user affordance: it is how a change to the TUI gets *shown* in a pull request
+        /// rather than described. The Swift app's `--shot` writes PNGs because its frames are
+        /// pixels; this writes text because a terminal frame already is text, which is what
+        /// lets it run with no display at all. `docs/PULL-REQUESTS.md`.
+        #[arg(long)]
+        shot: bool,
+        /// What `--shot` searches for. Ignored otherwise.
+        #[arg(long, default_value = "borrow checker")]
+        query: String,
+        /// Where `--shot` writes its frames. One file per frame.
+        #[arg(long, default_value = "/tmp/chat-search-tui")]
+        out: PathBuf,
+        /// The terminal size `--shot` draws at.
+        ///
+        /// Fixed rather than inherited, because a frame taken at whatever the author's window
+        /// happened to be is not comparable with the one taken before the change.
+        #[arg(long, default_value = "140x40")]
+        size: String,
     },
     /// Search indexed conversations.
     Search {
@@ -374,8 +394,12 @@ fn main() -> Result<()> {
         Command::Index { db, tool_text_limit, json } => {
             commands::index(&config_path, db, tool_text_limit, json)
         }
-        Command::Tui { db, source, limit, print } => {
-            tui::run(&config_path, db, source.as_deref(), limit, print)
+        Command::Tui { db, source, limit, print, shot, query: q, out, size } => {
+            if shot {
+                tui::shot(&config_path, db, source.as_deref(), limit, &q, &out, &size)
+            } else {
+                tui::run(&config_path, db, source.as_deref(), limit, print)
+            }
         }
         Command::Search { query: q, limit, db, source, tools, include_off_path, prefix, nested, flat, json } => {
             commands::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)

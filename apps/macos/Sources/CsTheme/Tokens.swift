@@ -85,11 +85,11 @@ extension Theme {
         ]),
         type: TypeScale(
             sizes: [
-                .head: 13,  // --fs-head
-                .body: 12.5,  // --fs-body
-                .sub: 11.5,  // --fs-sub
-                .meta: 10,  // --fs-meta
-                .micro: 9,  // --fs-micro
+                .head: 14,  // --fs-head
+                .body: 13.5,  // --fs-body
+                .sub: 12.5,  // --fs-sub
+                .meta: 11,  // --fs-meta
+                .micro: 10,  // --fs-micro
             ],
             faces: [
                 .ui: .default,  // --ui
@@ -181,11 +181,11 @@ extension Theme {
         ]),
         type: TypeScale(
             sizes: [
-                .head: 13,  // --fs-head
-                .body: 13,  // --fs-body
-                .sub: 11.5,  // --fs-sub
-                .meta: 10,  // --fs-meta
-                .micro: 9,  // --fs-micro
+                .head: 14,  // --fs-head
+                .body: 14,  // --fs-body
+                .sub: 12.5,  // --fs-sub
+                .meta: 11,  // --fs-meta
+                .micro: 10,  // --fs-micro
             ],
             faces: [
                 .ui: .serif,  // --ui
@@ -277,11 +277,11 @@ extension Theme {
         ]),
         type: TypeScale(
             sizes: [
-                .head: 12.5,  // --fs-head
-                .body: 12,  // --fs-body
-                .sub: 11,  // --fs-sub
-                .meta: 9.5,  // --fs-meta
-                .micro: 8.5,  // --fs-micro
+                .head: 13.5,  // --fs-head
+                .body: 13,  // --fs-body
+                .sub: 12,  // --fs-sub
+                .meta: 10.5,  // --fs-meta
+                .micro: 9.5,  // --fs-micro
             ],
             faces: [
                 .ui: .monospaced,  // --ui
@@ -373,11 +373,11 @@ extension Theme {
         ]),
         type: TypeScale(
             sizes: [
-                .head: 13,  // --fs-head
-                .body: 12.5,  // --fs-body
-                .sub: 11.5,  // --fs-sub
-                .meta: 10,  // --fs-meta
-                .micro: 9,  // --fs-micro
+                .head: 14,  // --fs-head
+                .body: 13.5,  // --fs-body
+                .sub: 12.5,  // --fs-sub
+                .meta: 11,  // --fs-meta
+                .micro: 10,  // --fs-micro
             ],
             faces: [
                 .ui: .default,  // --ui
@@ -469,11 +469,11 @@ extension Theme {
         ]),
         type: TypeScale(
             sizes: [
-                .head: 13,  // --fs-head
-                .body: 12.5,  // --fs-body
-                .sub: 11.5,  // --fs-sub
-                .meta: 10,  // --fs-meta
-                .micro: 9,  // --fs-micro
+                .head: 14,  // --fs-head
+                .body: 13.5,  // --fs-body
+                .sub: 12.5,  // --fs-sub
+                .meta: 11,  // --fs-meta
+                .micro: 10,  // --fs-micro
             ],
             faces: [
                 .ui: .default,  // --ui
@@ -565,11 +565,11 @@ extension Theme {
         ]),
         type: TypeScale(
             sizes: [
-                .head: 13,  // --fs-head
-                .body: 12.5,  // --fs-body
-                .sub: 11.5,  // --fs-sub
-                .meta: 10,  // --fs-meta
-                .micro: 9,  // --fs-micro
+                .head: 14,  // --fs-head
+                .body: 13.5,  // --fs-body
+                .sub: 12.5,  // --fs-sub
+                .meta: 11,  // --fs-meta
+                .micro: 10,  // --fs-micro
             ],
             faces: [
                 .ui: .default,  // --ui

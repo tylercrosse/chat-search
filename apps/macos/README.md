@@ -625,7 +625,7 @@ and neither step is checked by anything that reads Swift.
 
 A theme is not a list of hexes here. Half of one is *solved*: the four message kinds have to sit
 on an even luminance ramp against the ribbon track, because hue is the channel that degrades
-fastest at the ~2px those bands are drawn at, and the quiet tier has to clear 4.5:1 at 9–11px.
+fastest at the ~2px those bands are drawn at, and the quiet tier has to clear 4.5:1 at 10–12px.
 So the path for a palette is to add its hues to `DIRECTIONS` in `poc/ui/palette.py`, let that
 solve the eight fenced tokens, write the rest into `directions.css`, and name it on the `tokens.py`
 line above — at which point the app offers it to `--theme` and the gate measures it, both because
@@ -982,7 +982,9 @@ a readable column has no number in it. `cacheDisplay(in:to:)` renders the view h
 bitmap with no window server and no screen-recording grant, so it runs from a script and on a
 machine nobody is sitting at.
 
-It writes eleven frames. The first is the drawer as it opens; the next two are the minimap's
+It writes eleven frames, and one line before any of them: what a row costs and how many of them
+the window holds, read off the list while nothing is open — [the row](#the-row) is where that
+reading is explained. The first frame is the drawer as it opens; the next two are the minimap's
 relationship checks — the drawer is driven half a document, then the map is dragged to 75% — and
 the fourth is after typing on with the conversation still open, which is the state a list-driven
 selection closes without being asked to. The last seven are two per grouping axis, open and folded,
@@ -1076,6 +1078,30 @@ Source labels, `$HOME` collapsing and the age buckets are second implementations
 `cs-tui/src/text.rs` and `cs-tui/src/theme.rs`, named after their originals. The seam is JSON over
 argv, so a Swift process cannot share that code — but what the terminal calls a source and what the
 window calls it have to be the same word.
+
+**What a row costs, and what the type scale spends.** `--shot` reads it off the list before
+anything is open and prints it beside the frames:
+
+```
+density at 900×620: 65.0 pt per row, 423.0 pt of list → 6 rows on screen, 7 counting the one the edge cuts
+density at 720×480: 65.0 pt per row, 283.0 pt of list → 4 rows on screen, 5 counting the one the edge cuts
+```
+
+Both counts, because at the floor the last row is cut by the window edge and whether a half-drawn
+row counts is a judgement made by whoever is looking. The height is a mean over the rows in the
+viewport rather than the document divided by its rows: a `List` estimates the height of everything
+it has not laid out yet, the estimate is a larger share of a small window's document, and taking
+the document at face value read as *shorter rows at 720 than at 900* — a difference in the
+instrument reported as a difference in the row.
+
+It exists because `poc/ui/directions.html` fences rows-per-screen **between** directions and says
+so — it stands 800px in for a viewport nobody has — which leaves nothing measuring the cost at a
+size somebody opens. `chat-search-me9.8.34` is what asked: raising the whole type scale a point
+took the row from 62.0 to 65.0pt and the list's viewport from 430 to 423, since the chrome above
+and below grew with it, and cost nothing at either size — 6 rows at 900×620 and 4 at the floor,
+before and after, because neither 3pt crossed a row boundary. It will cost one the next time
+somebody spends 3pt, which is the argument for having the number rather than the argument that
+type is free.
 
 Rendered against the live index at 720, 900 and 1400pt. Two things only real data at a real width
 could show:

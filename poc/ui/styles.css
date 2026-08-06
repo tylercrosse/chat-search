@@ -160,13 +160,21 @@
    lives on `:root`, which makes it impossible to render two themes in one document —
    the gallery works around that with iframes. `.theme-dark` / `.theme-light` let a
    subtree carry a theme, which is what makes a direction measurable without opening
-   eight windows. */
+   eight windows.
+
+   The scale was 13 / 12.5 / 11.5 / 10 / 9 and every tier of it sat under macOS's own
+   13pt body — the head by nothing, the micro by four points — which is how five sizes
+   solved against each other end up small against everything around them. All five went
+   up a point (chat-search-me9.8.34). The steps between them are untouched, because the
+   complaint was about the whole scale and not about its shape: this is a shift, which
+   leaves `directions.html`'s rows-per-screen column reading as it did, since that column
+   compares directions against the incumbent and the incumbent moved with them. */
 :root {
-  --fs-head:  13px;    /* pane titles, the preview's title */
-  --fs-body:  12.5px;  /* body text and row titles */
-  --fs-sub:   11.5px;  /* the best-match line, prose in the drawer */
-  --fs-meta:  10px;    /* everything tabular, which means everything monospaced */
-  --fs-micro: 9px;     /* keys, section labels, the topics line */
+  --fs-head:  14px;    /* pane titles, the preview's title */
+  --fs-body:  13.5px;  /* body text and row titles */
+  --fs-sub:   12.5px;  /* the best-match line, prose in the drawer */
+  --fs-meta:  11px;    /* everything tabular, which means everything monospaced */
+  --fs-micro: 10px;    /* keys, section labels, the topics line */
 
   /* Radii below 3px, the 50% dots and the 10-11px pills stay literal in the rules:
      they are geometry rather than style, and squaring a dot is not a visual direction,

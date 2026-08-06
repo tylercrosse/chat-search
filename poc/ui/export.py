@@ -2,15 +2,24 @@
 """Export a slice of the real index for the UI prototype.
 
 Throwaway measurement instrument, not product code — the same status as poc/rust and
-poc/ts. It exists so the prototype can be judged against real conversations without
-waiting for `cs show`, and so that decisions about the ribbon, the segment fold and
-cluster proposals are made against the corpus rather than against fixtures I invented.
+poc/ts. It exists so the prototype can be judged against real conversations, and so that
+decisions about the ribbon, the segment fold and cluster proposals are made against the
+corpus rather than against fixtures I invented.
 
     python3 poc/ui/export.py                 # ~/.chat-archive/index.db -> real-data.json
     python3 poc/ui/export.py --limit 300
 
 Opens the index READ-ONLY. Writes poc/ui/real-data.json, which is gitignored: it is
 conversation text, and .gitignore's existing rule about transcripts covers it.
+
+Two things come out of the *binary* rather than out of the index, because they are rules
+and not columns: a conversation's shape (`cs search --json` → `kind_runs`) and, per
+message, which band it is in and whether a reader draws it at all (`cs show --json` →
+`band`, `drawn`). Deriving either from `role` and `kind` here would be a second copy of
+cs_core::blocks, free to disagree with the terminal about what the same conversation
+looks like — and it did disagree: this script handed the prototype every head-path
+message, so the ribbon counted the successful tool results that `cs` does not draw and
+the tool bands came out roughly twice the share the TUI gives them.
 
 What it does NOT do: rank. There is no BM25 here. The prototype searches the exported
 text by substring in the browser, which is enough to place match ticks and pick a best
@@ -22,13 +31,20 @@ import json
 import math
 import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
 from collections import Counter, defaultdict
 
 HOME = os.path.expanduser("~")
 DEFAULT_DB = os.path.join(HOME, ".chat-archive", "index.db")
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "real-data.js")
+# The checkout's own binary first, so the shape in the prototype is the shape this branch
+# emits rather than whatever was last `cargo install`ed.
+DEFAULT_CS = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "target", "release", "cs")
 
 # Text budgets. tool_result carries no text at all unless it failed, which mirrors what
 # the preview actually renders (TUI-DESIGN §8) and is where most of the bytes are.
@@ -179,6 +195,56 @@ def connect(path):
     if not os.path.exists(path):
         sys.exit(f"no index at {path} — run `cs index` first, or pass --db")
     return sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+
+# ------------------------------------------------------------------ shape ---
+# The band vocabulary, the run boundaries and the answer to "is this message drawn" are
+# cs_core::blocks's, and the two `--json` surfaces are how a client reads them. There is
+# deliberately no fallback here: a missing binary stops the export, because an export that
+# quietly went back to deriving bands from `kind` would look exactly like a good one and
+# put the prototype back to arguing with the terminal about what a conversation is.
+
+
+def find_cs(path):
+    found = path if os.path.exists(path) else shutil.which(path) or shutil.which("cs")
+    if not found:
+        sys.exit(f"no cs binary at {path} and none on PATH — `cargo build --release` first, "
+                 f"or pass --cs")
+    return found
+
+
+def cs_json(cs, args):
+    p = subprocess.run([cs, *args, "--json"], capture_output=True, text=True)
+    if p.returncode != 0:
+        sys.exit(f"`cs {' '.join(args)}` failed ({p.returncode}): {p.stderr.strip()[:400]}")
+    return json.loads(p.stdout)
+
+
+def shapes(cs, db, limit):
+    """conv_id -> kind_runs, for every conversation the index holds.
+
+    One call, because `kind_runs` is a property of the conversation rather than of the
+    query (`SearchOptions::shape`) and the empty query is the browse listing — 2.3s for
+    3,617 rows against the live index, against 354 calls to ask one at a time.
+
+    A sitting is several records read back as one row and its runs span all of them, so a
+    sitting's shape is not any single conversation's shape. Those rows are dropped rather
+    than mis-attributed, which leaves their members without one; `load_conversations`
+    drops those from the sample and `main` reports how many.
+    """
+    data = cs_json(cs, ["search", "", "--db", db, "--limit", str(limit)])
+    return {r["conv_id"]: r["kind_runs"] for r in data["results"] if not r["sitting"]}
+
+
+def transcript(cs, db, conv_id):
+    """msg_id -> (band, drawn), for one conversation.
+
+    Keyed by id rather than zipped by position: both sides read head-path messages in
+    READING_ORDER so the sequences do agree, but a silent off-by-one here would show up as
+    a ribbon whose colours are subtly wrong, which is not a failure anyone would notice.
+    """
+    data = cs_json(cs, ["show", conv_id, "--db", db])
+    return {m["msg_id"]: (m["band"], m["drawn"]) for m in data["messages"]}
 
 
 # --------------------------------------------------------------- projects ---
@@ -404,7 +470,7 @@ def pick(conn, limit, projects=None, per_project=0):
     return out
 
 
-def load_conversations(conn, ids):
+def load_conversations(conn, ids, cs, db, shape):
     cur = conn.cursor()
     qmarks = ",".join("?" * len(ids))
     meta = {
@@ -421,11 +487,14 @@ def load_conversations(conn, ids):
     # Same ordering the TUI uses: seq is per-thread, so ordering by it alone interleaves
     # every strand at once and a 9-thread conversation reads as nonsense.
     for r in cur.execute(
-        f"""SELECT conv_id, role, kind, seq, is_error, is_sidechain, ts, on_head_path, text
+        f"""SELECT conv_id, id, role, kind, seq, is_error, is_sidechain, ts, on_head_path, text
             FROM message WHERE conv_id IN ({qmarks}) AND on_head_path = 1
             ORDER BY conv_id, is_sidechain, thread_key, seq""", ids):
-        conv_id, role, kind, seq, is_err, side, ts, on_path, text = r
-        m = {"k": KIND_CODE.get(kind, "p"), "r": ROLE_CODE.get(role, "a"), "n": len(text or "")}
+        conv_id, msg_id, role, kind, seq, is_err, side, ts, on_path, text = r
+        # `_id` is the join key for `cs show` below and nothing the prototype reads. It is
+        # dropped once the band is on: 80 bytes × 108k messages is 8 MB of a 13 MB file.
+        m = {"_id": msg_id, "k": KIND_CODE.get(kind, "p"), "r": ROLE_CODE.get(role, "a"),
+             "n": len(text or "")}
         if ts:
             m["t"] = ts
         if is_err:
@@ -467,16 +536,43 @@ def load_conversations(conn, ids):
             m["x"] = text[:ERR_CHARS]
         msgs[conv_id].append(m)
 
-    out = []
+    out, shapeless = [], []
     for cid in ids:
         if cid not in meta or not msgs.get(cid):
             continue
+        if not shape.get(cid):
+            # No shape of its own — a sitting member, or a conversation with nothing a
+            # reader draws. Dropped rather than exported bandless, because the fallback in
+            # app.js is the fixtures' one and this is not a fixture.
+            shapeless.append(cid)
+            continue
         c = meta[cid]
         c["msgs"] = msgs[cid]
+        c["runs"] = shape[cid]
+
+        bands = transcript(cs, db, cid)
+        for m in c["msgs"]:
+            got = bands.get(m.pop("_id"))
+            if got is None:
+                sys.exit(f"{cid}: a head-path message the index holds and `cs show` does not. "
+                         f"The two disagree about this conversation; reindex before exporting.")
+            m["b"], drawn = got
+            if not drawn:
+                m["nd"] = 1
+
+        # The one number both surfaces have to agree on: the runs sum to the drawn count,
+        # not to msg_count (563 of 937 on the conversation this was first measured against).
+        # A mismatch means they are looking at different messages, which is precisely the
+        # bug that would otherwise reach the ribbon as a plausible-looking shape.
+        drawn = sum(1 for m in c["msgs"] if not m.get("nd"))
+        summed = sum(n for _, n in c["runs"])
+        if drawn != summed:
+            sys.exit(f"{cid}: `cs search` says {summed} drawn messages, `cs show` says {drawn}")
+
         files = Counter(f for m in c["msgs"] for f in m.get("f", []))
         c["files"] = [f for f, _ in files.most_common(12)]
         out.append(c)
-    return out
+    return out, shapeless
 
 
 def lineages(convs, gap_days=3):
@@ -760,13 +856,20 @@ def main():
     ap.add_argument("--per-project", type=int, default=24,
                     help="depth to sample from each of the ten largest projects")
     ap.add_argument("--out", default=OUT)
+    ap.add_argument("--cs", default=DEFAULT_CS,
+                    help="the binary the shape and the bands are read out of")
     a = ap.parse_args()
 
     conn = connect(a.db)
+    cs = find_cs(a.cs)
     projs = corpus_projects(conn)
     biggest = sorted(projs, key=lambda p: -p["n"])
     ids = pick(conn, a.limit, biggest, a.per_project)
-    convs = load_conversations(conn, ids)
+    # Every row the listing can return: sittings fold several conversations into one, so
+    # the conversation count is an upper bound on rows and asking for it gets all of them.
+    held = conn.execute("SELECT COUNT(*) FROM conversation").fetchone()[0]
+    shape = shapes(cs, a.db, held)
+    convs, shapeless = load_conversations(conn, ids, cs, a.db, shape)
 
     basenames = {p["path"].split("/")[-1]: p["path"] for p in projs}
     for c in convs:
@@ -822,8 +925,15 @@ def main():
 
     size = os.path.getsize(a.out) / 1e6
     msgs = sum(len(c["msgs"]) for c in convs)
+    drawn = sum(sum(n for _, n in c["runs"]) for c in convs)
     print(f"wrote {a.out}")
     print(f"  {len(convs)} conversations, {msgs:,} messages, {size:.1f} MB")
+    # The ribbon's axis is the second number, and the gap between them is the whole reason
+    # the shape had to stop being derived here.
+    print(f"  shape from {os.path.relpath(cs)}: {drawn:,} of those messages are drawn "
+          f"({100 * drawn // max(msgs, 1)}%)"
+          + (f" · {len(shapeless)} sampled conversations have no shape of their own"
+             if shapeless else ""))
     withfiles = sum(1 for c in convs if c["files"])
     print(f"  {len(topics)} seeded topics · {len(sits)} cross-tool sittings · "
           f"{len(lins)} lineages · {withfiles} conversations touch a known file")

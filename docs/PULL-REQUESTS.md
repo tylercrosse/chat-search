@@ -109,6 +109,25 @@ than none.
 release of anything. Committing PNGs into the repository is the alternative, and it is worse: they
 are generated, they are large, and they would sit in the history forever.
 
+## After the merge
+
+A merged branch leaves its worktree behind, and the worktree keeps its `target/` — about 1.5 GB
+per bead, for commits that are already in `main`. Nothing reclaims it on its own, so it is worth
+one command per review round:
+
+```bash
+scripts/sweep-worktrees.sh            # what would go
+scripts/sweep-worktrees.sh --apply    # remove it
+```
+
+It removes only worktrees under `.claude/worktrees/` that are merged into `main`, hold nothing
+uncommitted, and have no agent working in them. Read the header in that file before changing it —
+the liveness check is subtler than it looks, and getting it wrong deletes a running worker's
+tree out from under it.
+
+This is deliberately a command and not a merge hook. Whether a worktree is in use can only be
+read at the moment you look, so the safe time to sweep is when somebody is already reviewing.
+
 ## For agents
 
 Everything above applies to whatever is opening the PR — `bd-worker`, an ad-hoc background

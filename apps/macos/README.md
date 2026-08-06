@@ -399,16 +399,16 @@ name; or find a palette that holds as authored, which neither of these two is.
 
 Both ship, both are fenced, and `chat-search-me9.8.17` is the port. Every hue in them is Gruvbox's
 or Solarized's; not one lightness is. What each cost, measured rather than estimated — the ramp is
-what `--verify-theme` reads back out of the build, and the move is how far the worst band travelled
-in HSL lightness against the value its palette publishes:
+what `--verify-theme` reads back out of the build, and the move is how far the worst of the eight
+solved tokens travelled in HSL lightness against the value its palette publishes:
 
-| | ramp on the track, dark | ramp on the track, light | worst band moved | port cost |
+| | ramp on the track, dark | ramp on the track, light | worst token moved | port cost |
 | --- | --- | --- | --- | ---: |
-| `gruvbox-derived` | 2.21 4.01 7.20 13.05 · 1.81 1.80 1.81× | 2.21 4.00 7.27 13.13 · 1.81 1.82 1.81× | −11.4 pt dark, −13.3 pt light | 102 CSS + 95 Swift |
-| `solarized-derived` | 2.22 4.01 7.25 13.00 · 1.81 1.81 1.79× | 2.21 4.01 7.27 13.10 · 1.81 1.82 1.80× | **+26.7 pt** dark, −21.6 pt light | 101 CSS + 95 Swift |
+| `gruvbox-derived` | 2.21 4.01 7.20 13.05 · 1.81 1.80 1.81× | 2.21 4.00 7.27 13.13 · 1.81 1.82 1.81× | −11.4 pt dark, −13.3 pt light | 105 CSS + 95 Swift |
+| `solarized-derived` | 2.22 4.01 7.25 13.00 · 1.81 1.81 1.79× | 2.21 4.01 7.27 13.10 · 1.81 1.82 1.80× | **+26.7 pt** dark, −21.6 pt light | 105 CSS + 95 Swift |
 
 The last column is the whole port as `git diff --shortstat` reports it, which is the claim the
-generated seam has been making all along: `3 files changed, 469 insertions(+), 5 deletions(-)`
+generated seam has been making all along: `3 files changed, 479 insertions(+), 7 deletions(-)`
 across `palette.py`, `directions.css` and `Tokens.swift`, and the 95 Swift lines a direction costs
 are the same 95 `terminal` costs, because nobody wrote them. No view, no list and no binding was
 touched.
@@ -427,9 +427,10 @@ selection and match grounds and five source hues are invented either way. They a
 each palette's own greys and accents at that palette's hues — taking them from `terminal` is how a
 port ends up reading as the incumbent wearing a costume. `directions.css` names the published ones
 in a trailing comment and marks the solved eight, so what was taken, what was computed and what was
-made up are told apart in the file rather than in a commit message. The one place Solarized needed an extra invention is a
-middle foreground tier per side: it publishes two per ground where this interface reads three, and
-its comments tier solved to the floor comes back brighter than its own body text.
+made up are told apart in the file rather than in a commit message. The one place Solarized needed
+an extra invention is a middle foreground tier per side: it publishes two per ground where this
+interface reads three, and its comments tier solved to the floor comes back brighter than its own
+body text.
 
 Neither sets a type, radius or rhythm token. A colour port cannot move rows-per-screen, so the
 density argument every other direction has to make does not arise, and `--shot --theme

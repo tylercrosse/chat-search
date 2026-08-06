@@ -470,7 +470,7 @@ What re-solving cost each palette, in points of HSL lightness against the publis
 value, worst band first — the numbers `apps/macos/README.md` tabulates beside the ramps
 they buy:
 
-| | worst band, dark | worst band, light |
+| | worst token, dark | worst token, light |
 | --- | --- | --- |
 | `gruvbox-derived` | purple, −11.4 pt (reasoning) | aqua, −13.3 pt (user) |
 | `solarized-derived` | base1, **+26.7 pt** (agent) | base1, −21.6 pt (quiet tier) |

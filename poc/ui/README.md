@@ -36,6 +36,12 @@ mark pauses over four hours; dots mark where the agent asked you something; red 
 tool. Because 66–85% of real hits land inside tool traffic, the useful read is the compound one:
 *was my hit in a steer, or buried in a 40-message agentic run?*
 
+Those runs are not encoded here. `cs search --json` emits `kind_runs` per result row and the
+ribbon draws that, so a row's shape is the shape the terminal would draw beside the same
+conversation. Its axis is cs's too — the **drawn** messages, which leaves out a successful
+`tool_result` because the call implies it, and which is why the runs sum to 563 on a
+conversation the same row calls 937 messages.
+
 The preview is ~602px (78ch, a real reading measure) and has **three zoom stops** over the same
 data — segments, outline, full. Segments collapses a steer plus everything it caused into one
 summary line (`→ 34 calls · 2 failed · asked you 1×`), which turns a 211-message conversation into
@@ -131,7 +137,10 @@ Two of these contradict assumptions in `TUI-DESIGN.md` §3; that divergence is f
 
 ## Status
 
-Nothing here is decided and no product code has been written against it. The prerequisite it keeps
-running into is real: there is no `cs show` subcommand and `cs-core` exports no function returning
-a conversation's messages, so every pane on the right-hand side of Search is currently
-unbuildable. The same gap blocks a VS Code client (`chat-search-me9.9`).
+Nothing here is decided and no product code has been written against it. The prerequisite it kept
+running into has since been built: `cs show --json` returns a conversation's messages with `band`
+and `drawn` already answered (`me9.17`), and `cs search --json` carries each row's `kind_runs`
+(`me9.19`). So the shape a row draws and the band beside every message are read out of the binary
+rather than derived here — `export.py` will not run without it. What a real client still cannot get
+from cs, here or in VS Code (`chat-search-me9.9`), is the collapsed forms (`me9.20`) and match
+positions in the same coordinate space as the shape (`me9.25`).

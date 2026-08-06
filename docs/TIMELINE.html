@@ -1,0 +1,1068 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chat-search · ten days, day by day</title>
+<style>
+/* ───────────────────────────────────────────────────────────────────────────
+   chat-search · project timeline
+
+   Palette, type and furniture are inherited verbatim from docs/INGESTION.html
+   so the two pages read as one document set. What is new here is the series
+   encoding: INGESTION colours things by DURABILITY (ochre durable / steel
+   derived), because that is the axis its subject turns on. A timeline turns on
+   a different axis — WHERE the day's work landed — so the five series below
+   name layers of the system, not lifetimes of data.
+
+   The series slots are the ones INGESTION already validated with the dataviz
+   checker; they are re-used rather than re-picked. Light mode warns sub-3:1 on
+   the green and grey slots, so the same relief rule applies: every composition
+   bar carries a text label AND the full numbers appear in the table in §3.
+   ─────────────────────────────────────────────────────────────────────────── */
+:root {
+  color-scheme: light;
+
+  --paper:        #f7f3ea;
+  --surface-1:    #faf6ed;
+  --surface-2:    #f1ebdd;
+  --rule:         #ded4c0;
+  --rule-strong:  #b9ab90;
+
+  --ink:          #17150f;
+  --ink-2:        #4c463a;
+  --ink-3:        #7a7263;
+
+  --ochre:        #9a6b16;
+  --ochre-bg:     #f0e3c8;
+  --steel:        #1f6b86;
+  --steel-bg:     #dcebf0;
+  --alarm:        #a33227;
+  --alarm-bg:     #f6e2de;
+
+  /* where a day's work landed */
+  --g-engine:  #1f6b86;  /* cs-core, cs-import, cs-archive, evals */
+  --g-clients: #eb6834;  /* cs (CLI), cs-tui, apps/macos          */
+  --g-proto:   #1baf7a;  /* poc/ts, poc/rust, poc/ui, poc/swift   */
+  --g-docs:    #9a6b16;  /* docs/, ADRs                           */
+  --g-process: #8d8474;  /* beads, CI, scripts, agent config      */
+
+  --font-display: "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --font-mono: "SF Mono", SFMono-Regular, ui-monospace, "JetBrains Mono", "IBM Plex Mono", Menlo, Consolas, monospace;
+
+  --grain: .022;
+  --blend: multiply;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --paper:       #101216;
+    --surface-1:   #16181d;
+    --surface-2:   #1c1f26;
+    --rule:        #2c313b;
+    --rule-strong: #4a515e;
+    --ink:         #f2efe6;
+    --ink-2:       #b9b5a9;
+    --ink-3:       #837f74;
+    --ochre:       #d9a441;
+    --ochre-bg:    #2e2617;
+    --steel:       #5fb6d4;
+    --steel-bg:    #14262e;
+    --alarm:       #e0705f;
+    --alarm-bg:    #2c1815;
+    --g-engine:  #3987e5;
+    --g-clients: #d95926;
+    --g-proto:   #199e70;
+    --g-docs:    #c98500;
+    --g-process: #6d6a62;
+    --grain: .04;
+    --blend: screen;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper:       #101216;
+  --surface-1:   #16181d;
+  --surface-2:   #1c1f26;
+  --rule:        #2c313b;
+  --rule-strong: #4a515e;
+  --ink:         #f2efe6;
+  --ink-2:       #b9b5a9;
+  --ink-3:       #837f74;
+  --ochre:       #d9a441;
+  --ochre-bg:    #2e2617;
+  --steel:       #5fb6d4;
+  --steel-bg:    #14262e;
+  --alarm:       #e0705f;
+  --alarm-bg:    #2c1815;
+  --g-engine:  #3987e5;
+  --g-clients: #d95926;
+  --g-proto:   #199e70;
+  --g-docs:    #c98500;
+  --g-process: #6d6a62;
+  --grain: .04;
+  --blend: screen;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --paper:       #f7f3ea;
+  --surface-1:   #faf6ed;
+  --surface-2:   #f1ebdd;
+  --rule:        #ded4c0;
+  --rule-strong: #b9ab90;
+  --ink:         #17150f;
+  --ink-2:       #4c463a;
+  --ink-3:       #7a7263;
+  --ochre:       #9a6b16;
+  --ochre-bg:    #f0e3c8;
+  --steel:       #1f6b86;
+  --steel-bg:    #dcebf0;
+  --alarm:       #a33227;
+  --alarm-bg:    #f6e2de;
+  --g-engine:  #1f6b86;
+  --g-clients: #eb6834;
+  --g-proto:   #1baf7a;
+  --g-docs:    #9a6b16;
+  --g-process: #8d8474;
+  --grain: .022;
+  --blend: multiply;
+}
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 17px;
+  line-height: 1.62;
+  overflow-x: hidden;
+}
+/* Paper grain — pure CSS, no asset, no network. */
+body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 100;
+  opacity: var(--grain); mix-blend-mode: var(--blend);
+  background-image:
+    repeating-linear-gradient(0deg,  #000 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, #000 0 1px, transparent 1px 3px);
+}
+
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 28px 120px; }
+
+/* ── masthead ─────────────────────────────────────────────────────────── */
+.masthead { padding: 64px 0 34px; border-bottom: 3px double var(--rule-strong); }
+.eyebrow {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .22em;
+  text-transform: uppercase; color: var(--ink-3); margin: 0 0 20px;
+}
+h1 {
+  font-size: clamp(34px, 6.2vw, 62px); line-height: 1.02; margin: 0 0 18px;
+  font-weight: 400; letter-spacing: -.02em; max-width: 17ch; text-wrap: balance;
+}
+h1 em { font-style: italic; color: var(--ochre); }
+.standfirst { font-size: clamp(17px, 2.1vw, 20px); color: var(--ink-2); max-width: 62ch; margin: 0; }
+.dateline {
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3);
+  margin-top: 26px; display: flex; flex-wrap: wrap; gap: 8px 20px;
+}
+
+/* ── section furniture ────────────────────────────────────────────────── */
+section { margin-top: 76px; scroll-margin-top: 24px; }
+.sec-head { display: flex; align-items: baseline; gap: 16px; border-bottom: 1px solid var(--rule); padding-bottom: 10px; margin-bottom: 28px; }
+.sec-num { font-family: var(--font-mono); font-size: 12px; color: var(--ochre); letter-spacing: .1em; flex: none; }
+h2 { font-size: clamp(23px, 3.2vw, 31px); font-weight: 400; margin: 0; letter-spacing: -.015em; text-wrap: balance; }
+p { margin: 0 0 16px; max-width: 74ch; }
+a { color: var(--steel); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--ochre); outline-offset: 2px; }
+code, .mono { font-family: var(--font-mono); font-size: .855em; }
+p code, li code, td code, .note code, .day-body code {
+  background: var(--surface-2); border: 1px solid var(--rule);
+  padding: .08em .36em; border-radius: 3px; white-space: nowrap;
+}
+ul { max-width: 74ch; padding-left: 1.1em; }
+li { margin-bottom: 9px; }
+
+/* ── KPI row ──────────────────────────────────────────────────────────── */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(158px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); margin: 34px 0 0; }
+.kpi { background: var(--surface-1); padding: 20px 18px; }
+.kpi .v { font-family: var(--font-mono); font-size: clamp(23px, 3.2vw, 31px); line-height: 1; letter-spacing: -.03em; display: block; font-variant-numeric: tabular-nums; }
+.kpi .l { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin-top: 10px; display: block; }
+.kpi .n { font-size: 13.5px; color: var(--ink-2); margin-top: 7px; display: block; line-height: 1.45; }
+.kpi.durable .v { color: var(--ochre); }
+.kpi.derived .v { color: var(--steel); }
+
+/* ── callouts ─────────────────────────────────────────────────────────── */
+.note {
+  border-left: 3px solid var(--rule-strong); background: var(--surface-1);
+  padding: 16px 20px; margin: 26px 0; font-size: 15.5px; max-width: 82ch;
+}
+.note.durable { border-left-color: var(--ochre); background: var(--ochre-bg); }
+.note.derived { border-left-color: var(--steel); background: var(--steel-bg); }
+.note p { margin: 0 0 10px; } .note p:last-child { margin: 0; }
+.note .h { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); display: block; margin-bottom: 8px; }
+
+/* ── legend & composition bars ────────────────────────────────────────── */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 20px; margin: 0 0 20px; }
+.legend span { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); display: flex; align-items: center; }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 8px; flex: none; }
+.swatch.engine  { background: var(--g-engine); }
+.swatch.clients { background: var(--g-clients); }
+.swatch.proto   { background: var(--g-proto); }
+.swatch.docs    { background: var(--g-docs); }
+.swatch.process { background: var(--g-process); }
+
+.comp { display: flex; width: 100%; height: 9px; background: var(--surface-2); border: 1px solid var(--rule); border-radius: 2px; overflow: hidden; margin: 4px 0 0; }
+.comp i { display: block; height: 100%; }
+.comp i.engine  { background: var(--g-engine); }
+.comp i.clients { background: var(--g-clients); }
+.comp i.proto   { background: var(--g-proto); }
+.comp i.docs    { background: var(--g-docs); }
+.comp i.process { background: var(--g-process); }
+.comp-note { font-family: var(--font-mono); font-size: 11px; color: var(--ink-3); margin: 7px 0 0; }
+
+/* ── cadence chart ────────────────────────────────────────────────────── */
+.figure { margin: 30px 0 10px; }
+.fig-title { font-size: 17px; margin: 0 0 4px; font-weight: 400; }
+.fig-sub { font-size: 13.5px; color: var(--ink-3); margin: 0 0 20px; max-width: 74ch; }
+.bars { display: grid; gap: 9px; }
+.bar-row { display: grid; grid-template-columns: minmax(84px, 96px) 1fr minmax(150px, auto); gap: 14px; align-items: center; }
+.bar-name { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-2); text-align: right; white-space: nowrap; }
+.bar-name b { font-weight: 400; color: var(--ink-3); }
+.bar-track { background: var(--surface-2); height: 24px; border-radius: 3px; overflow: hidden; display: flex; border: 1px solid var(--rule); }
+.bar-track i { display: block; height: 100%; }
+.bar-track i.engine  { background: var(--g-engine); }
+.bar-track i.clients { background: var(--g-clients); }
+.bar-track i.proto   { background: var(--g-proto); }
+.bar-track i.docs    { background: var(--g-docs); }
+.bar-track i.process { background: var(--g-process); }
+.bar-val { font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; }
+.bar-val small { color: var(--ink-3); }
+
+/* ── the day spine ────────────────────────────────────────────────────── */
+.day {
+  display: grid; grid-template-columns: 108px 1fr; gap: 30px;
+  padding: 34px 0; border-top: 1px solid var(--rule);
+}
+.day:last-of-type { border-bottom: 1px solid var(--rule); }
+.day-rail { font-family: var(--font-mono); padding-top: 4px; position: sticky; top: 18px; align-self: start; }
+.day-rail b { display: block; font-size: 34px; font-weight: 400; color: var(--rule-strong); letter-spacing: -.03em; line-height: 1; }
+.day-rail .wd { display: block; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--ochre); margin-top: 9px; }
+.day-rail .dt { display: block; font-size: 11.5px; color: var(--ink-3); margin-top: 3px; }
+
+.day-body h3 { font-size: 21px; font-weight: 400; margin: 0 0 14px; letter-spacing: -.01em; text-wrap: balance; max-width: 40ch; }
+.day-body p { font-size: 16px; color: var(--ink-2); margin: 0 0 14px; }
+.day-body p strong { color: var(--ink); font-weight: 400; }
+
+.metrics { display: flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--rule); background: var(--rule); margin: 0 0 18px; }
+.metrics div { background: var(--surface-1); padding: 9px 14px; flex: 1 1 auto; min-width: 108px; margin: 0 1px 1px 0; }
+.metrics b { font-family: var(--font-mono); font-size: 16px; font-weight: 400; display: block; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.metrics span { font-family: var(--font-mono); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); display: block; margin-top: 4px; }
+.metrics .add { color: var(--ochre); }
+.metrics .del { color: var(--ink-3); }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 16px 0 0; }
+.chip {
+  font-family: var(--font-mono); font-size: 11px; letter-spacing: .03em;
+  padding: 3px 9px; border-radius: 2px; border: 1px solid var(--rule);
+  background: var(--surface-2); color: var(--ink-2);
+}
+.chip.pr   { background: var(--steel-bg); border-color: var(--steel); color: var(--steel); }
+.chip.adr  { background: var(--ochre-bg); border-color: var(--ochre); color: var(--ochre); }
+.chip.bead { background: var(--surface-2); }
+
+.landed { margin: 18px 0 0; }
+.landed .h { font-family: var(--font-mono); font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); margin: 0 0 8px; }
+.landed ul { margin: 0; padding-left: 0; list-style: none; max-width: none; }
+.landed li { font-size: 14.5px; color: var(--ink-2); margin-bottom: 6px; display: grid; grid-template-columns: 62px 1fr; gap: 12px; }
+.landed li .k { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); padding-top: 3px; white-space: nowrap; }
+
+/* ── tables ───────────────────────────────────────────────────────────── */
+.scroller { overflow-x: auto; margin: 24px 0; border: 1px solid var(--rule); background: var(--surface-1); }
+table { border-collapse: collapse; width: 100%; min-width: 780px; font-size: 14px; }
+caption { text-align: left; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); padding: 14px 16px 0; }
+th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+thead th { font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); font-weight: 400; border-bottom: 1px solid var(--rule-strong); white-space: nowrap; }
+tbody tr:last-child td { border-bottom: none; }
+tfoot td { border-top: 1px solid var(--rule-strong); font-family: var(--font-mono); font-size: 12.5px; color: var(--ink); }
+td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.mono { font-family: var(--font-mono); font-size: 12px; white-space: nowrap; }
+tbody tr:hover td { background: var(--surface-2); }
+
+/* ── theme toggle ─────────────────────────────────────────────────────── */
+#theme {
+  position: fixed; top: 16px; right: 16px; z-index: 150;
+  font-family: var(--font-mono); font-size: 10.5px; letter-spacing: .1em;
+  text-transform: uppercase; background: var(--surface-1); color: var(--ink-2);
+  border: 1px solid var(--rule); border-radius: 3px; padding: 7px 11px; cursor: pointer;
+}
+#theme:hover { border-color: var(--rule-strong); color: var(--ink); }
+
+footer { margin-top: 84px; padding-top: 22px; border-top: 3px double var(--rule-strong); font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); }
+footer p { max-width: 78ch; margin-bottom: 8px; }
+footer strong { color: var(--ink-2); font-weight: 400; }
+
+@media (max-width: 720px) {
+  body { font-size: 16px; }
+  .wrap { padding: 0 18px 80px; }
+  .day { grid-template-columns: 1fr; gap: 12px; }
+  .day-rail { position: static; display: flex; align-items: baseline; gap: 12px; padding-top: 0; }
+  .day-rail b { font-size: 22px; }
+  .day-rail .wd, .day-rail .dt { margin-top: 0; }
+  .bar-row { grid-template-columns: 1fr; gap: 5px; }
+  .bar-name { text-align: left; }
+  .landed li { grid-template-columns: 1fr; gap: 2px; }
+  .landed li .k { padding-top: 0; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<button id="theme" type="button" aria-label="Toggle colour theme">theme</button>
+
+<div class="wrap">
+
+<header class="masthead">
+  <p class="eyebrow">chat-search · docs</p>
+  <h1>Ten days, from empty directory to a <em>native</em> app</h1>
+  <p class="standfirst">
+    chat-search went from its first commit to a working macOS client in ten calendar days:
+    299 commits, 44 pull requests, 249 tracked issues and 25 architecture decisions. This page
+    reconstructs those days from the artifacts they left behind — what got built, what got
+    decided, and what the numbers say about how the work actually ran.
+  </p>
+  <p class="dateline">
+    <span>28 Jul – 6 Aug 2026</span>
+    <span>299 commits</span>
+    <span>+73,086 / −5,692</span>
+    <span>762 tests passing</span>
+    <span>compiled from git, gh and bd on 2026-08-06</span>
+  </p>
+</header>
+
+<div class="kpis">
+  <div class="kpi">
+    <span class="v">10</span>
+    <span class="l">calendar days</span>
+    <span class="n">No gaps. Every day between the first and last commit has work on it.</span>
+  </div>
+  <div class="kpi derived">
+    <span class="v">299</span>
+    <span class="l">commits</span>
+    <span class="n">+73,086 / −5,692 lines across 5 Rust crates and one Swift app.</span>
+  </div>
+  <div class="kpi">
+    <span class="v">44</span>
+    <span class="l">pull requests</span>
+    <span class="n">All in the last five days. 41 merged; 3 closed after landing directly.</span>
+  </div>
+  <div class="kpi durable">
+    <span class="v">249</span>
+    <span class="l">issues filed</span>
+    <span class="n">134 closed, 98 open, 14 deferred, 3 in progress.</span>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="arc">
+  <div class="sec-head"><span class="sec-num">01</span><h2>The shape of the ten days</h2></div>
+
+  <p>
+    Three quarters of the work happened in the last three days. That is not a sprint at the end
+    of a slow start — it is what happened once the pieces stopped needing each other in sequence.
+    The first week built one thing at a time because each layer had to exist before the next one
+    could be written against it: archive, then importer, then index, then a terminal client. From
+    4 August onward the work fanned out across parallel git worktrees, one branch per feature,
+    each merging as a separate pull request. The two peaks below, 67 and 127 commits, are that
+    change of method showing up in the log.
+  </p>
+
+  <div class="figure">
+    <p class="fig-title">Commits per day, coloured by where the changed files landed</p>
+    <p class="fig-sub">
+      Bar length is the day's commit count against the busiest day (127). Segments are the day's
+      changed-file counts by area, so a bar shows both how much happened and which layer it
+      happened in. Full numbers are in the table in §3.
+    </p>
+
+    <div class="legend">
+      <span><i class="swatch engine"></i>engine — cs-core, cs-import, cs-archive</span>
+      <span><i class="swatch clients"></i>clients — CLI, TUI, macOS app</span>
+      <span><i class="swatch proto"></i>prototypes — poc/</span>
+      <span><i class="swatch docs"></i>docs &amp; decisions</span>
+      <span><i class="swatch process"></i>process — beads, CI, scripts</span>
+    </div>
+
+    <div class="bars">
+      <div class="bar-row">
+        <span class="bar-name"><b>01</b> Tue 28 Jul</span>
+        <div class="bar-track" style="width:19.7%" role="img" aria-label="25 commits: engine 36%, clients 10%, prototypes 18%, docs 25%, process 10%">
+          <i class="engine" style="width:36.4%"></i><i class="clients" style="width:10.2%"></i><i class="proto" style="width:18.2%"></i><i class="docs" style="width:25.0%"></i><i class="process" style="width:10.2%"></i>
+        </div>
+        <span class="bar-val">25 <small>commits · +10,676</small></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name"><b>02</b> Wed 29 Jul</span>
+        <div class="bar-track" style="width:7.1%" role="img" aria-label="9 commits: engine 32%, clients 7%, docs 5%, process 56%">
+          <i class="engine" style="width:31.7%"></i><i class="clients" style="width:7.3%"></i><i class="docs" style="width:4.9%"></i><i class="process" style="width:56.1%"></i>
+        </div>
+        <span class="bar-val">9 <small>commits · +2,623</small></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name"><b>03</b> Thu 30 Jul</span>
+        <div class="bar-track" style="width:18.9%" role="img" aria-label="24 commits: engine 38%, clients 38%, docs 9%, process 14%">
+          <i class="engine" style="width:38.5%"></i><i class="clients" style="width:38.5%"></i><i class="docs" style="width:8.8%"></i><i class="process" style="width:14.2%"></i>
+        </div>
+        <span class="bar-val">24 <small>commits · +14,537</small></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name"><b>04</b> Fri 31 Jul</span>
+        <div class="bar-track" style="width:6.3%" role="img" aria-label="8 commits: engine 41%, clients 27%, docs 14%, process 18%">
+          <i class="engine" style="width:40.8%"></i><i class="clients" style="width:26.5%"></i><i class="docs" style="width:14.3%"></i><i class="process" style="width:18.4%"></i>
+        </div>
+        <span class="bar-val">8 <small>commits · +1,742</small></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name"><b>05</b> Sat 1 Aug</span>
+        <div class="bar-track" style="width:11.8%" role="img" aria-label="15 commits: engine 34%, clients 24%, docs 20%, process 22%">
+          <i class="engine" style="width:34.0%"></i><i class="clients" style="width:24.0%"></i><i class="docs" style="width:20.0%"></i><i class="process" style="width:22.0%"></i>
+        </div>
+        <span class="bar-val">15 <small>commits · +3,489</small></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name"><b>06</b> Sun 2 Aug</span>
+        <div class="bar-track" style="width:3.9%" role="img" aria-label="5 commits: engine 33%, clients 50%, docs 17%">
+          <i class="engine" style="width:33.3%"></i><i class="clients" style="width:50.0%"></i><i class="docs" style="width:16.7%"></i>
+        </div>
+        <span class="bar-val">5 <small>commits · +309</small></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name"><b>07</b> Mon 3 Aug</span>
+        <div class="bar-track" style="width:3.1%" role="img" aria-label="4 commits: prototypes 83%, process 17%">
+          <i class="proto" style="width:83.3%"></i><i class="process" style="width:16.7%"></i>
+        </div>
+        <span class="bar-val">4 <small>commits · +6,341</small></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name"><b>08</b> Tue 4 Aug</span>
+        <div class="bar-track" style="width:52.8%" role="img" aria-label="67 commits: engine 27%, clients 25%, prototypes 29%, docs 14%, process 6%">
+          <i class="engine" style="width:26.5%"></i><i class="clients" style="width:24.7%"></i><i class="proto" style="width:29.0%"></i><i class="docs" style="width:13.6%"></i><i class="process" style="width:6.2%"></i>
+        </div>
+        <span class="bar-val">67 <small>commits · +13,288</small></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name"><b>09</b> Wed 5 Aug</span>
+        <div class="bar-track" style="width:100%" role="img" aria-label="127 commits: engine 25%, clients 55%, prototypes 12%, docs 8%, process 1%">
+          <i class="engine" style="width:24.8%"></i><i class="clients" style="width:54.8%"></i><i class="proto" style="width:11.6%"></i><i class="docs" style="width:7.9%"></i><i class="process" style="width:1.0%"></i>
+        </div>
+        <span class="bar-val">127 <small>commits · +18,771</small></span>
+      </div>
+      <div class="bar-row">
+        <span class="bar-name"><b>10</b> Thu 6 Aug</span>
+        <div class="bar-track" style="width:11.8%" role="img" aria-label="15 commits: engine 6%, clients 26%, prototypes 23%, docs 32%, process 13%">
+          <i class="engine" style="width:6.5%"></i><i class="clients" style="width:25.8%"></i><i class="proto" style="width:22.6%"></i><i class="docs" style="width:32.3%"></i><i class="process" style="width:12.9%"></i>
+        </div>
+        <span class="bar-val">15 <small>commits · +1,310</small></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="note durable">
+    <span class="h">The one habit visible in every day</span>
+    <p>
+      Decisions get written down before or alongside the code that depends on them, and the
+      measurement that settles a question gets recorded even when the answer is no. The prefix
+      index was benchmarked and then <em>rejected on the measurement</em>. The choice of Swift over
+      a web front end came out of a spike, not a preference. The theme layer landed one day before
+      the views that would otherwise have hardcoded colours. Twenty-five ADRs in ten days is the
+      trace of that habit.
+    </p>
+  </div>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="days">
+  <div class="sec-head"><span class="sec-num">02</span><h2>Day by day</h2></div>
+
+  <p>
+    Each day below carries its own counts, the areas its changed files fell in, and the artifacts
+    it produced. Bead ids are the project's issue tracker (<code>bd</code>); ADR numbers refer to
+    <a href="DECISIONS.md">docs/DECISIONS.md</a>.
+  </p>
+
+  <!-- ─── 01 ─────────────────────────────────────────────────────────── -->
+  <article class="day" id="d01">
+    <div class="day-rail"><b>01</b><span class="wd">Tue</span><span class="dt">28 Jul</span></div>
+    <div class="day-body">
+      <h3>The whole skeleton, written down before it was built</h3>
+      <div class="metrics">
+        <div><b>25</b><span>commits</span></div>
+        <div><b class="add">+10,676</b><span>lines added</span></div>
+        <div><b class="del">−107</b><span>removed</span></div>
+        <div><b>50</b><span>files</span></div>
+        <div><b>20</b><span>ADRs written</span></div>
+      </div>
+      <div class="comp" role="img" aria-label="engine 36%, docs 25%, prototypes 18%, clients 10%, process 10%">
+        <i class="engine" style="width:36.4%"></i><i class="clients" style="width:10.2%"></i><i class="proto" style="width:18.2%"></i><i class="docs" style="width:25.0%"></i><i class="process" style="width:10.2%"></i>
+      </div>
+      <p class="comp-note">engine 36% · docs 25% · prototypes 18% · clients 10% · process 10%</p>
+
+      <p>
+        The project opened with documents, not code: a glossary of conversation and archive
+        vocabulary, a decision log, an architecture sketch, a backlog, and a README. Twenty ADRs
+        were written the same day, and they are still the load-bearing ones — the raw archive is
+        the source of truth and the index is disposable, ids are stable and source-native, a
+        conversation is a DAG rather than a list, SQLite with FTS5 is the entire storage and search
+        layer.
+      </p>
+      <p>
+        A throwaway proof of concept compared TypeScript against Rust <strong>on the real
+        corpus</strong> rather than on a benchmark, which settled the language question with
+        numbers. Then the stack went in end to end: the archiver (workspace, config, machine
+        identity, an append-only manifest, change detection, and APFS clone capture so 2.2 GB cost
+        about 2 MB of disk), the <code>cs</code> binary, the core with its normalized model and BM25
+        search, and three importers in a row — ChatGPT export, Codex rollouts, Claude Code.
+      </p>
+      <p>
+        A prior-art survey landed mid-day and <strong>disproved two of the project's own
+        assumptions</strong>, then had to be revised again a few commits later when the category
+        leader turned up. The day closed with results grouped by conversation, prefix typeahead,
+        and a performance change that halved the index by clipping tool text.
+      </p>
+      <div class="chips">
+        <span class="chip adr">ADR 1 · archive durable, index disposable</span>
+        <span class="chip adr">ADR 4 · a conversation is a DAG</span>
+        <span class="chip adr">ADR 6 · SQLite + FTS5</span>
+        <span class="chip adr">ADR 16 · ids name the location</span>
+      </div>
+    </div>
+  </article>
+
+  <!-- ─── 02 ─────────────────────────────────────────────────────────── -->
+  <article class="day" id="d02">
+    <div class="day-rail"><b>02</b><span class="wd">Wed</span><span class="dt">29 Jul</span></div>
+    <div class="day-body">
+      <h3>The backlog moves out of markdown and into a tracker</h3>
+      <div class="metrics">
+        <div><b>9</b><span>commits</span></div>
+        <div><b class="add">+2,623</b><span>lines added</span></div>
+        <div><b class="del">−281</b><span>removed</span></div>
+        <div><b>90</b><span>issues filed</span></div>
+        <div><b>30</b><span>issues closed</span></div>
+      </div>
+      <div class="comp" role="img" aria-label="process 56%, engine 32%, clients 7%, docs 5%">
+        <i class="engine" style="width:31.7%"></i><i class="clients" style="width:7.3%"></i><i class="docs" style="width:4.9%"></i><i class="process" style="width:56.1%"></i>
+      </div>
+      <p class="comp-note">process 56% · engine 32% · clients 7% · docs 5%</p>
+
+      <p>
+        <code>bd init</code> landed and 90 issues went in at once, with the rule written down in the
+        same breath: <strong>BACKLOG holds framing, beads holds the work</strong>. Most of the 30
+        closures are day one being recorded retroactively, so the tracker starts life already
+        reflecting reality rather than aspiration.
+      </p>
+      <p>
+        The real fixes were about honesty. <code>ymd()</code> rendered dates in UTC, so any
+        conversation held in the evening showed tomorrow's date; the fix moved local-day rendering
+        into <code>cs-core</code> so every client reads one answer instead of deriving its own. That
+        is the origin of a convention the project still states: a rule lives in exactly one place.
+        The archiver stopped overstating disk cost by reporting what a clone actually occupies
+        rather than what the files claim. A blank query now falls back to recent conversations, and
+        the Gemini CLI importer landed.
+      </p>
+      <div class="chips">
+        <span class="chip adr">ADR 14 · no daemon</span>
+        <span class="chip bead">6eb.8 · UTC date bug</span>
+        <span class="chip bead">a7k.6 · bytes captured overstated</span>
+        <span class="chip bead">n58.10 · Gemini CLI importer</span>
+      </div>
+    </div>
+  </article>
+
+  <!-- ─── 03 ─────────────────────────────────────────────────────────── -->
+  <article class="day" id="d03">
+    <div class="day-rail"><b>03</b><span class="wd">Thu</span><span class="dt">30 Jul</span></div>
+    <div class="day-body">
+      <h3>A terminal you can actually search in</h3>
+      <div class="metrics">
+        <div><b>24</b><span>commits</span></div>
+        <div><b class="add">+14,537</b><span>lines added</span></div>
+        <div><b class="del">−918</b><span>removed</span></div>
+        <div><b>61</b><span>files</span></div>
+        <div><b>31</b><span>issues closed</span></div>
+      </div>
+      <div class="comp" role="img" aria-label="engine 38%, clients 38%, process 14%, docs 9%">
+        <i class="engine" style="width:38.5%"></i><i class="clients" style="width:38.5%"></i><i class="docs" style="width:8.8%"></i><i class="process" style="width:14.2%"></i>
+      </div>
+      <p class="comp-note">engine 38% · clients 38% · process 14% · docs 9%</p>
+
+      <p>
+        The biggest single day of the first week, and the day the project got a face. A native TUI
+        replaced the <code>fzf</code> shell script: in-process against <code>cs-core</code>, holding
+        a query until it can mean something, folding the preview, reading in conversation order, and
+        taking the mouse. Matching text is highlighted from spans the search already computed rather
+        than re-derived, and a fix made tool results say honestly which ones failed.
+      </p>
+      <p>
+        Underneath it, a five-commit refactor <strong>parsed the query once, into a value</strong>:
+        rename <code>query.rs</code> to <code>commands.rs</code>, split <code>SearchOptions</code>
+        out of <code>Query</code>, add a real parser with <code>Query</code>/<code>Filter</code>/<code>Mode</code>,
+        rank and mark from the parsed form, and have the TUI read the mode instead of computing it
+        again. Two performance fixes followed the same shape — mark a conversation in one trip
+        instead of one per message, and stop re-measuring the whole prefix on every keystroke.
+      </p>
+      <p>
+        An eval harness landed that harvests real searches as ground truth and scores against them,
+        so ranking changes could be argued with data. The claude-desktop importer picked up
+        transcripts that were already on disk.
+      </p>
+      <div class="chips">
+        <span class="chip adr">ADR 21 · server-side sources</span>
+        <span class="chip bead">6eb.31 · parse the query once</span>
+        <span class="chip bead">6eb.28 · ranking eval harness</span>
+        <span class="chip bead">a7k.23 · claude-desktop importer</span>
+      </div>
+    </div>
+  </article>
+
+  <!-- ─── 04 ─────────────────────────────────────────────────────────── -->
+  <article class="day" id="d04">
+    <div class="day-rail"><b>04</b><span class="wd">Fri</span><span class="dt">31 Jul</span></div>
+    <div class="day-body">
+      <h3>Filters in the query text, and what Enter means</h3>
+      <div class="metrics">
+        <div><b>8</b><span>commits</span></div>
+        <div><b class="add">+1,742</b><span>lines added</span></div>
+        <div><b class="del">−370</b><span>removed</span></div>
+        <div><b>33</b><span>files</span></div>
+        <div><b>6</b><span>issues closed</span></div>
+      </div>
+      <div class="comp" role="img" aria-label="engine 41%, clients 27%, process 18%, docs 14%">
+        <i class="engine" style="width:40.8%"></i><i class="clients" style="width:26.5%"></i><i class="docs" style="width:14.3%"></i><i class="process" style="width:18.4%"></i>
+      </div>
+      <p class="comp-note">engine 41% · clients 27% · process 18% · docs 14%</p>
+
+      <p>
+        A short day with two decisions in it. <code>agent:</code>, <code>dir:</code> and
+        <code>date:</code> became filters parsed out of the search string itself, which is the
+        beginning of the query grammar the GUI later builds rails for. And <code>cs explain</code>
+        learned that <strong>a filter can be the reason a conversation is missing</strong> — before
+        this it always blamed the tokenizer, which made it confidently wrong.
+      </p>
+      <p>
+        The breaking change was about reopening: destinations now resolve at action time rather than
+        import time, so what Enter does is decided when you press it and not when the transcript was
+        parsed. That is what lets the TUI hand the terminal to the agent it launches.
+      </p>
+      <div class="chips">
+        <span class="chip bead">6eb.11 · query DSL</span>
+        <span class="chip bead">6eb.36 · explain blames the right thing</span>
+        <span class="chip bead">me9.3 · reopen resolves at action time</span>
+      </div>
+    </div>
+  </article>
+
+  <!-- ─── 05 ─────────────────────────────────────────────────────────── -->
+  <article class="day" id="d05">
+    <div class="day-rail"><b>05</b><span class="wd">Sat</span><span class="dt">1 Aug</span></div>
+    <div class="day-body">
+      <h3>Measure it, then say no</h3>
+      <div class="metrics">
+        <div><b>15</b><span>commits</span></div>
+        <div><b class="add">+3,489</b><span>lines added</span></div>
+        <div><b class="del">−529</b><span>removed</span></div>
+        <div><b>30</b><span>files</span></div>
+        <div><b>8</b><span>issues closed</span></div>
+      </div>
+      <div class="comp" role="img" aria-label="engine 34%, clients 24%, process 22%, docs 20%">
+        <i class="engine" style="width:34.0%"></i><i class="clients" style="width:24.0%"></i><i class="docs" style="width:20.0%"></i><i class="process" style="width:22.0%"></i>
+      </div>
+      <p class="comp-note">engine 34% · clients 24% · process 22% · docs 20%</p>
+
+      <p>
+        Should the FTS tables carry a prefix index? It is most of what a broad keystroke costs, so
+        the question was worth real work: a bench harness first, then a price, then a written
+        rejection <strong>on the measurement</strong>. The same day settled ADR 8's rename precedence
+        and labelled every still-open ADR with what it blocks, so the decision log stops being a
+        list and starts being a dependency graph.
+      </p>
+      <p>
+        Two breaking changes tightened the same seam from both sides. The TUI stopped keeping a
+        second source of truth beside the query text and now filters by rewriting the text itself.
+        And a result set is marked in one decision rather than one insert per snippet.
+      </p>
+      <p>
+        One fix was purely about not lying: reasoning is searched by nobody and previewed by
+        everybody, and the two places that implied otherwise now say so. <code>cs archive</code> went
+        quiet unless it captured something, because it runs on a schedule every five minutes and
+        almost every run has nothing to say.
+      </p>
+      <div class="chips">
+        <span class="chip adr">ADR 6 · prefix index rejected</span>
+        <span class="chip adr">ADR 8 · rename precedence</span>
+        <span class="chip bead">8mb · reasoning is unindexed</span>
+        <span class="chip bead">me9.16 · one source of truth</span>
+      </div>
+    </div>
+  </article>
+
+  <!-- ─── 06 ─────────────────────────────────────────────────────────── -->
+  <article class="day" id="d06">
+    <div class="day-rail"><b>06</b><span class="wd">Sun</span><span class="dt">2 Aug</span></div>
+    <div class="day-body">
+      <h3>The first pull requests</h3>
+      <div class="metrics">
+        <div><b>5</b><span>commits</span></div>
+        <div><b class="add">+309</b><span>lines added</span></div>
+        <div><b class="del">−76</b><span>removed</span></div>
+        <div><b>4</b><span>PRs landed</span></div>
+        <div><b>6</b><span>files</span></div>
+      </div>
+      <div class="comp" role="img" aria-label="clients 50%, engine 33%, docs 17%">
+        <i class="engine" style="width:33.3%"></i><i class="clients" style="width:50.0%"></i><i class="docs" style="width:16.7%"></i>
+      </div>
+      <p class="comp-note">clients 50% · engine 33% · docs 17%</p>
+
+      <p>
+        A quiet day that changes how everything after it works. Until now the work went straight
+        onto <code>main</code>. From here it goes through a branch and a pull request, and the four
+        that merged were all built in separate git worktrees — the pattern that makes the parallel
+        days later possible.
+      </p>
+      <p>
+        The one behavioural change: the TUI header's match total settles when typing stops instead
+        of recomputing on every keystroke.
+      </p>
+      <div class="landed">
+        <p class="h">Pull requests landed</p>
+        <ul>
+          <li><span class="k">#1</span><span>Retire <code>scripts/cs-fzf</code>, which <code>cs tui</code> replaced</span></li>
+          <li><span class="k">#2</span><span>Say how many conversations matched, not just how many fit</span></li>
+          <li><span class="k">#3</span><span>Say that reasoning is unindexed, in the two places that implied otherwise</span></li>
+          <li><span class="k">#4</span><span>Chart the ingestion and index path against measured numbers</span></li>
+        </ul>
+      </div>
+    </div>
+  </article>
+
+  <!-- ─── 07 ─────────────────────────────────────────────────────────── -->
+  <article class="day" id="d07">
+    <div class="day-rail"><b>07</b><span class="wd">Mon</span><span class="dt">3 Aug</span></div>
+    <div class="day-body">
+      <h3>A design day, and the measurement that shaped the rest</h3>
+      <div class="metrics">
+        <div><b>4</b><span>commits</span></div>
+        <div><b class="add">+6,341</b><span>lines added</span></div>
+        <div><b class="del">−187</b><span>removed</span></div>
+        <div><b>18</b><span>files</span></div>
+        <div><b>0</b><span>issues closed</span></div>
+      </div>
+      <div class="comp" role="img" aria-label="prototypes 83%, process 17%">
+        <i class="proto" style="width:83.3%"></i><i class="process" style="width:16.7%"></i>
+      </div>
+      <p class="comp-note">prototypes 83% · process 17%</p>
+
+      <p>
+        Four commits, six thousand lines, and almost all of it in <code>poc/ui</code>. An interface
+        prototype for a native surface, built <strong>against the real index rather than mock
+        data</strong>, then a visual pass over it: polish, a two-axis detail control, and a way to
+        see what a conversation actually did.
+      </p>
+      <p>
+        The same day the corpus itself got measured — 3,059 conversations, 184,099 messages — and
+        the finding redirected everything after it. Conversation archetype is about 87% predicted by
+        which tool produced it, most matches land in tool traffic rather than prose, and every
+        attempt to group by subject came out mediocre while every structural signal came out strong
+        and free. That is why the grouping, facets and timeline work later leans on
+        <em>structure</em> — when, where, how long, which agent — and not on topics.
+      </p>
+      <div class="chips">
+        <span class="chip bead">4ar.9 · projects as an accordion</span>
+        <span class="chip bead">4ar.10 · grouping dimension + Library</span>
+        <span class="chip bead">n58.25 filed · importers disagree on model</span>
+      </div>
+    </div>
+  </article>
+
+  <!-- ─── 08 ─────────────────────────────────────────────────────────── -->
+  <article class="day" id="d08">
+    <div class="day-rail"><b>08</b><span class="wd">Tue</span><span class="dt">4 Aug</span></div>
+    <div class="day-body">
+      <h3>Four branches at once, and a contract to build clients against</h3>
+      <div class="metrics">
+        <div><b>67</b><span>commits</span></div>
+        <div><b class="add">+13,288</b><span>lines added</span></div>
+        <div><b class="del">−1,254</b><span>removed</span></div>
+        <div><b>10</b><span>PRs landed</span></div>
+        <div><b>35</b><span>issues closed</span></div>
+      </div>
+      <div class="comp" role="img" aria-label="prototypes 29%, engine 27%, clients 25%, docs 14%, process 6%">
+        <i class="engine" style="width:26.5%"></i><i class="clients" style="width:24.7%"></i><i class="proto" style="width:29.0%"></i><i class="docs" style="width:13.6%"></i><i class="process" style="width:6.2%"></i>
+      </div>
+      <p class="comp-note">prototypes 29% · engine 27% · clients 25% · docs 14% · process 6%</p>
+
+      <p>
+        The method changes here. Four feature branches ran in parallel worktrees and landed together
+        as PR&nbsp;#5 — the largest of the project at +11,806 lines — carrying the block model into
+        <code>cs-core</code>, a conversation's shape on every result row, a surface token layer with
+        four visual directions solved against it, and a Swift spike. <strong>The spike is what
+        settled the client language</strong>: Swift over a web front end, decided on what it
+        measured rather than on preference.
+      </p>
+      <p>
+        A second round the same day made the core safe to build clients against. The index now builds
+        beside the live one and swaps in whole, so a rebuild is no longer invisible and a partial
+        answer can no longer look complete. <code>cs search --json</code> got a written contract —
+        field by field, nulls included — with a test that <em>parses the tables out of the document
+        itself</em>, so the doc and the code cannot drift apart silently. The reply to a search
+        became a core-owned <code>Answer</code> type; the search family went private and
+        <code>answer()</code> became the only door.
+      </p>
+      <p>
+        Google Takeout landed as four formats behind one source id. And <code>cs init</code> stopped
+        silently omitting 69% of the corpus on a new machine — it now names what no detection can
+        find, at init and once a day after.
+      </p>
+      <div class="landed">
+        <p class="h">Pull requests landed</p>
+        <ul>
+          <li><span class="k">#5</span><span>The block model in cs-core, a conversation's shape per row, and a Swift spike <span class="mono">+11,806</span></span></li>
+          <li><span class="k">#7</span><span>Four Google Takeout formats behind one source id</span></li>
+          <li><span class="k">#8</span><span>Swap the index in whole, state what the JSON promises, fold the query log</span></li>
+          <li><span class="k">#9</span><span>The search reply is core-owned, and clients adapt (ADR 23)</span></li>
+          <li><span class="k">#6 #10–#14</span><span>Stranded branches landed, envelope rewrite, index read-back, Swift decode fix, source register</span></li>
+        </ul>
+      </div>
+      <div class="chips">
+        <span class="chip adr">ADR 22 · vouching for a logged search</span>
+        <span class="chip adr">ADR 23 · the reply is core-owned</span>
+        <span class="chip bead">me9.30 · Swift, decided by spike</span>
+        <span class="chip bead">a7k.22 · init omitted 69%</span>
+      </div>
+    </div>
+  </article>
+
+  <!-- ─── 09 ─────────────────────────────────────────────────────────── -->
+  <article class="day" id="d09">
+    <div class="day-rail"><b>09</b><span class="wd">Wed</span><span class="dt">5 Aug</span></div>
+    <div class="day-body">
+      <h3>A macOS app, built end to end in one day</h3>
+      <div class="metrics">
+        <div><b>127</b><span>commits</span></div>
+        <div><b class="add">+18,771</b><span>lines added</span></div>
+        <div><b class="del">−1,750</b><span>removed</span></div>
+        <div><b>24</b><span>PRs landed</span></div>
+        <div><b>99</b><span>files</span></div>
+      </div>
+      <div class="comp" role="img" aria-label="clients 55%, engine 25%, prototypes 12%, docs 8%, process 1%">
+        <i class="engine" style="width:24.8%"></i><i class="clients" style="width:54.8%"></i><i class="proto" style="width:11.6%"></i><i class="docs" style="width:7.9%"></i><i class="process" style="width:1.0%"></i>
+      </div>
+      <p class="comp-note">clients 55% · engine 25% · prototypes 12% · docs 8% · process 1%</p>
+
+      <p>
+        The largest day by every measure, and the one with the clearest method: <strong>one pull
+        request per piece of the app</strong>, twenty-four of them, each built in its own worktree
+        against a core that had been made stable the day before.
+      </p>
+      <p>
+        The order matters. The app shell went in first, then <em>the theme seam</em> — a generated
+        token layer landed deliberately ahead of the views that would otherwise have hardcoded
+        colours, which is why six visual directions could be shipped in one binary later the same
+        day. Then the result row, the reader pane on a coloured spine, facets and opening a
+        conversation where it lives, grouping with a Library view, the minimap, folding sections
+        with the cursor walking the heads, appearance and theme separated into two independent axes,
+        a settings window at Cmd-comma, Gruvbox and Solarized ports with every lightness re-solved,
+        and a bottom drawer timeline whose scrubber writes <code>date:A..B</code> back into the
+        query line.
+      </p>
+      <p>
+        CI arrived the same day and does exactly one thing: compile the branch against
+        <code>main</code> before a human merges it. The app also learned to record
+        <em>abandonment</em> — the half of the query log that is not a success — so failure to find
+        something is data rather than silence.
+      </p>
+      <p>
+        Two pieces of vocabulary got settled. A <em>sitting</em> is a result nothing can open, and
+        <code>cs show</code> now renders the sitting rather than one record inside it. And the model
+        became a property of the message that ran, with the conversation's label a summary of those
+        — which is what fixed two importers quietly disagreeing about which model a conversation
+        used.
+      </p>
+      <div class="landed">
+        <p class="h">A selection of the twenty-four</p>
+        <ul>
+          <li><span class="k">#20</span><span>The app shell — a window, a list, and what the index is doing</span></li>
+          <li><span class="k">#21</span><span>The theme seam: one token layer, before the views that would hardcode it</span></li>
+          <li><span class="k">#22</span><span>CI: compile the branch against main before a human merges it</span></li>
+          <li><span class="k">#25</span><span>The reader pane: one conversation, folded</span></li>
+          <li><span class="k">#29</span><span>A rail for <code>date:</code> and <code>dir:</code> <span class="mono">+1,727</span></span></li>
+          <li><span class="k">#38</span><span>The bottom drawer: a timeline of the filtered set, with a scrubber <span class="mono">+2,110</span></span></li>
+        </ul>
+      </div>
+      <div class="chips">
+        <span class="chip adr">ADR 24 · model belongs to the message</span>
+        <span class="chip adr">ADR 25 · shipped themes are fenced</span>
+        <span class="chip bead">o1i.8 · a reader opens the sitting</span>
+        <span class="chip bead">pdw · record giving up, not only finding</span>
+      </div>
+    </div>
+  </article>
+
+  <!-- ─── 10 ─────────────────────────────────────────────────────────── -->
+  <article class="day" id="d10">
+    <div class="day-rail"><b>10</b><span class="wd">Thu</span><span class="dt">6 Aug</span></div>
+    <div class="day-body">
+      <h3>Settle the numbers, then write down how to review this</h3>
+      <div class="metrics">
+        <div><b>15</b><span>commits</span></div>
+        <div><b class="add">+1,310</b><span>lines added</span></div>
+        <div><b class="del">−220</b><span>removed</span></div>
+        <div><b>6</b><span>PRs landed</span></div>
+        <div><b>26</b><span>files</span></div>
+      </div>
+      <div class="comp" role="img" aria-label="docs 32%, clients 26%, prototypes 23%, process 13%, engine 6%">
+        <i class="engine" style="width:6.5%"></i><i class="clients" style="width:25.8%"></i><i class="proto" style="width:22.6%"></i><i class="docs" style="width:32.3%"></i><i class="process" style="width:12.9%"></i>
+      </div>
+      <p class="comp-note">docs 32% · clients 26% · prototypes 23% · process 13% · engine 6%</p>
+
+      <p>
+        A consolidation morning. Reading order got a covering index, which made the conversation
+        shape close to free, and the shape and rebuild numbers were re-taken on the merged code
+        rather than carried forward from the branch that measured them. The prototype's ribbon
+        stopped deriving shape from message kind and started asking <code>cs</code> for it — then
+        re-measured itself and now exits non-zero if the two disagree. An Edit menu closed out the
+        main menu work, with a note on what a menu item has to earn and the one that could not earn
+        it.
+      </p>
+      <p>
+        The last three pull requests are about how the project reviews itself. #42 states what a
+        pull request has to carry and gives both surfaces a way to photograph themselves, so a UI
+        change can be <em>shown</em> rather than described. #43 closes the gap that one named: a text
+        frame threw away colour, so frames now render as ANSI and as SVG. #44 is a pass over the
+        prose docs to thin the patterns that made them read as generated — kept where the contrast
+        was the claim, dropped where it was doing rhythm.
+      </p>
+      <div class="landed">
+        <p class="h">Pull requests landed</p>
+        <ul>
+          <li><span class="k">#39</span><span>Give reading order an index, and settle whether the shape can be unconditional</span></li>
+          <li><span class="k">#40</span><span>The ribbon draws cs's runs, on the axis cs counts</span></li>
+          <li><span class="k">#41</span><span>The rest of the main menu: Edit, and the clipboard in the search field</span></li>
+          <li><span class="k">#42</span><span>What a pull request has to carry, and how both surfaces photograph themselves</span></li>
+          <li><span class="k">#43</span><span>Keep the styles a text frame throws away, as ANSI and as SVG</span></li>
+          <li><span class="k">#44</span><span>Thin the patterns that make the prose docs read as generated</span></li>
+        </ul>
+      </div>
+    </div>
+  </article>
+</section>
+
+<!-- ══════════════════════════════════════════════════════════════════════ -->
+<section id="totals">
+  <div class="sec-head"><span class="sec-num">03</span><h2>The numbers, in full</h2></div>
+
+  <p>
+    Line counts exclude merge commits, so the day columns sum exactly to the project total.
+    Pull requests are counted on the day their commits reached <code>main</code>, which is not
+    always the day GitHub recorded — three of them (#16–#18) were closed rather than merged because
+    their work had already landed directly.
+  </p>
+
+  <div class="scroller">
+    <table>
+      <caption>Per-day totals · 28 July – 6 August 2026</caption>
+      <thead>
+        <tr>
+          <th>Day</th>
+          <th>Date</th>
+          <th class="num">Commits</th>
+          <th class="num">Added</th>
+          <th class="num">Removed</th>
+          <th class="num">Files</th>
+          <th class="num">PRs</th>
+          <th class="num">Beads filed</th>
+          <th class="num">Beads closed</th>
+          <th>Centre of gravity</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td class="mono">01</td><td class="mono">Tue 28 Jul</td><td class="num">25</td><td class="num">10,676</td><td class="num">107</td><td class="num">50</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td>Engine and decisions</td></tr>
+        <tr><td class="mono">02</td><td class="mono">Wed 29 Jul</td><td class="num">9</td><td class="num">2,623</td><td class="num">281</td><td class="num">35</td><td class="num">—</td><td class="num">90</td><td class="num">30</td><td>Issue tracking</td></tr>
+        <tr><td class="mono">03</td><td class="mono">Thu 30 Jul</td><td class="num">24</td><td class="num">14,537</td><td class="num">918</td><td class="num">61</td><td class="num">—</td><td class="num">43</td><td class="num">31</td><td>TUI and query parsing</td></tr>
+        <tr><td class="mono">04</td><td class="mono">Fri 31 Jul</td><td class="num">8</td><td class="num">1,742</td><td class="num">370</td><td class="num">33</td><td class="num">—</td><td class="num">6</td><td class="num">6</td><td>Query grammar</td></tr>
+        <tr><td class="mono">05</td><td class="mono">Sat 1 Aug</td><td class="num">15</td><td class="num">3,489</td><td class="num">529</td><td class="num">30</td><td class="num">—</td><td class="num">12</td><td class="num">8</td><td>Benchmarks and ADRs</td></tr>
+        <tr><td class="mono">06</td><td class="mono">Sun 2 Aug</td><td class="num">5</td><td class="num">309</td><td class="num">76</td><td class="num">6</td><td class="num">4</td><td class="num">2</td><td class="num">1</td><td>Process: first PRs</td></tr>
+        <tr><td class="mono">07</td><td class="mono">Mon 3 Aug</td><td class="num">4</td><td class="num">6,341</td><td class="num">187</td><td class="num">18</td><td class="num">—</td><td class="num">6</td><td class="num">—</td><td>UI prototype</td></tr>
+        <tr><td class="mono">08</td><td class="mono">Tue 4 Aug</td><td class="num">67</td><td class="num">13,288</td><td class="num">1,254</td><td class="num">68</td><td class="num">10</td><td class="num">57</td><td class="num">35</td><td>Client contract</td></tr>
+        <tr><td class="mono">09</td><td class="mono">Wed 5 Aug</td><td class="num">127</td><td class="num">18,771</td><td class="num">1,750</td><td class="num">99</td><td class="num">24</td><td class="num">32</td><td class="num">21</td><td>macOS app</td></tr>
+        <tr><td class="mono">10</td><td class="mono">Thu 6 Aug</td><td class="num">15</td><td class="num">1,310</td><td class="num">220</td><td class="num">26</td><td class="num">6</td><td class="num">1</td><td class="num">2</td><td>Docs and review process</td></tr>
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="2">Ten days</td>
+          <td class="num">299</td>
+          <td class="num">73,086</td>
+          <td class="num">5,692</td>
+          <td class="num">—</td>
+          <td class="num">44</td>
+          <td class="num">249</td>
+          <td class="num">134</td>
+          <td>—</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+
+  <p>
+    The file column counts distinct files touched that day, so it does not sum — most files are
+    touched on more than one day.
+  </p>
+
+  <div class="note derived">
+    <span class="h">Where it stands on day ten</span>
+    <p>
+      Five Rust crates (<code>cs-archive</code>, <code>cs-import</code>, <code>cs-core</code>,
+      <code>cs-tui</code>, <code>cs</code>) and one Swift app under <code>apps/macos</code>.
+      <strong>762 tests pass, none fail.</strong> Twenty-five ADRs are recorded. Of the 249 issues
+      filed, 134 are closed, 98 remain open, 14 are deferred and 3 are in progress — so the tracker
+      still holds roughly two-fifths of the work as outstanding, which is the honest position for a
+      ten-day-old project with a working client.
+    </p>
+  </div>
+</section>
+
+<footer>
+  <p>
+    <strong>Sources.</strong> Commit counts, line counts and file counts come from
+    <code>git log origin/main</code> with local commit dates; pull requests from the GitHub API via
+    <code>gh</code>, re-dated to the day their commits reached <code>main</code>; issue counts from
+    the <code>bd</code> Dolt database, converted from UTC to local. The test figure is a
+    <code>cargo test --workspace</code> run on <code>origin/main</code> at commit
+    <code>1440386</code>.
+  </p>
+  <p>
+    <strong>Two caveats worth knowing.</strong> The status table in <code>README.md</code> and the
+    &ldquo;Current state&rdquo; table in <code>docs/ARCHITECTURE.md</code> both predate most of this
+    work and understate it; <code>CLAUDE.md</code> still cites a 170-test suite that has since grown
+    to 762. Neither affects the figures above, which were taken from the repository rather than from
+    its prose.
+  </p>
+  <p>chat-search · generated 2026-08-06 · companion to <a href="INGESTION.html">docs/INGESTION.html</a></p>
+</footer>
+
+</div>
+
+<script>
+(function () {
+  var btn = document.getElementById('theme');
+  var root = document.documentElement;
+  btn.addEventListener('click', function () {
+    var dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    var cur = root.getAttribute('data-theme') || (dark ? 'dark' : 'light');
+    root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+  });
+})();
+</script>
+</body>
+</html>

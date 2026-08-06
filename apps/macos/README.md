@@ -374,9 +374,9 @@ the menu with the phrase selected:
 ⌘T → matched true, the drawer is open: false, the item now reads "Show Timeline"
 ⌘T again → matched true, the drawer is open: true, the item now reads "Hide Timeline"
 ⌘1 → matched true, the axis is none with 0 group(s), and the item checked is None — pressed on the axis already in force, which moves nothing
-⌘2 → matched true, the axis is project with 13 group(s), and the item checked is Project
-⌘3 → matched true, the axis is run with 1 group(s), and the item checked is Run
-⌘4 → matched true, the axis is source with 2 group(s), and the item checked is Source
+⌘2 → matched true, the axis is project with 4 group(s), and the item checked is Project
+⌘3 → matched true, the axis is run with 3 group(s), and the item checked is Run
+⌘4 → matched true, the axis is source with 1 group(s), and the item checked is Source
 ⌘1 again → matched true, the axis is none, where this run found it
 ```
 
@@ -395,8 +395,11 @@ mark is read back beside the axis and the group count each time, through `update
 the verb is. ⌘1 is pressed first and the list is already ungrouped, which is what makes the first
 line the statement that a key on the axis in force moves nothing — the chip has always been inert
 the same way. The run ends by pressing the digit of the axis it started on, the courtesy the drawer
-and the pasteboard both get. The counts are what a two-token query leaves in hand, not corpus
-numbers: 13 directories, one 12h run, two sources.
+and the pasteboard both get. The counts are the **rows in hand** when the key was pressed — a
+`--limit` window of a typeahead answer that is still settling — so they are neither corpus numbers
+nor stable between runs, and the run above is not the one that first took these lines: an earlier
+pass on the same index read 13, 1 and 2. What is stable is the pair either side of the comma, which
+is the claim: the axis moved, and exactly one item carries the mark.
 
 The bar is read **twice**, with an empty box and with the phrase selected, because half these items
 are *supposed* to be grey in the first reading — a Copy that offered itself with nothing selected

@@ -46,6 +46,11 @@ nobody repeats. `--folded` moves the *default* rather than folding what is on sc
 so a group arriving on a later keystroke is folded too: an instrument that measured a list
 unfolding itself as it typed would not be measuring anything.
 
+Two of them have a key that does the same thing while the app is running, and the relationship is
+the same in both cases — the flag opens in a state, the key moves between them: `--no-timeline` and
+Cmd-T, `--group` and ⌘1 to ⌘4. Both keys are on [the menu bar](#the-menu-bar), which is the only
+place in this window a key can be bound without the query box losing it.
+
 The theme flags are the ones that are *not* instruments. They choose among the six directions
 compiled into the binary and which side of one you are looking at, and they stick, which is why
 they are the only flags here that change anything about the next launch. `--theme-file` is the
@@ -228,11 +233,11 @@ do a thing the keyboard cannot reach at all* (the drawer, below).
 ```
 chat-search                 Edit                      View                 Window
   About chat-search           Undo             ⌘Z       Hide Timeline ⌘T     Close      ⌘W
-  Settings…            ⌘,     Redo            ⇧⌘Z                            Minimize   ⌘M
-  Quit chat-search     ⌘Q     Cut              ⌘X
-                              Copy             ⌘C
-                              Paste            ⌘V
-                              Select All       ⌘A
+  Settings…            ⌘,     Redo            ⇧⌘Z       ┈ Group              Minimize   ⌘M
+  Quit chat-search     ⌘Q     Cut              ⌘X       ✓ None        ⌘1
+                              Copy             ⌘C         Project     ⌘2
+                              Paste            ⌘V         Run         ⌘3
+                              Select All       ⌘A         Source      ⌘4
 ```
 
 **Edit is the one with a use in the ordinary path.** The search box is where you paste a path or a
@@ -265,6 +270,32 @@ flips**, which is Finder's arrangement for the status bar. `MainMenu` holds no m
 `AppHost.validateMenuItem` writes *Hide* or *Show* at validation — the callback that runs both
 before the menu is drawn and before the key fires, so the verb cannot be read stale.
 
+**And under it the axis, which is that same argument at four states rather than two.** The four
+chips above the query box were a click and nothing else — the drawer's complaint, one control over
+— and `chat-search-me9.8.40` was filed rather than folded into the bead above precisely because a
+toggle is one item and one verb where an axis is a *set*: four items, four keys, and a mark saying
+which of them you are in. That is a radio group, macOS has one shape for it, and it is Finder's
+`View ▸ as Icons ⌘1 · as List ⌘2 · as Columns ⌘3 · as Gallery ⌘4` — the digits, in the menu that
+says what the one list looks like. This window has one list and one axis cutting it, so the shape
+arrives without adaptation: a section header, then `None ⌘1`, `Project ⌘2`, `Run ⌘3`, `Source ⌘4`.
+
+**The digits are free, and the app that would have wanted them is being scrapped.** Cmd-1 upward is
+a tab or a place in most apps; there are no tabs here, and the only other candidate — the
+Search/Library switch, mouse-only in exactly the same way — is what `chat-search-me9.8.30` removes.
+Finder splits those two questions the same way in any case: the digits say how the list is cut, and
+a *place* is `⇧⌘` and a letter.
+
+Neither the words nor the digits are a second list of axes beside the chips. The titles are
+`Grouping`'s own, capitalised, and the digit is the axis's position in `allCases` — so an axis added
+to the enum arrives on the bar with the next digit and no edit to `MainMenu`. The mark is written
+where the drawer's verb is, in `AppHost.validateMenuItem`, and it is written on all four every time
+rather than moved from the one that had it: `--group project` at launch and a click on a chip both
+change the axis without the menu being open, and a menu that disagreed with the screen about which
+axis is in force would be worse than one that offered no keys at all. **`topic` is on the chips and
+not here**, which is the same rule cutting the other way — the chip is dashed because there is no
+taxonomy on this wire to switch to, and an item whose key reaches nothing is what this bar exists
+not to have.
+
 **Window is what the app owes its second window.** Cmd-comma opens the settings panel and until now
 only the mouse could dismiss it — a window reached by a key and left by a click, which is the same
 asymmetry as a text field you can type into and not copy out of, one window over. `performClose:`
@@ -283,7 +314,7 @@ says this app has a capability it does not have, and says it in the one place pe
 | Zoom, Bring All to Front | no key equivalent between them, which puts them outside the rule — the green button is the affordance for one and there is nothing for the other to gather |
 | the window list | what `NSApp.windowsMenu` would fill in, and its job is finding a window lost behind others; there are two here and Cmd-comma already raises the second |
 | Hide Others, Show All | both act on *other* applications, so neither is a key this app owes anybody, and Show All has no key equivalent to deliver |
-| the grouping axis | it passes the rule — the four chips are mouse-only in exactly the way the drawer was — and it is left off anyway, because an axis is four states rather than a toggle, and four items with four keys is an argument worth making on its own rather than smuggling in beside one. `chat-search-me9.8.40` |
+| the fifth chip, `topic` | the other four are on `View` and this one is not, for the reason it is drawn dashed rather than live: there is no taxonomy on this wire to switch to, so the item would be a key that reaches nothing. `chat-search-me9.8.40` |
 
 **And Hide, which was on this menu until the pass measured it.** Cmd-H is the most reflexive key on
 this platform after Cmd-Q, so it arrived on exactly the argument that carried Quit. Then
@@ -330,7 +361,7 @@ was taken back twice.
 ```
 the menu with an empty box:
   Edit: Undo [grey], Redo [grey], Cut [grey], Copy [grey], Paste, Select All, Writing Tools, …
-  View: Hide Timeline
+  View: Hide Timeline, ✓None, Project, Run, Source
 ⌘A → matched true, selected 27 of 27 characters
 ⌘C → field "dir:chat-search agent:codex" · query "…" · pasteboard "dir:chat-search agent:codex"
 ⌘X → field "" · query "" · pasteboard "dir:chat-search agent:codex"
@@ -339,12 +370,17 @@ the menu with an empty box:
 ⇧⌘Z → field "dir:chat-search agent:codex" · query "…"
 the menu with the phrase selected:
   Edit: Undo, Redo Cut, Cut, Copy, Paste, Select All, …
-  View: Hide Timeline
+  View: Hide Timeline, ✓None, Project, Run, Source
 ⌘H, which this bar deliberately does not carry → matched false, the app is hidden: false
   NSApp.hide(nil) called directly → the app is hidden: true
 ⌘M → matched true, the window is in the Dock: true
 ⌘T → matched true, the drawer is open: false, the item now reads "Show Timeline"
 ⌘T again → matched true, the drawer is open: true, the item now reads "Hide Timeline"
+⌘1 → matched true, the axis is none with 0 group(s), and the item checked is None — pressed on the axis already in force, which moves nothing
+⌘2 → matched true, the axis is project with 4 group(s), and the item checked is Project
+⌘3 → matched true, the axis is run with 3 group(s), and the item checked is Run
+⌘4 → matched true, the axis is source with 1 group(s), and the item checked is Source
+⌘1 again → matched true, the axis is none, where this run found it
 ```
 
 **Cmd-T is pressed twice**, and that is the shape of a toggle rather than thoroughness: one press
@@ -353,6 +389,20 @@ shut. The second press is what says it is a switch. It also puts the drawer back
 found it, which is the courtesy the pasteboard gets two paragraphs down. The title beside each is
 read after asking the menu to validate, since the verb is written at validation and reading it
 without asking would report the one the bar was built with.
+
+**All four digits are pressed, because the axis is a radio group and not four switches.** What has
+to be true is that the axis arrives *and* that exactly one item carries the mark afterwards: a press
+that regrouped the list while leaving the checkmark where it was would be the menu contradicting the
+screen, and it is the one way this can be wrong while every key still reports `matched true`. So the
+mark is read back beside the axis and the group count each time, through `update()` for the reason
+the verb is. ⌘1 is pressed first and the list is already ungrouped, which is what makes the first
+line the statement that a key on the axis in force moves nothing — the chip has always been inert
+the same way. The run ends by pressing the digit of the axis it started on, the courtesy the drawer
+and the pasteboard both get. The counts are the **rows in hand** when the key was pressed — a
+`--limit` window of a typeahead answer that is still settling — so they are neither corpus numbers
+nor stable between runs, and the run above is not the one that first took these lines: an earlier
+pass on the same index read 13, 1 and 2. What is stable is the pair either side of the comma, which
+is the claim: the axis moved, and exactly one item carries the mark.
 
 The bar is read **twice**, with an empty box and with the phrase selected, because half these items
 are *supposed* to be grey in the first reading — a Copy that offered itself with nothing selected
@@ -833,7 +883,9 @@ gets, which is the case that makes `chat-search --write-theme` in a second termi
 marked text against `Theme.name`, which was right while a theme could only change by being a
 different direction. A reloaded file keeps its name — the name *is* the file's stem — so a save
 that moved `--hit-bg` changed every mark on screen and changed nothing the table could see. It now
-keys on the three colours a mark is actually built from, both sides of each.
+keys on `Theme.fingerprint`, a digest of every authored value; the [reason it is not the list of
+tokens a mark reads](#the-marked-text-built-once-rather-than-once-a-frame) is that the list was
+tried and went stale in one merge.
 
 ##### The check, which is a flag for the reason `--verify-theme` is
 
@@ -856,41 +908,46 @@ sentences too long for this file wrapped and nothing else touched:
 ```
   saved in place — truncated and written again, the same inode
     drawing theme · user theme — --bg #2a1a3a, --ink-3 #7a8b8e, --hit-bg #4a3512, --fs-body 13.50pt
-    0 messages re-marked, inode 341962687, 2974 bytes
+    563 messages re-marked, inode 342054598, 2974 bytes
     said nothing
   saved atomically — a new file renamed over the old one, and the type scale moved
     drawing theme · user theme — --bg #102030, --ink-3 #7a8b8e, --hit-bg #4a3512, --fs-body 16.00pt
-    0 messages re-marked, inode 341962765, 2971 bytes
+    563 messages re-marked, inode 342054636, 2971 bytes
     said nothing
   saved in two writes 10ms apart — half the file, then all of it
     drawing theme · user theme — --bg #102030, --ink-3 #7a8b8e, --hit-bg #7a3d00, --fs-body 16.00pt
-    563 messages re-marked, inode 341962765, 2962 bytes
+    563 messages re-marked, inode 342054636, 2962 bytes
     said nothing
   caught between the two writes — half a file on disk
     drawing theme · user theme — --bg #102030, --ink-3 #7a8b8e, --hit-bg #7a3d00, --fs-body 16.00pt
-    0 messages re-marked, inode 341962765, 1481 bytes
+    0 messages re-marked, inode 342054636, 1481 bytes
     said: theme.css: line 46: expected `--token: value;` and found `--fs-hea`.
     said: still drawing theme — the last file that loaded whole stays on screen until another
           one does. `--no-theme-file` and a relaunch draw a direction.
   a typo — `--ink3` for `--ink-3`, which is a name and a hole
     drawing theme · user theme — --bg #102030, --ink-3 #7a8b8e, --hit-bg #14503c, --fs-body 16.00pt
-    0 messages re-marked, inode 341962765, 2951 bytes
+    0 messages re-marked, inode 342054636, 2951 bytes
     said: theme.css: line 20: --ink3 is not a token this build carries. `--write-theme` writes
           a complete file to start from.
     said: theme.css: the dark side: no value in force for --ink-3. A theme is drawn entire or not
           at all, so a file with a hole in it is not one (docs/DECISIONS.md ADR 25).
   the same typo saved again
     drawing theme · user theme — --bg #102030, --ink-3 #7a8b8e, --hit-bg #14503c, --fs-body 16.00pt
-    0 messages re-marked, inode 341962765, 2951 bytes
+    0 messages re-marked, inode 342054636, 2951 bytes
     said nothing
 ```
 
 **The inode moving on the atomic save is the whole reason it is quoted.** A run where that number
-never changes is a run that never exercised the case the directory watch exists for. **The
-re-marked count is the other cache's evidence**: 563 when `--hit-bg` moved and 0 when `--bg` and
-the type scale did, which is the table throwing away exactly what a mark is made of and keeping
-what it is not. And the last two states are the announcement rule stated as output — the same
-broken file twice, and the second time it says nothing.
+never changes is a run that never exercised the case the directory watch exists for.
+
+**The re-marked count is [the drawer's table](#the-marked-text-built-once-rather-than-once-a-frame)
+answering**, and the two zeros are the interesting ones. A read that failed rebuilt nothing, because
+nothing was redrawn; the same file saved twice rebuilt nothing, because a digest of a theme's values
+does not move when the bytes are re-written unchanged. The 563s are every save that moved something,
+`--bg` included, and that is the stated cost of a key that cannot go stale.
+
+And the last two states are the announcement rule as output: the same broken file twice, and the
+second time it says nothing.
 
 ## The reader
 
@@ -1038,20 +1095,31 @@ render time "because locating them means tokenizing the message … and a render
 frame" — so core paid once and the client reintroduced the cost a layer up (`chat-search-me9.8.29`).
 
 `MarkedText` keeps one entry per message, replaced rather than duplicated when its fold toggles,
-and thrown away whole when the conversation, the terms it was marked against, or the colours a mark
-is made of change. It hangs off `ReaderModel` beside the folds rather than off the view, for the
-reason the folds are there. **Appearance is deliberately not part of the key**: every token is one
-dynamic `NSColor` that picks its own side where it is drawn, so a light/dark flip repaints these
-without rebuilding any of them.
+and thrown away whole when the conversation, the terms it was marked against, or the theme drawing
+it changes. It hangs off `ReaderModel` beside the folds rather than off the view, for the reason the
+folds are there. **Appearance is deliberately not part of the key**: every token is one dynamic
+`NSColor` that picks its own side where it is drawn, so a light/dark flip repaints these without
+rebuilding any of them.
 
-**The colours and not the theme's name**, which is what this keyed on until
+**The whole theme and not the name it goes by**, which is what this keyed on until
 `chat-search-me9.8.39`. A name was a sound key while the only way a theme could change was by
 becoming a different direction; a [watched file](#watched-which-is-what-makes-it-edit-and-see) keeps
 its name across every save, because the name *is* the file's stem — so a nudge to `--hit-bg` changed
-every mark on screen and changed nothing the table could see. The key is now `--hit`, `--hit-bg` and
-`--ink`, both sides of each, which is exactly the set a mark bakes in: two directions that mark
-identically share entries, which is correct, and a direction that moves its window chrome no longer
-throws away 563 marked messages, which was not.
+every mark on screen and changed nothing the table could see.
+
+The obvious repair was to key on the tokens a mark reads, and it is worth recording that it lasted
+one merge: `me9.8.39` wrote `--hit`, `--hit-bg` and `--ink`, and `me9.8.37` landed markdown over the
+same string, which bakes in a face, two sizes and `--ink-3`. **A key that has to be kept in step
+with `mark` by hand is a key that is wrong the first time somebody adds an attribute**, and the
+first time is invisible — a stale entry looks exactly like a correct one. So it is `Theme`'s
+`fingerprint`: a digest of every authored value in the theme, taken once where the theme is built
+rather than compared on a path that runs 7,603 times a pass.
+
+What that costs is stated rather than hidden: a save that moves a token no mark reads throws the
+table away anyway. It is 563 messages rebuilt, which is what opening the drawer already costs, once
+per save at the speed a person saves. Two things it keeps that a revision counter would not — the
+same file saved twice rebuilds nothing, and a read that fails rebuilds nothing — are the two `0`s
+in the [watch's pass](#the-check-which-is-a-flag-for-the-reason---verify-theme-is).
 
 **The clock cannot check this and two counters can**, which is why `--shot` prints them. `builds`
 is what was assembled, `reuses` is what was handed back already assembled, and their sum is the
@@ -1091,6 +1159,112 @@ at this compared `terminal` against `terminal with paper's light`. And **the pic
 on "nothing moved"**: across the pair, every frame is identical outside a 162×16 px patch of the
 footer holding the query's own millisecond readout, which differs by as much between two runs of
 one build.
+
+### Markdown, set over the source
+
+The reader drew `**bold**`, `# headings` and fenced code as the characters they are. Measured over
+the live index — `on_head_path = 1`, counting messages that *contain* the sequence, which is a
+looser test than the scanner's and therefore a ceiling on what it styles:
+
+| band | messages | contain `**` | a line opening `#` | contain ``` ``` ``` |
+| --- | ---: | ---: | ---: | ---: |
+| assistant prose | 32,197 | 8,081 (25.1%) | 4,343 (13.5%) | 2,547 (7.9%) |
+| user prose | 13,595 | 595 (4.4%) | 1,643 (12.1%) | 945 (7.0%) |
+| reasoning | 14,178 | **11,105 (78.3%)** | 1 | 5 |
+| tool | 131,792 | 10,926 | 5,247 | 1,427 |
+
+Reasoning is the extreme case and the one that pays off the moment this is switched on: four fifths
+of it is asterisks, with essentially no code and no headings in it. The tool row is the argument
+for the gate below rather than for the feature — those are `#` and `*` as themselves.
+
+**Nothing may move a byte, and that is the whole design.** `Block.marks` are UTF-8 offsets into
+`text` and `runs(marking:in:)` slices the string by them, so a transform that deleted the `**`
+would move every offset after it and mark the wrong words — silently, in the one place a reader has
+gone to check why the conversation is on screen. `Model.swift` already records the hazard for a
+*one-character* substitution: `lineBreaksAsSpaces` is spelled in bytes so that "one byte in, one
+byte out, so every offset in marks still names the same characters afterwards."
+
+So the syntax is styled rather than deleted, and it is dimmed to `--ink-3` — the same quiet tier
+the tool traffic is drawn in — so it recedes without going anywhere. What is copied out of the
+reader is the message exactly as it arrived.
+
+| construct | what it gets |
+| --- | --- |
+| ```` ``` ```` fence | the whole block in the monospaced face, the delimiter lines dimmed |
+| `**bold**` | semibold between the markers, the markers dimmed |
+| `#` at the start of a line | the rest of the line semibold and one step up the scale, the hashes dimmed |
+
+**Existing tokens only** — `.mono`, `--ink-3`, semibold, and the same five-size scale everything
+else is set on. Nothing new reaches `ThemeCheck`, and no direction had to be re-solved. That is
+also why a code *ground* is not here: it would be two tokens across six directions and both sides
+through the contrast gate, and Solarized is the direction where the darkest colour published is the
+page itself.
+
+How much "one step up" is worth belongs to the direction and is honestly not much: `terminal` puts
+0.5pt between `body` and `head` and `paper` puts none at all, so a heading is carried by its weight
+and the size is a nudge where there is one to take. `SizeToken.larger` saturates at the top rather
+than inventing a sixth size.
+
+**That the scanner cannot corrupt anything is what makes a hand-rolled one safe here.** Get a line
+wrong and the failure mode is *no styling* — the reader draws it exactly as it drew it yesterday —
+never a wrong highlight and never lost text. Two gates keep it there:
+
+- **Never tool traffic.** 31,328 of the corpus's 131,792 tool messages contain a `#` or a `*`, and
+  almost none of it is markdown: a shell command, a diff, a glob and a JSON key all carry those
+  characters as themselves. On the conversation below, 100 of 388 tool messages are punctuated that
+  way and 0 are styled.
+- **Never a collapsed message.** A fold is one line with its line breaks spent as spaces, which
+  every line-oriented rule would read wrong — and a heading, a fence and a paragraph all draw as the
+  same truncated row anyway.
+
+Deliberately not read: italics, because a single `*` false-positives on globs and on
+multiplication where a doubled one is unambiguous; links, lists, blockquotes and tables, because
+nesting is where hand-rolled scanners actually break; and inline `` `code` ``, which is the one
+omission worth naming — it is common, and its delimiter is the character fences are made of, so it
+belongs to a scanner that shares state with the fence pass rather than one guessing beside it.
+Syntax highlighting is `chat-search-me9.8.38`'s question, not this one's.
+
+Bold does not cross a line, which CommonMark allows and this refuses: one unclosed `**` in a 40 KB
+message would otherwise style the rest of it, and confining that to its own line is worth more than
+the paragraph-spanning bold nobody writes.
+
+#### What `--shot` checks
+
+A frame shows a fence in the monospaced face. It cannot show that nothing moved, so the pass builds
+a fabricated message — a heading, a bold run and a fence, with a mark inside each, one of them
+straddling a `**` and one buried in the code — through the same `MarkedText` the drawer uses, and
+reads the drawing back. It is a printed pass rather than a test for the reason
+[`--verify-theme` is a flag](#why---verify-theme-and-not-a-test): the Command Line Tools SDK
+carries neither `Testing` nor `XCTest`. The fixture goes in as JSON through the contract's own
+decoder, so it is a fixture the contract can still reject.
+
+```
+markdown, over 563 drawn messages of claude-code:5b4f1d3c-…:
+  38 carry it — 37 with bold, 18 with a heading, 11 with a fence
+  of 388 tool messages, 100 contain a # or a *, and 0 are styled
+  collapsed, 0 of 563 are styled
+  a fabricated message with all three constructs and a mark inside each:
+    nothing moved: 275 bytes in, 275 out, identical true
+    the marks still name ["reader", "**deliberate**", "not bold"]
+    …which is what the offsets named before it was drawn: ["reader", "**deliberate**", "not bold"]
+    the scanner read 1 heading, 2 bold, 1 fenced block over 2 fence lines, 5 syntax runs
+    10 runs carry a face of their own
+    the same bytes as a tool result: 0 runs carry a face
+    the same bytes collapsed: 0 runs carry a face
+```
+
+The two mark lines are the claim: what the drawing says is marked, beside what the byte offsets
+named in the source before anything styled it. A run is read back as marked by the two attributes a
+mark spends and markdown never does — a ground and an underline — rather than by comparing colours,
+which would be a check on `Color`'s equality as much as on this.
+
+Markdown and the marks are two span sets over one string, so the cut is by both and the order says
+which wins. Markdown goes on first and owns the *face*: a fence is monospaced whether or not the
+query matched inside it. The mark goes on second and owns the *colour*, so a term landing on a `**`
+or inside a code block is still drawn as the reason the conversation is on screen. That is why
+`TextRun` carries a range rather than a copy of its text — a second styling pass has to intersect
+with the first, and finding a copy's way back into the string is a worse answer to a question the
+cut already had.
 
 ### The minimap
 
@@ -1385,32 +1559,57 @@ match — and line 3 only when there is one, which the contract decides rather t
 on the left, directory and age on the right, because `cwd` answers *which of my worlds was this*
 rather than *what is it*.
 
-What it draws is what the wire carries: source, size, directory, age, the title, and the best match
-with its highlight runs. Four of the mockup's cells are not on the wire at all and one is held back
-on purpose. All five are absent rather than blank — a cell with nothing behind it is not a column to
-reserve space for:
+What it draws is what the wire carries: source, model, size, directory, forks, age, the title, and
+the best match with its highlight runs. Two of the mockup's cells are not on the wire at all and one
+is held back on purpose. All three are absent rather than blank — a cell with nothing behind it is
+not a column to reserve space for:
 
 | cell | why not |
 | --- | --- |
-| model | in the index, not in the contract. `chat-search-me9.8.14` |
-| forks | `thread_count`, same |
 | total edit lines | nowhere. `export.py` sums them by parsing `Edit`/`Write` tool arguments |
 | topics | a `poc/ui` clustering over the corpus, not an index fact |
 | the ribbon | deliberate: it needs `kind_runs` and `match_seqs` in one coordinate space, which `chat-search-me9.25` says they are not, and nothing stands in its place |
 
+**Model and forks are drawn per row on that same principle, now that `chat-search-me9.8.14` has put
+them on the wire.** Neither is a column standing empty: 1,300 conversations of 4,426 name no model —
+the whole of Google Takeout, whose activity records have no such field — and only 45 hold more than
+one strand, so a reserved fork column would be three blank characters on 99% of the list. Each cell
+appears when its row has something to say and is gone when it does not.
+
+Which means both had to be placed where a cell that comes and goes moves nothing else. `model` is
+**last in the left cluster rather than second**, where the mockup puts it, because the cell before
+the gutter is the only one in that cluster whose width the gutter can absorb — second, it would step
+the size column left on every Takeout row that scrolled past. `forks` sits between the directory and
+the age for the mirror-image reason: `age` is anchored to the trailing edge either way, and the
+directory is the cell built to stretch, so it is the one that lends the mark its three characters.
+
+**And they cost the directory, at a width narrow enough.** `scripts/shot.sh` at its documented
+1200×800, reader open: the path fell from `~/dev/projects/chat-search` to `~…ch`. At 1500pt nothing
+moves. So the fixed cells now add up to more than a narrow list has, and `cwd` — the only flexible
+one — absorbs the whole overrun, which at four characters has discarded the leaf as surely as the
+tail-elision `docs/TUI-DESIGN.md` §2 forbids. `chat-search-wa8` is the bead. The answer there is a
+cell that yields rather than a narrower model column: 14 characters would cost a fifth of the rows
+their whole label to buy the path two.
+
 **The agent badge is the word, not an icon, and that is a re-measure rather than a disagreement.**
 The mockup dropped the word because its list column was a fixed 706px and the word cost the 66px
-`cwd` needed to stop collapsing. This row does not spend that: with no model cell and no ribbon it
-costs about 200pt less, so at the window's 720pt floor `cwd` still gets ~470pt against the mockup's
-17-character budget. It is also the only channel there is — no asset catalog means no per-source
+`cwd` needed to stop collapsing. This row still does not spend that — the ribbon is the 200px it
+has not spent — but it is no longer the comfortable margin it was before the two cells above
+landed. It is also the only channel there is — no asset catalog means no per-source
 icon, and SF Symbols has no glyph for a vendor — so the row carries colour and text where the
 mockup carried shape and colour. Text is the channel that survives greyscale.
 
-**The column plan is in characters of the meta face, not in points.** `source` 14, size 9, the
-gutter 4 and `age` 4, with the directory taking what is left up to 44. One character is measured
-off the theme's own size and design, so a direction that moves `--fs-meta` moves the columns with
-it instead of leaving the text to outgrow its cell. The terminal states its own plan in character
-cells for a different reason — it has nothing else — and the two are the same idea.
+**The column plan is in characters of the meta face, not in points.** `source` 14, model 16, size 9,
+the gutter 4, forks 3 and `age` 4, with the directory taking what is left up to 44. One character is
+measured off the theme's own size and design, so a direction that moves `--fs-meta` moves the columns
+with it instead of leaving the text to outgrow its cell. The terminal states its own plan in
+character cells for a different reason — it has nothing else — and the two are the same idea.
+
+The model cell is sized the way the directory is, off the corpus: 94.6% of model names are 16
+characters or fewer, and the tail is 134 rows of `text-davinci-002-render-sha` — a ChatGPT internal
+name whose instances the missing eleven characters would not tell apart. It tail-elides rather than
+middle-elides, because the pairs that differ only at the end (`claude-opus-4-7` against
+`claude-opus-4-8`) are 15 characters and fit whole.
 
 The directory's ceiling is the corpus's: 88% of directories are 35 characters or fewer, 91% are 44
 or fewer, and the tail is worktree paths, which middle-elide to their leaf. Elision is middle and
@@ -1477,6 +1676,15 @@ question was answered once (`chat-search-me9.22`) and sections do not un-answer 
 | `run` | `ended_at`, clustered at 12h | the widest there is — every conversation but the 2 with no last message |
 | `source` | `source` | archetype is ~87% predicted by it |
 | `topic` | — | drawn, and not offered |
+
+**The four are also ⌘1 to ⌘4**, on `View ▸ Group`, with a checkmark on the one in force
+(`chat-search-me9.8.40`). Same order, and the same `SearchModel.group(by:)` the chips call — one
+control with two affordances rather than two controls, so switching from the menu clears the
+accordion and places the cursor exactly as clicking does. The chips were a click and nothing else
+until then, in a window whose one focused view is the query box; [the menu bar](#the-menu-bar) is
+where a key can be bound that the box does not lose, and it is the same route the drawer took.
+`topic` is not on it, because a dashed chip and a menu item that reaches nothing are not the same
+kind of honest.
 
 **The residue group is the point of this bead.** `cwd` is 100% on codex and claude-code and 0% on
 chatgpt and gemini-cli, so a project grouping that quietly kept only the rows it could place drops
@@ -1569,10 +1777,12 @@ accordion would buy a fold by breaking the editing of the thing being folded. En
 to the list rather than to the field, so the fold costs nothing that was in use.
 
 There is a third way out of that argument now and it does not change this one: a menu resolves its
-keys outside the responder chain, which is how the drawer got Cmd-T (`chat-search-me9.8.26`). It
-is no use to the fold. A menu item is a single act with no idea where the cursor is, and *fold the
-group the cursor is on* is a sentence about a line — so Enter, which is already delivered to the
-list, is still the only thing that can say it.
+keys outside the responder chain, which is how the drawer got Cmd-T (`chat-search-me9.8.26`) and the
+axis ⌘1 to ⌘4 (`chat-search-me9.8.40`). It is no use to the fold. A menu item is a single act with
+no idea where the cursor is, and *fold the group the cursor is on* is a sentence about a line — so
+Enter, which is already delivered to the list, is still the only thing that can say it. The axis
+went the other way for exactly that reason: `group by project` names no line, so nothing has to know
+where the cursor is to obey it.
 
 The footer says what Enter would do whenever the cursor is on a head, and how many groups are shut
 (`12 groups by project · 12 folded`). That is the same defect `poc/ui/NOTES.md` §5 complains about,
@@ -1583,10 +1793,10 @@ folded group and a group that is not there have to look different.
 
 **Switching axes clears the accordion** rather than restoring it, which is the prototype's rule and
 its reasoning: groups are *ranked*, so the set you left open is rarely the set at the top when you
-come back. Clicking the axis already in force is inert, so the reset is a consequence of switching
-and never a surprise. Nothing else clears it — a keystroke that narrows the list until a group is
-empty and a keystroke that brings it back leave the fold alone, because a list rearranging under a
-cursor that never asked it to is worse than a stale fold.
+come back. Clicking the axis already in force — or pressing its key — is inert, so the reset is a
+consequence of switching and never a surprise. Nothing else clears it — a keystroke that narrows the
+list until a group is empty and a keystroke that brings it back leave the fold alone, because a list
+rearranging under a cursor that never asked it to is worse than a stale fold.
 
 The cost of folding, stated: on `borrow checker` the `source` axis has two groups, so shut it is
 two heads and a lot of empty column. That is honest about the axis rather than a fault of the fold,

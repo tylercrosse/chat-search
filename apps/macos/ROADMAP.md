@@ -52,11 +52,15 @@ without a relaunch.
 timeline and scrubber (`me9.8.20`), the main menu (`me9.8.24`), a `dir:` parsing bug (`me9.8.16`),
 and the drawer's key (`me9.8.26`) — which is the menu paying for itself: `me9.8.20` had closed
 saying a window with one focused view has no key to spare, and a menu bar is where that stops
-being true.
+being true. The axis followed it there (`me9.8.40`), which is the same rent paid a second time: the
+four chips were a click and nothing else, and `View ▸ Group` at ⌘1–⌘4 is what a four-state control
+looks like once there is a bar to put it on.
 
 **5 · The reader's controls.** The per-frame `AttributedString` first (`me9.8.29`), because the
-next thing was going to add runs to that path, then the fidelity model itself (`me9.8.36`): four
-knobs over `Band`, three levels, four presets, and a run summarised in one line rather than listed.
+next two things were both going to add runs to that path, then the fidelity model itself
+(`me9.8.36`): four knobs over `Band`, three levels, four presets, and a run summarised in one line
+rather than listed. Then markdown (`me9.8.37`), set over the source and never cut out of it,
+because `marks` are byte offsets into the text a scanner would otherwise be deleting from.
 A port of `poc/ui`'s fifth iteration of that control and not a design — and the reason the ordering
 matters is that `me9.41` had to re-key `Density` onto `Band` first, since `{ user: expanded, agent:
 collapsed }` is unsayable in a table keyed on `kind` where both are `prose`.
@@ -126,9 +130,8 @@ Kept out of the graph to keep it readable. Free-standing — nothing blocks them
 nothing: `me9.8.6` (prove the seam by swapping a whole theme), `me9.8.11` (is spacing outside the
 row a token), `me9.8.14` (carry `model` and `thread_count` on the wire), `me9.8.23` (a group head
 counts rows in hand and cannot say what the corpus holds), `me9.8.25` (`cs timeline` cannot
-describe a `--tools` search), `me9.8.40` (the grouping axis is four chips and a mouse, which is
-what the drawer was before `me9.8.26`). And one pair: `me9.8.13` (a hue for `google-takeout`, or a rule for sources the palette does not name)
-blocks `g6u` (the facet rail has no source colour).
+describe a `--tools` search). And one pair: `me9.8.13` (a hue for `google-takeout`, or a rule for
+sources the palette does not name) blocks `g6u` (the facet rail has no source colour).
 
 ### Why the edges are there
 

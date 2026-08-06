@@ -324,16 +324,20 @@ struct BlockRow: View {
 
     /// Prose in the reading face, everything else in the quiet monospaced tier — the mockup's
     /// split, and the reason a screen of tool traffic does not read as a screen of conversation.
-    private var isProse: Bool { block.band == .user || block.band == .agent }
-
+    ///
+    /// The choice is `Display.textFace` and not here, for the same reason the spine's colour is
+    /// `Display.bandToken`: `Markdown` sets a fence in the monospaced face *at this size* and a
+    /// heading one step above it, so the size a message is set in has to be one answer rather than
+    /// this view's and the styling's.
     private var face: Font {
-        isProse ? theme.font(.body) : theme.font(.meta, .mono)
+        let setting = Display.textFace(block)
+        return theme.font(setting.size, setting.face)
     }
 
     private var tone: Color {
         if block.isError { return theme.color(.err) }
         // Equal contrast for both sides of the prose. Neither role is demoted, which is what the
         // spine beside them is for.
-        return isProse ? theme.color(.ink) : theme.color(.ink3)
+        return Display.isProse(block) ? theme.color(.ink) : theme.color(.ink3)
     }
 }

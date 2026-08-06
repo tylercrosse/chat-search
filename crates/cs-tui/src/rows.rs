@@ -130,6 +130,8 @@ mod tests {
             user_turns: 0,
             msg_count: 0,
             prose_count: 0,
+            thread_count: 1,
+            model: None,
             score: 0.0,
             match_count: n,
             match_seqs: Vec::new(),

@@ -123,7 +123,22 @@ public struct Conversation: Decodable, Sendable, Identifiable {
     public let userTurns: Int
     public let msgCount: Int
     public let proseCount: Int
+    /// How many strands of the conversation's DAG its messages fall into — what a reader calls a
+    /// fork. 1 on 4,379 of 4,426 conversations and above 1 on 45, so it is a mark that appears
+    /// rather than a column that is nearly always the digit one. `0` on the two conversations
+    /// holding no messages, which is neither one strand nor several: `forks` reads both as
+    /// nothing to say.
+    public let threadCount: Int
     public let cwd: String?
+    /// The model of the **last message that named one**, resolved in the indexer's rollup — a
+    /// summary rather than a fact about the conversation (ADR 24). 166 conversations name more
+    /// than one, so a cell drawing this says *the model this ended on* and must not imply the
+    /// whole of it was that.
+    ///
+    /// Null on 1,300 of 4,426 — the whole of Google Takeout, whose activity records carry no
+    /// model field at any nesting level, plus 20 elsewhere that named none. Free-form as the
+    /// source wrote it, from `gpt-4o` to `text-davinci-002-render-sha`: rendered, never parsed.
+    public let model: String?
     /// Opaque ordering. The rows arrive best first and that order *is* the ranking, so this is
     /// carried to be shown and never to re-sort on.
     public let score: Double
@@ -142,6 +157,14 @@ public struct Conversation: Decodable, Sendable, Identifiable {
     public let matches: [Match]
 
     public var id: String { convId }
+
+    /// The number beside a fork mark, or nil when there is no fork to mark.
+    ///
+    /// Both states `threadCount` collapses to here mean "nothing to say": 1 is the ordinary
+    /// linear conversation, 4,379 rows of 4,426, and 0 is the two that hold no messages at all.
+    /// Drawing the difference would spend a cell on the fact that nothing happened, which is
+    /// why `docs/TUI-DESIGN.md` §3 asks for a marker above 1 and not a numeric column.
+    public var forks: Int? { threadCount > 1 ? threadCount : nil }
 
     /// The last path component of `cwd`, which is how a project reads in a row. Absent for the
     /// 69% of the corpus that is ChatGPT, so it is a hint and never a column.
@@ -307,11 +330,11 @@ extension String {
         for range in ranges {
             if range.upperBound <= cursor { continue }
             let start = Swift.max(range.lowerBound, cursor)
-            if start > cursor { out.append(TextRun(text: String(self[cursor..<start]), marked: false)) }
-            out.append(TextRun(text: String(self[start..<range.upperBound]), marked: true))
+            if start > cursor { out.append(TextRun(range: cursor..<start, marked: false)) }
+            out.append(TextRun(range: start..<range.upperBound, marked: true))
             cursor = range.upperBound
         }
-        if cursor < endIndex { out.append(TextRun(text: String(self[cursor...]), marked: false)) }
+        if cursor < endIndex { out.append(TextRun(range: cursor..<endIndex, marked: false)) }
         return out
     }
 
@@ -326,15 +349,21 @@ extension String {
     }
 }
 
-/// One stretch of text and whether the query matched inside it — what `runs(marking:in:)` hands
-/// a renderer, so that turning a match into a colour, an underline or a terminal modifier is the
-/// only decision left to make.
+/// Where one stretch of the string sits and whether the query matched inside it — what
+/// `runs(marking:in:)` hands a renderer, so that turning a match into a colour, an underline or a
+/// terminal modifier is the only decision left to make.
+///
+/// A range rather than a copy of the text, because a renderer that styles the same string a
+/// second time has to know where each run sits in order to intersect with it: the macOS reader
+/// sets markdown over the source (`chat-search-me9.8.37`), and finding a copied run's way back
+/// into the string it came from is a second, worse answer to a question the cut already had.
+/// `String(source[run.range])` is what a renderer that only wants the text writes.
 public struct TextRun: Sendable, Equatable {
-    public let text: String
+    public let range: Range<String.Index>
     public let marked: Bool
 
-    public init(text: String, marked: Bool) {
-        self.text = text
+    public init(range: Range<String.Index>, marked: Bool) {
+        self.range = range
         self.marked = marked
     }
 }

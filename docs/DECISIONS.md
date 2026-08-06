@@ -1027,3 +1027,93 @@ edits is the app authoring a theme, and the argument above turns on the app not 
 Also when the ribbon lands, because that is the first surface where the ramp is load-bearing on its
 own, and the answer may want to be "the ribbon draws in the shipped direction's ramp when the
 loaded one is unfenced" rather than "the ribbon is unreadable".
+
+---
+
+## 26. `kind_runs` travels at full resolution; the strip is downsampled by whoever draws it
+
+`accepted` · 2026-08-06
+
+**Context.** `kind_runs` (`chat-search-me9.19`) was designed on a prediction that did not survive
+contact with the corpus. Tool traffic is 66–85% of it and arrives in long stretches, so the runs
+were expected to compress hard. They do not: agent prose alternates with nearly every tool call,
+so the encoding is `agent,1` / `tool,N` repeated a few hundred times, and drawn messages divided
+by runs is 1.75–2.7x. Re-measured on the live 3,059-conversation index, 2026-08-06, `--nested 3`:
+
+| query | rows | runs/row | `kind_runs`, compact | on the wire |
+| --- | --- | --- | --- | --- |
+| `borrow checker` `--limit 60` | 58 | median 5, max 688 | 35.9 KB of 110.0 (33%) | 85.9 KB of 273.1 (31%) |
+| `commits` `--limit 100` | 100 | median 101, max 688 | 169.9 KB of 390.0 (44%) | 403.1 KB of 1086.8 (37%) |
+| `the` `--limit 100` | 100 | median 159, max 688 | 226.3 KB of 486.0 (47%) | 538.2 KB of 1445.0 (37%) |
+| _(no query)_ `--limit 100` | 100 | median 5, max 196 | 26.6 KB of 83.1 (32%) | 63.6 KB of 200.7 (32%) |
+
+`chat-search-me9.31` filed that and then declined to answer it, on the grounds that `kind_runs`
+counts what `blocks::drawn` draws, so settling the payload before the fold model would settle it
+twice. The fold model settled on 2026-08-06 (`chat-search-me9.41`), and it settled in the
+direction that decides this rather than merely permitting a decision: `Folds` is keyed on band,
+and **which bands a reader is showing right now is client session state, not a property of the
+conversation**. `drawn` itself has not changed since the day it was written.
+
+**Decision.** The field stays at full resolution — neither downsampled to the strip's width nor
+capped per conversation. Recorded here rather than left as an absence, because "nobody changed it"
+and "this was decided" are the same diff and different facts.
+
+**Why the server *cannot* do the downsample, rather than need not.** It would have to know three
+things, and it knows none of them.
+
+1. **The width.** `poc/ui` draws this data at three scales from one renderer — row strip, sitting
+   card, big minimap — under its own note that this is "the TUI spec's rule that the density strip
+   and outline mode are the same data at two resolutions, extended rather than duplicated". The
+   ~200px row strip is the smallest of the three. A server that quantises to it starves the other
+   two, and the reader's minimap is the one that most needs the resolution.
+2. **Which bands are drawn.** `chat-search-me9.8.36` ports four per-band knobs, and tools hidden
+   is the setting that makes a 900-message agent session legible. Hiding tools removes 66–85% of
+   the axis, so the strip a client then draws is over the *non-tool* messages — which it can
+   derive from full runs and cannot derive from bucketed ones.
+3. **That bucketing is a rendering.** `cs_core::blocks` opens by saying it holds the rules and
+   never the rendering, and names which messages are drawn as a rule. How many pixels they are
+   drawn in is not one. A downsample on the wire is that line crossed in the one direction the
+   module was written to prevent.
+
+**Measured, so the loss is not a guess.** Rebuilding the tools-hidden axis from a 200-column
+downsample, against rebuilding it from the runs as sent, under both bucket rules anyone has
+proposed — dominant band (`chat-search-me9.8.19`'s design) and prose-beats-tool priority (what
+`poc/ui`'s `mapBands` actually implements):
+
+| query | rule | median error | p10 / p90 | rows wrong by >1.5x |
+| --- | --- | --- | --- | --- |
+| `borrow checker` 60 | dominant | 1.00x | 0.87 / 1.00 | 4 of 58, too short |
+| | priority | 1.00x | 1.00 / 2.37 | 10 of 58, too long |
+| `the` 100 | dominant | 1.00x | 0.49 / 1.03 | 21 of 100, too short |
+| | priority | **1.85x** | 1.00 / 2.75 | **66 of 100**, too long |
+
+The median row needs no downsample at all — 53 of those 58 rows and 65 of those 100 are already
+under 200 runs — so the change would do nothing for two thirds of a page and silently corrupt the
+rest. Nothing in the payload would let a client tell which third it was holding.
+
+**What the bytes actually are.** `kind_runs` is a third of the compact response and 31–37% of what
+goes on the wire, and the gap between those two numbers is the point: `--json` is still
+pretty-printed, at 2.4–3.0x on these queries. On the `--limit 60` response, indentation is 163 KB
+of 273 KB where the whole of `kind_runs` is 86 KB. Downsampling it to 200 columns saves 18–23% of
+the response; emitting compact bytes saves 60%, needs no interface change, and is already filed
+(`chat-search-me9.29`). A bytes argument that skips the larger, cheaper, already-agreed win to make
+a lossy change to a published field is not a bytes argument.
+
+**Why not cap the runs and say so.** A cap is the downsample with an honesty flag bolted on, and
+the flag does not rescue it: a client told "this shape is truncated" still cannot draw the strip,
+the minimap or the tools-hidden axis, so it has bytes it must not use. It also adds a second thing
+on the wire that is sometimes not what it says it is, beside `kind_runs` already being empty when
+unasked-for.
+
+**What this costs, stated plainly.** 226 KB and ~4 ms of client-side parse on the broadest query at
+`--limit 100`; 36 KB and ~0.7 ms on a realistic one at 60. Server-side it is the read, not the
+bytes — `chat-search-me9.26` measured filling the field at +2.0 to +11.1 ms in-process, which is
+why it stays behind `SearchOptions::shape` and why the TUI does not pay it. Downsampling would not
+have avoided that read; it only shrinks what is serialised afterwards.
+
+**Revisit when.** Any of the three unknowns above stops being unknown. A transport that keeps the
+connection open (`chat-search-me9.21`) would let a client state its width and its visible bands in
+the ask, and at that point the server can fold — because it would be told, not guessing. Also when
+ADR 23's trigger fires: a second expensive optional field makes the sectioned reply the right
+design, and "retiring `kind_runs` by economics rather than by schema" is one of the futures that
+design was rejected against.

@@ -216,9 +216,18 @@ pub struct Run(pub Band, pub usize);
 
 /// Run-length encode a conversation's bands, in the order they were read in.
 ///
-/// Compresses hard on exactly the conversations that need it: tool traffic arrives in long
-/// stretches, so the agent sessions with hundreds of messages are the ones whose shape is a
-/// few dozen runs. Short chatty conversations barely compress, and they are short.
+/// **It barely compresses, and that was the surprise.** The prediction was that tool traffic
+/// being 66–85% of this corpus and arriving in long stretches would fold the agent sessions
+/// down to a few dozen runs. It arrives in stretches and agent prose alternates with nearly
+/// every call anyway, so the encoding is `agent,1` / `tool,N` a few hundred times over:
+/// measured 2026-08-06 on the live index, drawn messages divided by runs is 1.75–2.7x, and a
+/// page of 100 rows carries 226 KB of this. The encoding is still worth having at 1.9x, but a
+/// caller sizing a buffer off the old sentence would be out by an order of magnitude.
+///
+/// **Lossless, deliberately** (ADR 26). This is the whole conversation and not a summary
+/// quantised to a strip's width, because the width, the visible bands and the number of scales
+/// being drawn are all client facts — and because bucketing to a pixel count is a rendering,
+/// which is the one thing this module does not do.
 pub fn runs(bands: impl IntoIterator<Item = Band>) -> Vec<Run> {
     let mut out: Vec<Run> = Vec::new();
     for band in bands {
@@ -687,6 +696,30 @@ mod tests {
         // merged them would move every position after it.
         assert_eq!(runs(bands).iter().map(|Run(_, n)| n).sum::<usize>(), bands.len());
         assert!(runs([]).is_empty(), "nothing to draw is no runs, not one empty run");
+    }
+
+    #[test]
+    fn a_client_hiding_a_band_can_rebuild_the_axis_exactly_from_the_runs_it_was_sent() {
+        // The property ADR 26 rests on, and the reason the wire carries every run rather than
+        // a strip quantised to ~200 columns. `Folds` is per band and client-owned, so tools
+        // hidden is a real view — and it is 66-85% of this corpus removed, which rebases the
+        // axis rather than dimming part of it. Full runs re-encode to it exactly; a bucketed
+        // strip cannot, because a column is one band and the messages it swallowed are gone.
+        use Band::{Agent, Tool, User};
+        let bands = [User, Tool, Tool, Agent, Tool, Tool, Tool, Agent];
+        let sent = runs(bands);
+        let expand = |rs: &[Run]| -> Vec<Band> {
+            rs.iter().flat_map(|Run(b, n)| std::iter::repeat(*b).take(*n)).collect()
+        };
+
+        assert_eq!(expand(&sent), bands, "the encoding loses nothing to begin with");
+
+        let visible = runs(expand(&sent).into_iter().filter(|b| *b != Tool));
+        assert_eq!(visible, [Run(User, 1), Run(Agent, 2)]);
+        // Two agent turns that were three tool calls apart are one run once the calls are gone,
+        // and the axis is 3 positions rather than 8. Both are what makes the hidden band a
+        // different strip rather than the same strip with gaps in it.
+        assert_eq!(visible.iter().map(|Run(_, n)| n).sum::<usize>(), 3);
     }
 
     #[test]

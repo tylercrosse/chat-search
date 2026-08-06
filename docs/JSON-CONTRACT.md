@@ -266,8 +266,16 @@ back together.
 
 A two-element array rather than an object: `[band, length]`. There are a great many of these —
 the list is per result row and the corpus's longest conversation is 2,553 messages — and
-`{"band":"tool","n":12}` is four times the bytes for the same two facts. `chat-search-me9.31` is
-the open question of whether this payload earns its 35% of a search response at all.
+`{"band":"tool","n":12}` is four times the bytes for the same two facts.
+
+**Full resolution, and it stays that way** (ADR 26). The runs are every drawn message of the
+conversation, not a summary quantised to the ~200 columns a row strip has, even though they are
+a third of this response and a median row already fits. Downsampling is the client's: only the
+client knows how wide it is drawing, which of the four bands it is showing, and that the same
+runs feed a row strip, a sitting card and a full-height minimap at three different widths. A
+strip bucketed server-side to the narrowest of those cannot be widened again, and a client that
+hides the tool band — 66–85% of the axis — would be drawing an axis measured at up to 2.75x its
+true length with nothing in the payload to warn it.
 
 `band` is one of `user` · `agent` · `reasoning` · `tool`. Open set: decode an unknown band as a
 run you cannot colour rather than as an error.

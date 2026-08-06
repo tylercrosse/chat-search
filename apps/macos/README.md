@@ -943,14 +943,16 @@ Three frames beside the ordinary ones: `-scrubbed.png` with the selection standi
 
 - **No keyboard reach.** The arrows belong to the results list and this window has one focused
   view, so hiding and dragging are both mouse-only. The same argument as the fold's, without the
-  key the fold found.
+  key the fold found — and it matters less here, since a drawer can only ever draw and the window
+  it selects is typeable by hand. `chat-search-me9.8.26`.
 - **`undated` is a number and not a mark.** Four of 4,426 conversations have no ending and can be
   in no bucket; the header says so and the track cannot show them.
 - **A negated `date:` draws no rectangle.** The complement of a window is not a rectangle, and
   drawing it as one would put the selection over exactly the stretch the filter threw away. The
   counts beside it are still right.
 - **`cs search --tools` has no timeline.** `cs timeline` takes `--prefix` and no other search
-  knob, so a query asked against tool traffic cannot be drawn.
+  knob, so a query asked against tool traffic cannot be drawn — which on this corpus is where most
+  message-level matches land. `chat-search-me9.8.25`.
 
 ## Library: the half that is not derived
 

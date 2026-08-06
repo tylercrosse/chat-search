@@ -113,13 +113,21 @@ directory beneath it, because `dir:` is a substring match. Every one of those ru
 `cs_core::query` with the grammar, so this side is three shapes and no rules
 (`chat-search-1ld`).
 
+**A section head is its label and nothing else.** `poc/ui` puts what the section is a facet of at
+the right margin of the head — `agent: · config ∪ index` beside `SOURCES` — and a browser column
+is not 232pt. Twelve points of padding either side leaves about 208, which holds roughly 28
+characters of the micro face at 1.4 tracking, and those two strings are 30: the meta wrapped under
+its own label and every populated section read as two competing lines rather than one head. It is
+on hover now, which is the trade the group key above the list already makes for the same reason
+(`chat-search-me9.8.35`).
+
 They are ordered by *coverage* rather than by how interesting the facet is, which is `poc/ui`'s
 ordering: `ended_at` answers for every conversation, a source for every conversation, a `cwd` for
 a quarter of them. The `dir:` section says both halves of that last number — it draws the busiest
-12 of 128 directories, and its final line is the 3,303 conversations that record none at all.
-Only the agent sources have a working directory, so `dir:` cannot reach a ChatGPT conversation,
-and a section that showed only the directories would read as a complete account of where the work
-happened. Its chips are paths rather than project names: deriving one collapsed seven unrelated
+12 of 128 directories, which its head says on hover, and its final line is the 3,303 conversations
+that record none at all. Only the agent sources have a working directory, so `dir:` cannot reach a
+ChatGPT conversation, and a section that showed only the directories would read as a complete
+account of where the work happened. Its chips are paths rather than project names: deriving one collapsed seven unrelated
 directories onto a single label, which is why `chat-search-6eb.26` was closed.
 
 A directory whose click cannot be written is not offered at all. No `dir:` token can carry a path

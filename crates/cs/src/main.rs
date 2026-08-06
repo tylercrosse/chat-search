@@ -88,6 +88,12 @@ enum Command {
         /// What to search for, filters included: `agent:claude,codex`, `-agent:codex`,
         /// `dir:!web-app`, `date:<3h`, `date:today`.
         ///
+        /// `date:` also takes an absolute span, half-open and with either end optional:
+        /// `date:2026-07-28..2026-08-02` is the 28th through the 1st, `date:2026-07-28..` is
+        /// everything since, and `date:2026-07-28` is that day alone. A bound can carry a time
+        /// — `date:2026-07-28T09:30..` — and the span is the one form that does not move
+        /// overnight.
+        ///
         /// A value holding a space or a comma goes in double quotes — `dir:"~/Mobile
         /// Documents"` — since without them whitespace ends the word and a comma ends the
         /// value. Quote the value, not the whole token, and mind your shell's quoting too.

@@ -419,6 +419,16 @@ working. What moved is that the rail now offers chips it used to withhold.
 off. That pair is the whole statement: something is filtering, and it is not one of these. The
 token itself is visible and editable where every filter is, in the box (docs/TUI-DESIGN.md §5).
 
+**An absolute span is that case, and it is the one a client will meet** (`chat-search-me9.18`).
+`date:` now takes a half-open window with either end optional — `date:2026-07-28..2026-08-02` —
+which is what a timeline drag produces and what none of the four chips stands for. Nothing on
+this wire changed and it is not a `v` bump: the span is a `date:` token like any other, so it
+arrives inside `query` as text to paste whole, `dates.all.selected` is false while it is in
+force, and each chip's own `query` still replaces it wholesale when clicked. What a client
+cannot do from this reply is *write* such a span, since a scrubber has no chip to be handed one
+— `cs_core`'s `Window::value_in` renders it, and how it reaches a client that spawns `cs`
+rather than linking it is `chat-search-me9.8.20`'s to settle.
+
 ---
 
 ## The nullable fields

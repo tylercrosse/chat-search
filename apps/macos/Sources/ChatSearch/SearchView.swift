@@ -81,6 +81,11 @@ struct SearchView: View {
     /// corpus has four axes; drawing it live would need a taxonomy that is a `poc/ui` export
     /// rather than an index fact. A dashed chip with the reason on it says the true thing, which
     /// is that the axis exists and this wire cannot carry it.
+    ///
+    /// It stays dashed on purpose. `chat-search-me9.18` settled the other half of that bead —
+    /// `date:` can now say an absolute window — and settled that a topic is a *named saved query*
+    /// in `library.db` (ADR 3) rather than a facet, which makes this an axis waiting on a store
+    /// and a taxonomy rather than on a keyword. `chat-search-me9.40` is where that is decided.
     private var groupControl: some View {
         HStack(spacing: 2) {
             Text("GROUP")
@@ -105,7 +110,7 @@ struct SearchView: View {
                 .help(
                     "a seeded taxonomy over the corpus — 26 seeds, and 37% of conversations match "
                         + "none of them. Derived by poc/ui/export.py, not an index fact, and not "
-                        + "on this wire (chat-search-me9.18)")
+                        + "on this wire (chat-search-me9.40)")
         }
         .fixedSize()
     }

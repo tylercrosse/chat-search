@@ -8,6 +8,11 @@ Paste this alongside a screenshot of `poc/ui/index.html`.
 > `poc/ui/index.html?dir=paper` puts one of them on the whole prototype. They are worked
 > answers rather than the answer — the brief below is still the ask, and a fifth
 > direction that ignores all four is a better outcome than a refinement of one.
+>
+> The same page also carries `gruvbox-derived` and `solarized-derived`, which are ports
+> of palettes designed elsewhere rather than answers to anything below. Read them as
+> evidence about the fences — what a published palette has to give up to clear them —
+> and not as a fifth and sixth attempt at this brief.
 
 **The visual language here has never had a designer look at it.** It was built by
 working outward from measurements of the data, which is why the information design is

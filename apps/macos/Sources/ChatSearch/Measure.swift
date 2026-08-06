@@ -1,5 +1,6 @@
 import AppKit
 import CsKit
+import CsTheme
 import Darwin
 import Foundation
 import QuartzCore
@@ -273,6 +274,178 @@ enum Measure {
         try? await Task.sleep(for: .seconds(1))
     }
 
+    /// The settings window, and what moving each of its three controls does to the app behind it.
+    ///
+    /// Two claims live here and a picture only carries one of them. The window is a drawing, so it
+    /// gets photographed; *changing any of the three redraws the running app without relaunching*
+    /// is a before and an after, so every control is moved and the app's own view tree is read back
+    /// through `AppearanceProbe` — the same reading `chat-search-me9.8.22` took, and for the same
+    /// reason, since an override that reached only the window chrome looks identical in a PNG.
+    ///
+    /// The third claim is that none of it is written down. A scripted run never writes the
+    /// preference, and this run drives the very controls whose ordinary job is to write it, so the
+    /// four keys are read before and after and printed either way.
+    @MainActor
+    static func settings(
+        model: SearchModel, settings: ThemeSettings, view: NSView, query: String, to path: String
+    ) async {
+        print(drivenLine())
+        let keys = [
+            ThemeChoice.directionKey, ThemeChoice.lightKey, ThemeChoice.darkKey,
+            ThemeChoice.appearanceKey,
+        ]
+        func plist() -> [String: String] {
+            keys.reduce(into: [:]) { $0[$1] = UserDefaults.standard.string(forKey: $1) }
+        }
+        let before = plist()
+
+        // Rows first. A theme redrawing an empty window is a picture of a background colour, and
+        // what these settings are for is the list and the badges and the ribbon under them.
+        model.query = query
+        model.queryChanged()
+        try? await Task.sleep(for: .seconds(2))
+
+        // The menu, and then Cmd-comma through it. `performKeyEquivalent` is the call AppKit makes
+        // for a real keystroke, so this is the whole path a person's Cmd-comma takes minus the
+        // hardware — with no menu bar, or with the item unwired, it returns false and no window
+        // appears, which is the state this app was in before `chat-search-me9.8.21`.
+        for line in menuLines() { print("  \(line)") }
+        let handled = NSApp.mainMenu?.performKeyEquivalent(with: press(",", code: 43)) ?? false
+        try? await Task.sleep(for: .milliseconds(500))
+        guard let panel = NSApp.windows.first(where: { $0.title == "Settings" }) else {
+            print("  Cmd-comma: handled \(handled), and no settings window came up")
+            return
+        }
+        print("  Cmd-comma: handled \(handled), opened \"\(panel.title)\" at "
+            + "\(Int(panel.frame.width))x\(Int(panel.frame.height))")
+        print("settings: \(Theme.directions.count) directions in each menu, "
+            + "\(Appearance.allCases.count) appearances, \(model.conversations.count) rows behind "
+            + "the window")
+        // As it opens, before anything is driven: three controls standing for what the launch
+        // resolved, which is the only frame in this run that shows a remembered choice being read
+        // back rather than a chosen one being applied.
+        let opened = path.replacingOccurrences(of: ".png", with: "-settings-as-opened.png")
+        print("  \(settings.appearance.rawValue), \(settings.light.name) light, "
+            + "\(settings.dark.name) dark, type and spacing from \(settings.layout.name)")
+        print("  \(opened) \(capture(panel.contentView, to: opened))")
+
+        // Each appearance in turn: what the app's own view tree resolved, and both windows drawn in
+        // it. The panel as well as the app, because the panel is the one view in this process that
+        // is *not* themed — it follows the override through AppKit alone, which is the shortest
+        // demonstration that the override is at the application and not in the token layer.
+        for appearance in Appearance.allCases {
+            settings.choose(appearance: appearance)
+            try? await Task.sleep(for: .milliseconds(500))
+            print("  " + AppearanceProbe.line(theme: settings.theme, view: view, asked: appearance))
+            for (name, drawn) in [("settings", panel.contentView), ("app", view)] {
+                let file = path.replacingOccurrences(
+                    of: ".png", with: "-\(appearance.rawValue)-\(name).png")
+                print("    \(file) \(capture(drawn, to: file))")
+            }
+        }
+
+        // And a side, which is the control whose effect a probe can state exactly: the theme in
+        // force gains a borrowed half, and `--bg` comes back as that direction's own value. Every
+        // direction in the menu, because the menu offers every direction.
+        settings.choose(appearance: .light)
+        for direction in Theme.directions {
+            settings.choose(light: direction)
+            try? await Task.sleep(for: .milliseconds(500))
+            print("  light theme → \(direction.name): drawing \(settings.theme.name), "
+                + "type and spacing from \(settings.layout.name)")
+            print("    " + AppearanceProbe.line(
+                theme: settings.theme, view: view, asked: settings.appearance))
+        }
+
+        // The mixed pair the two menus exist for, photographed on both sides: one direction's light
+        // beside another's dark, chosen from a window rather than from a command line.
+        settings.choose(light: .paper)
+        settings.choose(dark: .terminal)
+        for appearance in [Appearance.light, .dark] {
+            settings.choose(appearance: appearance)
+            try? await Task.sleep(for: .milliseconds(500))
+            let file = path.replacingOccurrences(
+                of: ".png", with: "-mixed-\(appearance.rawValue).png")
+            print("  \(settings.theme.name), \(appearance.rawValue)")
+            print("    \(file) \(capture(view, to: file))")
+        }
+
+        let after = plist()
+        print("  the four keys before: \(describe(before))")
+        print("  the four keys after:  \(describe(after))")
+        print("  a scripted run wrote nothing: \(before == after)")
+
+        // Which leaves the write itself unshown, because this run is the one run that must not
+        // make it. So it is made against a domain nobody reads, through the same two functions and
+        // the same four key constants a person's click goes through.
+        writes()
+
+        // And Cmd-Q, the other thing the menu fixed. Pressed rather than described, and pressed
+        // last: if the key reaches the item this process ends on it, so the line below is only ever
+        // printed when it did not.
+        print("  Cmd-Q: pressing it, and this run ends there if the menu handled it")
+        _ = NSApp.mainMenu?.performKeyEquivalent(with: press("q", code: 12))
+        try? await Task.sleep(for: .seconds(1))
+        print("  Cmd-Q DID NOT QUIT — the item is on the menu and the key did not reach it")
+    }
+
+    /// What the window writes down, taken against a scratch defaults domain.
+    ///
+    /// The two rules worth checking are the ones a settings window can get wrong in a way no
+    /// picture shows: the four keys are `ThemeChoice`'s and not a second set beside them, and two
+    /// menus naming one direction collapses to `--theme NAME` — the direction whole, with the side
+    /// overrides cleared rather than left behind to contradict it.
+    ///
+    /// The domain is removed afterwards, so `defaults read chat-search-settings-probe` says it does
+    /// not exist. `cfprefsd` leaves an empty plist behind at that name anyway, which is residue
+    /// rather than state — the app's own domain sits as the same empty file when nothing is set.
+    @MainActor
+    private static func writes() {
+        let name = "chat-search-settings-probe"
+        guard let scratch = UserDefaults(suiteName: name) else { return }
+        func state() -> String {
+            describe([
+                ThemeChoice.directionKey, ThemeChoice.lightKey, ThemeChoice.darkKey,
+                ThemeChoice.appearanceKey,
+            ].reduce(into: [:]) { $0[$1] = scratch.string(forKey: $1) })
+        }
+        ThemeChoice.remember(appearance: .dark, store: scratch)
+        print("  a window write, appearance dark:      \(state())")
+        ThemeChoice.remember(light: .paper, dark: .terminal, store: scratch)
+        print("  a window write, two sides that differ: \(state())")
+        ThemeChoice.remember(light: .paper, dark: .paper, store: scratch)
+        print("  a window write, two sides that agree:  \(state())")
+        UserDefaults.standard.removePersistentDomain(forName: name)
+    }
+
+    /// A key equivalent as AppKit would deliver it, minus the hardware.
+    private static func press(_ character: String, code: UInt16) -> NSEvent {
+        NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: 0, context: nil, characters: character,
+            charactersIgnoringModifiers: character, isARepeat: false, keyCode: code)!
+    }
+
+    /// The menu bar as it stands, with the key equivalent beside each item — which is the half of
+    /// a menu that does the work, and the half that is invisible in a screenshot of a menu bar.
+    @MainActor
+    private static func menuLines() -> [String] {
+        guard let bar = NSApp.mainMenu else { return ["main menu: none — nothing can be pressed"] }
+        return ["main menu: \(bar.numberOfItems) menu(s)"]
+            + bar.items.flatMap { menu in
+                (menu.submenu?.items ?? []).map { item in
+                    let key = item.keyEquivalent.isEmpty ? "" : "  ⌘\(item.keyEquivalent)"
+                    return item.isSeparatorItem ? "  —" : "  \(item.title)\(key)"
+                }
+            }
+    }
+
+    /// The four preference keys, in a form one run can be diffed against itself with.
+    private static func describe(_ keys: [String: String]) -> String {
+        let set = keys.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }
+        return set.isEmpty ? "none set" : set.joined(separator: " ")
+    }
+
     /// The fold's other half, which is not a picture: where the cursor is allowed to be.
     ///
     /// `chat-search-me9.8.15` is two claims — a group folds, and a folded group cannot hold the
@@ -442,8 +615,15 @@ enum Measure {
     /// The window's own view hierarchy as a PNG, with no window server in it.
     @MainActor
     private static func capture(_ window: NSWindow, to path: String) -> String {
-        guard let view = window.contentView,
-            let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
+        capture(window.contentView, to: path)
+    }
+
+    /// The same, for a view held directly. The settings window is reached as a view rather than as
+    /// a window because the run that photographs it also reads the appearance back off it, and
+    /// those have to be the same object or the picture and the reading are about two things.
+    @MainActor
+    private static func capture(_ view: NSView?, to path: String) -> String {
+        guard let view, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds)
         else { return "(no bitmap for the window)" }
         view.cacheDisplay(in: view.bounds, to: rep)
         guard let png = rep.representation(using: .png, properties: [:]) else {

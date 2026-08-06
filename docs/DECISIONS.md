@@ -1001,7 +1001,7 @@ use it.
 steps and a visible foot", drop the absolute 2.2 / 4.0 / 7.2 / 13.0 — buys Gruvbox's dark side and
 nothing else. Its light side is still 0.09 out and Solarized is 0.42 out, so no *complete* palette
 is rescued by it, and `NOTES.md` §2 holds the ratios constant across directions on purpose: it is
-what makes four directions that look nothing alike read identically at 2px. A relaxation that
+what makes directions that look nothing alike read identically at 2px. A relaxation that
 admits no new theme is a weaker check bought for nothing.
 
 **Why a person is allowed to break AA on their own screen.** The fence is a promise about what this

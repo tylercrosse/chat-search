@@ -146,7 +146,7 @@
 /* Everything above is colour. Everything here is the rest of what a visual pass gets
    to touch — type sizes, radii, the row's rhythm, the ribbon's geometry — pulled out
    of the rules below so that a *direction* can be a set of token values rather than a
-   fork of this file. `directions.css` holds four of them and `directions.html` shows
+   fork of this file. `directions.css` holds six of them and `directions.html` shows
    them on the row and the ribbon at real size; chat-search-4ar.11 is the argument for
    why that is the shape.
 

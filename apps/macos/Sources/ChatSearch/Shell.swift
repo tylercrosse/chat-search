@@ -22,6 +22,22 @@ enum Surface: String, CaseIterable, Identifiable, Sendable {
     }
 }
 
+/// The root of the view tree, and the one place the theme in force enters the environment.
+///
+/// A view rather than an `.environment(\.theme, theme)` written once into `NSHostingView`'s root:
+/// the settings window changes the theme while the app is running (`chat-search-me9.8.21`), and an
+/// environment fixed at construction would make every choice a relaunch. Reading `settings.theme`
+/// inside `body` is the whole of the subscription, and swapping the value redraws every view under
+/// it — which is what the token seam was built before the views to buy (`chat-search-me9.8.8`).
+struct Root: View {
+    let model: SearchModel
+    let settings: ThemeSettings
+
+    var body: some View {
+        Shell(model: model).environment(\.theme, settings.theme)
+    }
+}
+
 /// The window: a view switch, whichever view is showing, and one footer under both.
 ///
 /// `poc/ui`'s title bar is where the switch lives, above the search bar rather than in it, because

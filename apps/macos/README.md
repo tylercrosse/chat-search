@@ -22,22 +22,24 @@ swift run -c release chat-search --bin /path/to/cs --limit 30
 swift run -c release chat-search --size 720x480
 swift run -c release chat-search --group project --folded
 swift run -c release chat-search --no-timeline
+swift run -c release chat-search --settings
 swift run -c release chat-search --theme paper
 swift run -c release chat-search --appearance light --theme-light paper --theme-dark terminal
 ```
 
 `--size` opens the window at a stated size, `--group` opens the list already cut along an axis,
-`--folded` opens every group of it shut, and `--no-timeline` opens the bottom drawer closed. All
-four are verification affordances rather than preferences — the row has to hold at several widths,
-a grouped list rebuilds sections where an ungrouped one rebuilds rows, a folded one draws heads
-where an open one draws heads and rows, and an open drawer is a third `cs` per keystroke, so
-`--measure` needs a way into each of those modes. A window that always opens at one size, always
-ungrouped, or always open, makes checking any of them a manual drag nobody repeats. `--folded`
-moves the *default* rather than folding what is on screen at the time, so a group arriving on a
-later keystroke is folded too: an instrument that measured a list unfolding itself as it typed
-would not be measuring anything.
+`--folded` opens every group of it shut, `--no-timeline` opens the bottom drawer closed, and
+`--settings` opens the settings window beside it. All five are verification affordances rather than
+preferences — the row has to hold at several widths, a grouped list rebuilds sections where an
+ungrouped one rebuilds rows, a folded one draws heads where an open one draws heads and rows, an
+open drawer is a third `cs` per keystroke, and the settings window is behind a Cmd-comma no script
+can press, so `--measure` and `--shot` need a way into each of those modes. A window that always
+opens at one size, always ungrouped, or always open, makes checking any of them a manual drag
+nobody repeats. `--folded` moves the *default* rather than folding what is on screen at the time,
+so a group arriving on a later keystroke is folded too: an instrument that measured a list
+unfolding itself as it typed would not be measuring anything.
 
-The theme flags are the ones that are *not* instruments. They choose among the four directions
+The theme flags are the ones that are *not* instruments. They choose among the six directions
 compiled into the binary and which side of one you are looking at, and they stick, which is why
 they are the only flags here that change anything about the next launch. See
 [the theme seam](#the-theme-seam).
@@ -197,7 +199,7 @@ No view names a colour, a size or a face. Every one is a token read off the envi
 values for every direction the app carries live in exactly one generated file:
 
 ```bash
-python3 poc/ui/tokens.py terminal paper blueprint ink \
+python3 poc/ui/tokens.py terminal paper blueprint ink gruvbox-derived solarized-derived \
     -o apps/macos/Sources/CsTheme/Tokens.swift
 cd apps/macos && swift run -c release chat-search --verify-theme
 ```
@@ -208,7 +210,7 @@ so there is one authored copy of these palettes rather than two that agree until
 checked in because the app must build from a checkout with no Python in it, and it is provenance
 rather than a dependency: nothing in `apps/` reads `poc/` at build or at run time.
 
-### Four directions in one build, and `--theme` picks one
+### Six directions in one build, and `--theme` picks one
 
 The first name on that command line is what the app draws when nobody has chosen; the rest it
 carries and offers. **The list is generated as well as the values**, and that is the part worth
@@ -220,10 +222,10 @@ the gate measures, with no second list anywhere to disagree.
 Switching is not a rebuild, and was never a view change. The whole of it on the app's side is one
 `.environment(\.theme, theme)` at the root, because `Theme` is a plain value behind an environment
 key with a default — which is what the seam was put in before the views to buy. Demonstrated rather
-than asserted, four pictures out of one binary:
+than asserted, six pictures out of one binary:
 
 ```bash
-for d in terminal paper blueprint ink; do
+for d in terminal paper blueprint ink gruvbox-derived solarized-derived; do
   swift run -c release chat-search --shot --theme $d --out /tmp/theme-$d.png
 done
 ```
@@ -345,10 +347,87 @@ nothing is the failure this is most likely to have. And a scripted run writes no
 `--measure` and `--shot` draw in whatever direction and appearance a script names them, and neither
 is somebody choosing a theme. Same rule and the same reason as both staying out of the query log.
 
-A flag is the affordance because a terminal is this app's front door — no bundle, no Dock icon, no
-menu bar. A picker *inside* the app wants a menu bar to hang itself on, which this executable has
-never built, so it is filed rather than half-done: `chat-search-me9.8.21`, which is now a surface
-over three settings that already work rather than the only way to reach them.
+A flag is still the affordance a script reaches for, and a terminal is still this app's front door —
+no bundle, no Dock icon. But a flag is no longer the *only* way in, because the menu bar it was
+waiting on now exists.
+
+### The menu bar, and the settings window on it
+
+This executable creates `NSApplication` by hand and never built an `NSMenu`, so until
+`chat-search-me9.8.21` there was no app menu to hang `Settings…` on — and Cmd-Q did not work either,
+for exactly the same reason. A hand-made application has no menu bar at all, not an empty one, and a
+key equivalent is a thing a menu delivers.
+
+```
+chat-search
+  About chat-search
+  Settings…            ⌘,
+  Quit chat-search     ⌘Q
+```
+
+**Quit is not scope creep.** It is broken without this, the menu is the only place a key equivalent
+can live, and shipping the menu that fixes it while leaving it off would be a deliberate choice to
+leave it broken. **Edit, Window and Hide are not here**, and that is the same argument stopping
+where the bead stopped: Cmd-C and Cmd-V in the search field are broken for the reason Cmd-Q was,
+which makes it a real gap and `chat-search-me9.8.24` rather than something to fold in on the way
+past.
+
+Cmd-comma opens a window carrying the three settings above:
+
+```
+Appearance   ( ) System   (•) Light   ( ) Dark
+             Drawing the light side.
+Light theme  [ paper · direction     v ]
+Dark theme   [ terminal · direction  v ]
+             Colour only — the type scale and the spacing come from paper, on both sides.
+```
+
+A window and not a `View > Theme` submenu, because a submenu with one checkmark can express one
+list, and this is three settings where two of them are lists and the third governs which list you
+are currently looking at. The caption under the appearance says which side is *actually* on screen
+rather than which one was asked for — under `system` the setting does not know and the view does,
+which is the same reading `--shot`'s probe takes and for the same reason.
+
+Each direction menu names the class beside the direction, which is what `chat-search-me9.8.12` built
+the class for: a build can carry a direction read off disk (`chat-search-me9.8.10`), and a menu that
+lists a shipped direction and a user theme without distinguishing them is telling you the two are
+equally fenced when ADR 25 says only one of them is.
+
+**Preview on selection, not on confirm.** There is no OK button and nothing to apply — the app
+redraws under the window as each control moves, which is the only preview worth having, and the
+whole of it is one observed value going back into `\.theme`.
+
+**Both menus on one direction means that direction whole.** There are four settings and three
+controls: nothing on the window stands for where the type scale and the geometry come from. So the
+two side menus agreeing is read as `--theme NAME` — that direction on both sides, side keys cleared
+— and menus that disagree write the two side keys and leave the layout direction exactly as it was.
+Without that rule, picking `paper` in both menus would draw paper's colours in `terminal`'s metrics
+while `--theme paper` draws the serif face, and the same choice said two ways would give two
+results. The caption under the menus says which direction it currently is, because a setting that
+changes the window and appears nowhere on it is worse than a fourth control.
+
+**The window is drawn in stock AppKit controls**, which is the one view in this app that does not
+read its colours off `\.theme`. Two reasons: the preview is the window *behind* this one, so a panel
+that also repainted itself would put the sample beside the swatch and make neither readable; and a
+radio group painted in a direction's tokens is a theme authoring a control, which is the direction
+this surface is under the most pressure to drift in. What it must not become is the rest of that
+list — a colour well, a slider on a token, a "customise…" button. `docs/DECISIONS.md` ADR 25 turns
+on the app not being the author of a theme, and selecting a direction is selecting. A token that
+needs dialling is `chat-search-me9.8.10`'s file-off-disk route, where the authoring happens in a file
+you own and the result is still measured on load.
+
+**And it is checkable from a script**, which a window normally is not:
+
+```bash
+swift run -c release chat-search --settings                    # open it at launch
+swift run -c release chat-search --shot --settings --out /tmp/s.png
+```
+
+`--shot --settings` presses Cmd-comma through `NSMenu.performKeyEquivalent` — the call AppKit makes
+for a real keystroke — then moves all three controls and reads the app's own view tree back after
+each one, photographs both windows at each appearance, checks that a scripted run wrote none of the
+four keys, exercises the writes against a scratch defaults domain, and quits by pressing Cmd-Q. The
+run ending is the evidence for that last one: reaching the line after it is the failure.
 
 ### Why `--verify-theme` and not a test
 
@@ -361,9 +440,9 @@ grounds it lands on. That last one is not pedantry: `--ink-3` was fixed once aga
 still at 4.23:1 on `--panel`, which is where most of that text actually is.
 
 Every direction and not just the default, because measuring only the default would fence the one
-palette least likely to be wrong — it is the one somebody is looking at — and leave the other three
+palette least likely to be wrong — it is the one somebody is looking at — and leave the other five
 offered and checked by nobody. One miss anywhere fails the run, and the verdict names which
-direction missed: "FAILED" over four palettes says nothing about which one to go and re-solve.
+direction missed: "FAILED" over six palettes says nothing about which one to go and re-solve.
 
 It exists for the reason `palette.py --verify` exists. Solving a colour and writing it down are
 two events, and generating adds a third — so what ships is now two steps from what was solved,
@@ -371,12 +450,10 @@ and neither step is checked by anything that reads Swift.
 
 ### Adding a theme — Solarized, Gruvbox, one of your own
 
-Not yet possible without editing this app, and here is the honest shape of it.
-
 A theme is not a list of hexes here. Half of one is *solved*: the four message kinds have to sit
 on an even luminance ramp against the ribbon track, because hue is the channel that degrades
 fastest at the ~2px those bands are drawn at, and the quiet tier has to clear 4.5:1 at 9–11px.
-So the path for Solarized is to add its hues to `DIRECTIONS` in `poc/ui/palette.py`, let that
+So the path for a palette is to add its hues to `DIRECTIONS` in `poc/ui/palette.py`, let that
 solve the eight fenced tokens, write the rest into `directions.css`, and name it on the `tokens.py`
 line above — at which point the app offers it to `--theme` and the gate measures it, both because
 it is in the generated list and for no other reason. A theme that skips the solve will fail
@@ -399,10 +476,49 @@ name. `--verify-theme` prints the class beside every name it measures, and its l
 of those two consequences applies.
 
 That leaves three routes for a named palette, and none of them pretends to be another: load it as
-a user theme exactly as published; ship it as `solarized-derived` / `gruvbox-derived` with its hues
-re-solved through `palette.py`, which moves Gruvbox by a few percent lightness and moves
-Solarized's brightest kind from `base1` (L 60%) to L 93%, past `base2`; or find a palette that
-holds as authored, which neither of these two is.
+a user theme exactly as published; ship it re-solved through `palette.py`, with `-derived` in the
+name; or find a palette that holds as authored, which neither of these two is.
+
+#### The two that took the middle route
+
+Both ship, both are fenced, and `chat-search-me9.8.17` is the port. Every hue in them is Gruvbox's
+or Solarized's; not one lightness is. What each cost, measured rather than estimated — the ramp is
+what `--verify-theme` reads back out of the build, and the move is how far the worst of the eight
+solved tokens travelled in HSL lightness against the value its palette publishes:
+
+| | ramp on the track, dark | ramp on the track, light | worst token moved | port cost |
+| --- | --- | --- | --- | ---: |
+| `gruvbox-derived` | 2.21 4.01 7.20 13.05 · 1.81 1.80 1.81× | 2.21 4.00 7.27 13.13 · 1.81 1.82 1.81× | −11.4 pt dark, −13.3 pt light | 105 CSS + 95 Swift |
+| `solarized-derived` | 2.22 4.01 7.25 13.00 · 1.81 1.81 1.79× | 2.21 4.01 7.27 13.10 · 1.81 1.82 1.80× | **+26.7 pt** dark, −21.6 pt light | 105 CSS + 95 Swift |
+
+The last column is the whole port as `git diff --shortstat` reports it, which is the claim the
+generated seam has been making all along: `3 files changed, 479 insertions(+), 7 deletions(-)`
+across `palette.py`, `directions.css` and `Tokens.swift`, and the 95 Swift lines a direction costs
+are the same 95 `terminal` costs, because nobody wrote them. No view, no list and no binding was
+touched.
+
+**Gruvbox is a nudge and Solarized is a rebuild, and the middle column is where that shows.** Every
+Gruvbox band lands within 14 points of the lightness Gruvbox publishes, and its three dark grounds —
+`bg0_s`, `bg0`, `bg0_h` — go in unaltered as the page, the drawer and the track. Solarized's
+brightest kind travels 27 points, from `base1` at L 60% to L 87%, which is brighter than any colour
+Solarized puts on a dark ground; its designated secondary tier travels 22 points the other way,
+because 2.42:1 is under half the floor; and its ribbon track had to be invented, since the darkest
+colour it publishes is the page itself.
+
+**Two-thirds of a theme is neither published nor solved, and that is where the work was.** A theme
+is 30 colour tokens per side against Gruvbox's 19 and Solarized's 16, so the panels, the rules, the
+selection and match grounds and five source hues are invented either way. They are invented from
+each palette's own greys and accents at that palette's hues — taking them from `terminal` is how a
+port ends up reading as the incumbent wearing a costume. `directions.css` names the published ones
+in a trailing comment and marks the solved eight, so what was taken, what was computed and what was
+made up are told apart in the file rather than in a commit message. The one place Solarized needed
+an extra invention is a middle foreground tier per side: it publishes two per ground where this
+interface reads three, and its comments tier solved to the floor comes back brighter than its own
+body text.
+
+Neither sets a type, radius or rhythm token. A colour port cannot move rows-per-screen, so the
+density argument every other direction has to make does not arise, and `--shot --theme
+gruvbox-derived` differs from `--shot --theme terminal` in colour and in nothing else.
 
 Three things this seam does **not** do yet, each filed:
 

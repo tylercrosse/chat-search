@@ -134,20 +134,21 @@ const BURST: usize = 4;
 /// failure and still stops.
 const MAX_MISREADS: u32 = 64;
 
-/// How still the keyboard has to go before the header's match total is worth establishing.
+/// How still the keyboard has to go before the screen finishes itself.
 ///
-/// The total is free for any query narrow enough to finish typing, so this timer only ever
-/// governs broad prefixes — where settling costs 5–36 ms against this corpus
-/// (`cs_core::search::count_cost`). Paying that per keystroke put the spend at the one moment
-/// the number buys nothing: `tes` is three letters into a word, not a result set anyone is
-/// reading the size of.
+/// Two things wait for this, and both are worth nothing until typing stops. The header's match
+/// total costs 5–36 ms to establish on the broad prefixes that leave it unknown
+/// (`cs_core::search::count_cost`); the preview of whatever ranked first costs 2–55 ms to read
+/// (`state::App::defer_preview`). Paying either per keystroke puts the spend at the one moment
+/// it buys nothing: `tes` is three letters into a word, not a result set anyone is reading the
+/// size of or a conversation anyone is reading.
 ///
 /// 250 ms is measured against typing rather than picked for feel. A 100 wpm typist leaves
 /// ~120 ms between keystrokes, so this clears a fast burst without firing inside it — which
-/// matters, because a count started one keystroke early is not merely wasted, it is 36 ms of
-/// latency handed to the keystroke that interrupts it. Erring long costs only how soon a
-/// number appears after you stop, and a quarter second after stopping still reads as "already
-/// there".
+/// matters, because work started one keystroke early is not merely wasted, it is that many
+/// milliseconds of latency handed to the keystroke that interrupts it. Erring long costs only
+/// how soon the screen completes after you stop, and a quarter second after stopping still
+/// reads as "already there".
 const SETTLE: std::time::Duration = std::time::Duration::from_millis(250);
 
 fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
@@ -159,15 +160,15 @@ fn event_loop(term: &mut Term, app: &mut state::App) -> anyhow::Result<Exit> {
         let area = term.size().ok().map(|s| ratatui::layout::Rect::new(0, 0, s.width, s.height));
         let panes = area.map(|a| layout::app(a, app.show_preview));
 
-        // The one thing worth waking up for. With a total still unsettled, wait `SETTLE` for
-        // the next keystroke instead of indefinitely: if it does not come, the user has
-        // stopped typing and the number they are about to read is worth the query.
+        // The one thing worth waking up for. With the screen still waiting on something, wait
+        // `SETTLE` for the next keystroke instead of indefinitely: if it does not come, the
+        // user has stopped typing and what they are about to read is worth the milliseconds.
         //
         // Deliberately gated on there being something to do. An unconditional timeout would
-        // wake the process forever to redraw an unchanged screen, and a settle that fails
-        // returns false so this falls through to the blocking read below rather than retrying
-        // at 4 Hz against an index that is not going to answer.
-        if app.unsettled() && !event::poll(SETTLE).unwrap_or(false) && app.settle() {
+        // wake the process forever to redraw an unchanged screen, and a catch-up that finds
+        // nothing returns false so this falls through to the blocking read below rather than
+        // retrying at 4 Hz against an index that is not going to answer.
+        if app.waiting() && !event::poll(SETTLE).unwrap_or(false) && app.catch_up() {
             continue;
         }
 

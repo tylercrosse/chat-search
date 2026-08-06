@@ -1,10 +1,16 @@
 //! What the TUI knows between keystrokes.
 //!
-//! No worker thread, no generation counter, no debounce. The search is synchronous in the
-//! event loop because it costs 1.4–6.4 ms in-process, so there is never an in-flight query to
-//! go stale (ADR 14, and `me9.4` was closed for this reason). If any keystroke path ever
-//! measures past ~30 ms that stops being true and generation numbering has to come back —
-//! reopen `me9.4` rather than reinventing it.
+//! No worker thread and no generation counter. The search is synchronous in the event loop
+//! because it costs 1.4–6.4 ms in-process, so there is never an in-flight query to go stale
+//! (ADR 14, and `me9.4` was closed for this reason). If any keystroke path ever measures past
+//! ~30 ms that stops being true and generation numbering has to come back — reopen `me9.4`
+//! rather than reinventing it.
+//!
+//! The preview is the one thing a keystroke *defers* rather than does, because reading the
+//! conversation that happened to rank first is 2–55 ms against this corpus and is not a
+//! question anybody asked ([`App::defer_preview`]). That is a debounce, and it is still not
+//! concurrency: the read happens on this same loop once the keyboard goes quiet, so there is
+//! nothing in flight and nothing to number.
 
 use std::collections::HashSet;
 
@@ -71,9 +77,15 @@ pub struct App {
 
     pub show_preview: bool,
     /// The selected conversation's messages, loaded on selection change rather than per
-    /// frame. `None` before the first load and whenever the read failed — the pane says so
-    /// rather than rendering as though the conversation were empty.
+    /// frame. `None` before the first load, whenever the read failed, and while one is
+    /// deferred — the pane says which of those it is rather than rendering as though the
+    /// conversation were empty.
     pub preview: Option<Preview>,
+    /// The preview a keystroke decided on but declined to read. See [`App::defer_preview`].
+    ///
+    /// `None` means [`App::preview`] is what belongs on screen, loaded or failed. `Some` means
+    /// the pane is deliberately empty and this is what fills it once the keyboard goes quiet.
+    deferred: Option<Deferred>,
     /// Shown in the footer in place of the key hints. Set by a failed search, cleared by the
     /// next one that succeeds.
     pub status: Option<String>,
@@ -83,6 +95,13 @@ pub struct App {
     /// abandonment `Search` — the signal that the ranking showed nothing worth opening,
     /// which `6eb.21` cannot get any other way.
     picked: bool,
+}
+
+/// A preview that has been decided on but not read yet. Both halves of the cache key, so the
+/// idle moment reads exactly what the keystroke that deferred it had selected.
+struct Deferred {
+    conv_id: String,
+    terms: Vec<String>,
 }
 
 impl App {
@@ -121,11 +140,16 @@ impl App {
             expanded: HashSet::new(),
             show_preview: true,
             preview: None,
+            deferred: None,
             status: None,
             theme,
             picked: false,
         };
         app.adopt();
+        // The opening frame is nobody's keystroke: there is no typing to keep up with yet, and
+        // this runs before the alternate screen is entered. So the preview `adopt` deferred is
+        // paid for here rather than leaving the session to open on a pane saying it is reading.
+        app.load_deferred();
         Ok(app)
     }
 
@@ -172,7 +196,30 @@ impl App {
         // the user did not ask for (an expansion toggle, and the background reindex of
         // `6eb.16`), which is why it lives in `rebuild_rows` and not here.
         self.selected = 0;
-        self.sync_preview();
+        // Deferred rather than read, and for the mirror of that reason: a search moved the
+        // cursor onto a conversation as a side effect of the query changing, which is not the
+        // same as being asked to look at it.
+        self.defer_preview();
+    }
+
+    /// Whether anything on screen is waiting for the keyboard to go quiet.
+    ///
+    /// Two things are, for the same reason. A total the ranking scan declined to establish
+    /// ([`App::settle`]) and a preview a keystroke declined to read ([`App::defer_preview`])
+    /// both describe a query that is still being typed, and both cost real milliseconds. The
+    /// event loop spends them at the moment they start being worth something.
+    pub fn waiting(&self) -> bool {
+        self.deferred.is_some() || self.unsettled()
+    }
+
+    /// Pay for all of it. Returns whether the screen changed.
+    pub fn catch_up(&mut self) -> bool {
+        // Both, not the first that applies. They are one moment's work, and a total skipped
+        // because the preview also needed reading would leave the header showing `…` until the
+        // next keystroke — which is the wait this moment exists to end.
+        let read = self.load_deferred();
+        let counted = self.settle();
+        read || counted
     }
 
     /// Whether the header is still showing a total nobody has established.
@@ -251,11 +298,6 @@ impl App {
         self.mode() != cs_core::Mode::Searchable
     }
 
-    /// Reload the preview if the cursor has moved to a different conversation.
-    ///
-    /// Keyed on `conv_id`, not on the row index: moving between a header and its own hit
-    /// rows is the same conversation, and rereading it there would throw away the fold state
-    /// the user just set.
     /// Scroll the preview so the focused message is visible, given the pane's height.
     ///
     /// The height is only known at render time, so the caller passes it. Focus that does not
@@ -282,24 +324,66 @@ impl App {
         cs_core::Query::typeahead(&self.query).marking_terms()
     }
 
+    /// Reload the preview *now* if the cursor has moved to a different conversation.
+    ///
+    /// For the gestures that are themselves a request to read one — an arrow key, a click, a
+    /// fold. Keyed on `conv_id`, not on the row index: moving between a header and its own hit
+    /// rows is the same conversation, and rereading it there would throw away the fold state
+    /// the user just set.
     pub fn sync_preview(&mut self) {
+        self.defer_preview();
+        self.load_deferred();
+    }
+
+    /// Note which preview belongs on screen without reading it.
+    ///
+    /// This is the whole of `j1n`. Reading a conversation is 2–55 ms against this corpus —
+    /// measured over the top hundred for a broad prefix, where the median is 6 ms and the
+    /// corpus's longest conversation is 34 — and which of those a keystroke pays is decided by
+    /// whatever happened to rank first, so typing a broad query fell steadily behind while the
+    /// search it was blamed on was answering in 11. Nobody reads a preview mid-word, so the
+    /// read waits for the keyboard: `catch_up` does it when typing stops.
+    ///
+    /// The terms are half the key, not a detail of it. Keying on the conversation alone — which
+    /// this did — left a still-selected row showing marks located against the previous query, so
+    /// every keystroke after the first made the highlighting a little more wrong while looking
+    /// entirely deliberate.
+    ///
+    /// The old preview goes now rather than when the new one lands. Keeping it would leave the
+    /// pane drawing one conversation under a row that names another, which is not staleness but
+    /// a wrong answer presented as the selected one. Folds and scroll go with it, which is the
+    /// same rule `cycle_density` and the post-search reselect already follow: an edited query is
+    /// a new question, so a fold decided against the old one is not evidence about this one.
+    fn defer_preview(&mut self) {
         let wanted = self.selected_conv().map(str::to_owned);
-        // The terms are half the key, not a detail of it. Keying on the conversation alone —
-        // which this did — left a still-selected row showing marks located against the previous
-        // query, so every keystroke after the first made the highlighting a little more wrong
-        // while looking entirely deliberate.
         let terms = self.preview_terms();
         let fresh = self
             .preview
             .as_ref()
             .is_some_and(|p| Some(&p.conv_id) == wanted.as_ref() && p.terms == terms);
         if fresh {
+            self.deferred = None;
             return;
         }
-        // Folds and scroll are dropped with the old preview, and that is the same rule
-        // `cycle_density` and the post-search reselect already follow: an edited query is a new
-        // question, so a fold decided against the old one is not evidence about this one.
-        self.preview = wanted.and_then(|id| Preview::load(&self.reader.conn, &id, &terms).ok());
+        self.preview = None;
+        self.deferred = wanted.map(|conv_id| Deferred { conv_id, terms });
+    }
+
+    /// Read whatever [`App::defer_preview`] left. Returns whether the screen changed.
+    ///
+    /// A failed read leaves the pane empty, which is the answer this path has always given —
+    /// now told apart from a pane that is merely waiting, because the two look identical from
+    /// here and mean opposite things to a reader.
+    fn load_deferred(&mut self) -> bool {
+        let Some(want) = self.deferred.take() else { return false };
+        self.preview = Preview::load(&self.reader.conn, &want.conv_id, &want.terms).ok();
+        true
+    }
+
+    /// Whether the preview pane is waiting on a read rather than reporting a failed one. The
+    /// renderer needs the two apart; nothing else does.
+    pub fn preview_deferred(&self) -> bool {
+        self.deferred.is_some()
     }
 
     pub fn selected_group(&self) -> Option<&Group> {
@@ -621,6 +705,82 @@ mod tests {
         assert_eq!((app.answer.total, app.answer.settled), (600, true));
         assert!(!app.unsettled(), "and does not ask to run again");
         assert!(!app.settle(), "nor does a second call find anything to do");
+    }
+
+    #[test]
+    fn a_keystroke_does_not_read_whatever_happened_to_rank_first() {
+        // The bead: typing `there` at 50 ms a key left the app several keystrokes behind 800 ms
+        // after the last one, while its own search reported 11 ms. The gap was this read — 2–55
+        // ms of it, decided by which conversation the ranking put on top rather than by
+        // anything the user did — spent on a pane nobody looks at mid-word.
+        let mut app = app_with(&[("c0", "alpha beta"), ("c1", "alpha gamma")]);
+        assert!(app.preview.is_some(), "precondition: the session opened with one");
+
+        for ch in "alpha".chars() {
+            app.insert_char(ch);
+        }
+        assert!(app.preview.is_none(), "no conversation was read on the way through");
+        assert!(app.preview_deferred(), "and the pane can say it is waiting, not broken");
+        assert!(app.waiting());
+
+        // What the event loop does once the keyboard goes quiet.
+        assert!(app.catch_up(), "catching up reports that the screen changed");
+        assert!(!app.preview_deferred());
+        assert_eq!(
+            app.preview.as_ref().map(|p| p.conv_id.as_str()),
+            app.selected_conv(),
+            "and what it read is the conversation the cursor is on"
+        );
+    }
+
+    #[test]
+    fn an_arrow_key_is_a_request_to_read_and_is_paid_for_at_once() {
+        // The other half of the rule, and the reason it is a rule rather than a blanket
+        // debounce. Typing moves the cursor as a side effect of the query changing; pressing
+        // Down is somebody asking to see that conversation, and making them wait a quarter
+        // second for it would be the cure doing the disease's work.
+        let mut app = app_with(&[("c0", "alpha beta"), ("c1", "alpha gamma")]);
+        for ch in "alpha".chars() {
+            app.insert_char(ch);
+        }
+        app.catch_up();
+
+        app.move_selection(1);
+        assert!(!app.preview_deferred(), "nothing was left waiting");
+        assert_eq!(
+            app.preview.as_ref().map(|p| p.conv_id.as_str()),
+            app.selected_conv(),
+            "the conversation under the cursor is already on screen"
+        );
+    }
+
+    #[test]
+    fn the_opening_frame_carries_its_preview() {
+        // `App::new` runs before the alternate screen is entered and has no typing to keep up
+        // with, so deferring there would open every session on a pane saying it was reading.
+        let app = app_with(&[("c0", "alpha")]);
+        assert!(app.preview.is_some());
+        assert!(!app.waiting(), "and nothing is owed to the idle moment");
+    }
+
+    #[test]
+    fn the_quiet_moment_pays_for_the_preview_and_the_total_together() {
+        // They are one moment's work. Doing whichever applied first would leave the header on
+        // `…` until the next keystroke, which is the wait the moment exists to end.
+        let convs: Vec<(String, &str)> = (0..600).map(|i| (format!("c{i:03}"), "alpha")).collect();
+        let pairs: Vec<(&str, &str)> = convs.iter().map(|(i, t)| (i.as_str(), *t)).collect();
+        let mut app = app_with(&pairs);
+        app.limit = 10;
+        for ch in "alpha".chars() {
+            app.insert_char(ch);
+        }
+        assert!(app.preview_deferred() && app.unsettled(), "precondition: both are owed");
+
+        assert!(app.catch_up());
+        assert!(!app.preview_deferred(), "the pane has its conversation");
+        assert!(!app.unsettled(), "and the header has its number");
+        assert!(!app.waiting());
+        assert!(!app.catch_up(), "nor does a second call find anything to do");
     }
 
     #[test]

@@ -210,15 +210,11 @@ enum Measure {
         }
         model.group(by: .none)
 
+        // This used to end on a frame of Library, which `chat-search-me9.8.30` scrapped. There is no
+        // way into that view from a running app any more, so there is nothing here to photograph —
+        // `LibraryView` is still compiled and still says why it is empty, and that is a file to read
+        // rather than a picture to take.
         await timelinePass(model: model, window: window, query: query, path: path)
-
-        // The second view. Empty by design and not by accident — there is no store to author into
-        // (`chat-search-6eb.14`) — so what there is to check is that every shelf says which.
-        model.surface = .library
-        try? await Task.sleep(for: .milliseconds(400))
-        let library = path.replacingOccurrences(of: ".png", with: "-library.png")
-        print("  library → \(capture(window, to: library)) \(library)")
-        model.surface = .search
     }
 
     /// What a row costs, and therefore how much of the answer a screen holds.

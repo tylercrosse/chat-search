@@ -51,10 +51,6 @@ final class SearchModel {
     /// Read twice: as chips, and as the census behind a group head's count. It is the only reply
     /// this window holds that counts the corpus rather than the answer (`Census`).
     private(set) var rail: FacetRail?
-    /// Which of the two views is on screen. Grouping is not one of these, which is the whole
-    /// point of `chat-search-4ar.10`: three of the prototype's four views were `GROUP BY` over one
-    /// set, and only `Library` is a different thing rather than a different cut.
-    var surface: Surface = .search
     /// The axis the one list is cut along, and the groups that fall out of it.
     ///
     /// Held here rather than in the view because the keyboard reads it: grouping changes the order

@@ -7,8 +7,9 @@ import Foundation
 /// `poc/ui` had Search, Projects and Sittings drawing the same rows, from the same filters, into
 /// the same drawer: two of the three were `GROUP BY` wearing the costume of a place, and nothing
 /// was in one and not the others (`chat-search-4ar.10`, `poc/ui/NOTES.md` §2). Collapsing them
-/// into a setting on the list freed the second tab for the only surface that is *not* derived
-/// from the index, which is `LibraryView`.
+/// into a setting on the list freed a second tab for the only surface that is *not* derived from
+/// the index — and `chat-search-me9.8.30` then scrapped that tab too, so there is one view and no
+/// switch above it. `LibraryView` says what became of the other one.
 ///
 /// Each axis states what it costs, because the corpus is the argument for every one of them and
 /// none of those numbers is guessable from the screen. `note` is what the key line above the list

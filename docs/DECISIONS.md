@@ -1206,6 +1206,17 @@ Measured, on the same SDK, same probe, one flag apart:
 | plain window | rgb(30,34,38) — the system's grey, matching the real app's rgb(31,33,37) |
 | `.fullSizeContentView` | **rgb(10,65,79) — `CsTheme`'s own `bg`**, alpha 255, nothing composited over it |
 
+**What implementing it added, 2026-08-07.** Two flags are the decision and three lines are the
+change: `chat-search-me9.8.30` found that `.fullSizeContentView` alone buys the *background* and
+nothing else. `NSHostingView` hands SwiftUI a top safe area exactly as tall as the titlebar it
+replaced and lays every view out below it, so what the probe photographed as a win is, in a real
+SwiftUI window, `bg` painted into an empty strip of the same 32 points. `safeAreaRegions = []` is
+what actually moves content into the band. The probe could not have caught this — it was an
+`NSHostingView` too, but its content was a `ZStack` over a `Color`, which fills whatever it is
+given including the inset. Everything else in the table above held on the real app: the band is the
+theme's ground in all six directions and on both sides of the appearance axis, band-against-page
+off `screencapture -l`.
+
 **Why not opt out.** `UIDesignRequiresCompatibility` is cheaper than it looked — the bead assumed a
 bundle-less SwiftPM executable had nowhere to put it, and that is false. It works two ways, both
 measured on a copy of this package: linked into `__TEXT,__info_plist` with `-sectcreate` from

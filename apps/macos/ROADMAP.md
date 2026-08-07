@@ -36,7 +36,9 @@ decoder still reading the retired envelope.
 
 **2 · The panes.** The result row at real data (`me9.8.2`), the folded reader (`me9.8.3`), facets
 and opening a conversation where it lives (`me9.8.5`), grouping and Library (`me9.8.4`), and the
-fold plus the keyboard that had to come with it (`me9.8.15`).
+fold plus the keyboard that had to come with it (`me9.8.15`). Library was scrapped again by
+`me9.8.30` — the four shelves it drew were waiting on `6eb.14` and were paying a permanent nav
+strip for the privilege — and its file is still compiled so that it does not rot while it waits.
 
 **3 · The theme seam.** Deliberately before the views that would have hardcoded it (`me9.8.8`),
 then several directions in one binary (`me9.8.9`), the decision about whether a named theme may
@@ -144,8 +146,8 @@ one bead making the next one cheap.
 
 | edge | reason |
 | --- | --- |
-| `28 → 30` | No point theming a titlebar before knowing whether the macOS 26 SDK is already compositing glass over it. |
-| `30 → 31` | Both rewrite the top of `Shell.swift`. Remove and reclaim height, *then* add two strips into it. |
+| `28 → 30` | No point theming a titlebar before knowing whether the macOS 26 SDK is already compositing glass over it. It is not — nothing glassy is drawn over a window with no toolbar, sidebar, popover or sheet — so `30` took the band with `.fullSizeContentView` and no compatibility key. ADR 27. |
+| `30 → 31` | Both rewrite the top of `Shell.swift`. Remove and reclaim height, *then* add two strips into it. `30` measured what there is to spend: 37 pt more list in a window 32 pt shorter, 69 pt at the same window height. |
 | `31 → 32` | Build the scrubber's gestures once, after it has moved. |
 | `27 → 33` | Was "`ScrollPosition` is how a list keeps its place when a page is appended rather than jumping", and `27` measured that `ScrollPosition` does not move a `List` at all — see [what the floor bought](./README.md#what-the-floor-bought). What survives the edge is `onScrollGeometryChange`: `33` still needs to know where the list is to know it has reached the bottom, and it needs another answer for keeping its place. |
 | `10 → 34` | Without a token set read at runtime, the type scale is one rebuild per guess. |

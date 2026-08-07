@@ -189,11 +189,12 @@ enum MainMenu {
     /// the menu that says what the one list looks like. This window has one list and one axis
     /// cutting it, so the shape fits without adaptation.
     ///
-    /// **The digits are free here, and the app that would have wanted them is being scrapped.**
+    /// **The digits are free here, and the app that would have wanted them has been scrapped.**
     /// Cmd-1 upward is a tab or a place in most apps; there are no tabs here, and the only other
-    /// candidate — the Search/Library switch, which is mouse-only in the same way — is what
-    /// `chat-search-me9.8.30` removes. Finder splits those two questions the same way anyway: the
-    /// digits say how the list is cut, and a *place* is `⇧⌘` and a letter.
+    /// candidate — the Search/Library switch, which was mouse-only in the same way — is what
+    /// `chat-search-me9.8.30` removed. Finder splits those two questions the same way anyway: the
+    /// digits say how the list is cut, and a *place* is `⇧⌘` and a letter — which is the shape
+    /// Library would come back in if it does (`LibraryView`).
     ///
     /// The titles are `Grouping`'s own words, capitalised, and the digit is the axis's position in
     /// `allCases`. Neither is a second list of axes to keep in step with the chips: an axis added to

@@ -3,6 +3,20 @@ import SwiftUI
 
 /// The second view, and the only one that is not derived from the index.
 ///
+/// **Nothing constructs it. `chat-search-me9.8.30` scrapped the tab, "for now" in the markup's own
+/// word, and this file is deliberately still in the target.** Compiled and unreachable is the
+/// point: it goes on typechecking against the token seam, so a direction that adds a token or a
+/// `Theme` API that moves breaks it here rather than in six months when somebody wants the shelves
+/// back. Excluding it from `Package.swift` would have been the same deletion with a longer fuse.
+/// `chat-search-me9.8.4` built it and git is not where you go looking for a surface you may want
+/// next month.
+///
+/// What it was competing for was 30 points of vertical: the Search/Library switch was a strip
+/// above the search bar on a window whose floor is 480, and the switch was the only thing in it.
+/// Bringing it back means deciding where it goes, not reverting a commit — a menu item and ⇧⌘L
+/// rather than a tab strip is the obvious answer, and `library.db` (`chat-search-6eb.14`) is the
+/// thing that would make it worth reaching for at all.
+///
 /// Everything in Search survives `rm index.db && cs index` because none of it is anything but a
 /// projection of the archive. Nothing here would: a collection, a pin, a project merge, a
 /// dismissal are all things a person said, and ADR 3 puts them in `library.db` rather than in the

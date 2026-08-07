@@ -68,6 +68,16 @@ struct StatusStrip: View {
         HStack(spacing: 8) {
             counts
             range(undated: undated)
+            // How many groups are shut. It sits beside the count rather than replacing it — a
+            // folded group is still a group, and a screen of eleven heads has to be able to say
+            // whether it is eleven groups or eleven groups with nine of them shut. The group key
+            // line above the list is where this belongs by subject and it has no room for it; see
+            // `SearchView.groupKey`.
+            if model.foldedGroups > 0 {
+                Text(verbatim: "· \(model.foldedGroups) folded")
+                    .fixedSize()
+                    .help("shut, and still counted in the group key above the list")
+            }
             // What Enter would do where the cursor is, and only when that is not what Enter has
             // always done. The prototype drew `→` here and wired nothing (`poc/ui/NOTES.md` §5);
             // wiring a key and drawing nothing is the same defect from the other side.

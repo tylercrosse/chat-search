@@ -447,14 +447,15 @@ struct SearchView: View {
     /// per head, because a head can be read without the line above it and a screen of heads on an
     /// axis with no corpus count needs one place that explains the word.
     ///
-    /// **The fold count is here now rather than in the footer** (`chat-search-me9.8.31`). It sits
-    /// beside the group count rather than replacing it — a folded group is still a group, and a
-    /// screen of eleven heads has to be able to say whether it is eleven groups or eleven groups
-    /// with nine of them shut — and this is the line it belongs on, because a fold is something
-    /// done to the axis and the axis is what this line describes. The status strip above says what
-    /// the query returned; that number is the same folded or not.
+    /// **The fold count is not here, and it was measured before it was not.** The footer used to
+    /// carry it and `chat-search-me9.8.31` deleted the footer, so this line was the obvious home —
+    /// a fold is done to the axis, and the axis is what this line describes. What that costs is
+    /// room this line has not got: it lives in the list's column, which at the default window with
+    /// a reader open is about 330 pt, and it was already truncating its own residue clause to
+    /// `2 with no wor…`. A fourth clause took that to `2…`. So the count is on `StatusStrip`, which
+    /// is the width of the window, and this line keeps the three facts it can say whole.
     private var groupKey: some View {
-        // Four facts, in the order they may be given up in. The reader pane leaves this column
+        // Three facts, in the order they may be given up in. The reader pane leaves this column
         // ~400pt at the window's floor, which is about seventy characters of the micro face, so
         // the last of them elides — and every one of them carries the whole sentence on hover.
         HStack(spacing: 12) {
@@ -468,12 +469,6 @@ struct SearchView: View {
                 "grouped over the rows this query returned, which is the --limit window of the "
                     + "answer and not the corpus")
             .layoutPriority(1)
-            if model.foldedGroups > 0 {
-                Text("\(model.foldedGroups) folded")
-                    .fixedSize()
-                    .help("shut, and still counted above — a folded group is still a group")
-                    .layoutPriority(2)
-            }
             if let residue = model.groups.first(where: \.isResidue),
                 let named = model.grouping.residue
             {

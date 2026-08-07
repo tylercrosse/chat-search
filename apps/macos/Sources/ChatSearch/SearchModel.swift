@@ -262,8 +262,8 @@ final class SearchModel {
     /// Whether this group is drawn folded.
     func isFolded(_ key: String) -> Bool { foldsByDefault != toggled.contains(key) }
 
-    /// How many groups are folded, which the group key line says because a folded group and a
-    /// group that is not there look the same from above it.
+    /// How many groups are folded, which `StatusStrip` says because a folded group and a group
+    /// that is not there look the same from above it.
     var foldedGroups: Int { groups.filter { isFolded($0.key) }.count }
 
     /// Fold or unfold one group, and take the cursor with it.

@@ -12,8 +12,8 @@ import SwiftUI
 /// Nothing below names a colour, a size or a face. Every one is a token off `\.theme`
 /// (`chat-search-me9.8.8`), which is what makes a change of direction a change to one generated
 /// file. Where a value here differs from the plain one it replaced, the mockup is why: the search
-/// field is monospaced because `.qbox` is, the footer is `--fs-meta` because `.fbar` is, and the
-/// empty state has a dashed rule around it because `.empty` does.
+/// field is monospaced because `.qbox` is, the status strip is `--fs-meta` because `.fbar` is, and
+/// the empty state has a dashed rule around it because `.empty` does.
 struct SearchView: View {
     @Bindable var model: SearchModel
     @Environment(\.theme) private var theme
@@ -27,6 +27,22 @@ struct SearchView: View {
         VStack(spacing: 0) {
             searchBar
             rule
+            // The query's own header: what came back, and when it happened. Both are full width and
+            // above the panes rather than under them, which is `chat-search-me9.8.31` — and the
+            // scrubber's half of that has an argument stronger than layout taste behind it. A drag
+            // across the track writes `date:A..B` into the query box and the selection is read back
+            // out of the text (`TimelineDrawer`), so it is a query-editing control that happens to
+            // look like a chart, and query controls belong with the query.
+            //
+            // The track stays full width for the reason it was full width at the bottom: the axis
+            // is a property of the whole filtered set, and a track the width of one column would
+            // read as a property of that column.
+            StatusStrip(model: model)
+            TimelineDrawer(model: model)
+            rule
+            // Under the header rather than above it, so the three strips a reader learns the window
+            // by do not move whenever a banner appears. A banner qualifies the rows, and it is
+            // against the rows that it sits.
             indexBanner
             unappliedBanner
             openBanner
@@ -35,11 +51,6 @@ struct SearchView: View {
                 Rectangle().fill(theme.color(.rule)).frame(width: 1)
                 content
             }
-            // Under all three panes rather than under the list alone, which is `poc/ui`'s own
-            // arrangement — `.searchshell` holds the panes *and* the drawer. The axis is a
-            // property of the whole filtered set, and a track the width of one column would read
-            // as a property of that column.
-            TimelineDrawer(model: model)
         }
         .onAppear { focused = true }
         // The fallback half of the arrangement below: this fires only when the focused view did
@@ -435,8 +446,15 @@ struct SearchView: View {
     /// `of 458` is the one-word form of (`chat-search-me9.8.23`). Said once at the top and once
     /// per head, because a head can be read without the line above it and a screen of heads on an
     /// axis with no corpus count needs one place that explains the word.
+    ///
+    /// **The fold count is here now rather than in the footer** (`chat-search-me9.8.31`). It sits
+    /// beside the group count rather than replacing it — a folded group is still a group, and a
+    /// screen of eleven heads has to be able to say whether it is eleven groups or eleven groups
+    /// with nine of them shut — and this is the line it belongs on, because a fold is something
+    /// done to the axis and the axis is what this line describes. The status strip above says what
+    /// the query returned; that number is the same folded or not.
     private var groupKey: some View {
-        // Three facts, in the order they may be given up in. The reader pane leaves this column
+        // Four facts, in the order they may be given up in. The reader pane leaves this column
         // ~400pt at the window's floor, which is about seventy characters of the micro face, so
         // the last of them elides — and every one of them carries the whole sentence on hover.
         HStack(spacing: 12) {
@@ -450,6 +468,12 @@ struct SearchView: View {
                 "grouped over the rows this query returned, which is the --limit window of the "
                     + "answer and not the corpus")
             .layoutPriority(1)
+            if model.foldedGroups > 0 {
+                Text("\(model.foldedGroups) folded")
+                    .fixedSize()
+                    .help("shut, and still counted above — a folded group is still a group")
+                    .layoutPriority(2)
+            }
             if let residue = model.groups.first(where: \.isResidue),
                 let named = model.grouping.residue
             {

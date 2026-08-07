@@ -123,7 +123,20 @@ extension Array {
     }
 }
 
-/// The drawer: a header, a track, and an axis under it.
+/// The scrubber: a track, and an axis under it.
+///
+/// **It is above the panes rather than below them, and it is called a drawer out of habit**
+/// (`chat-search-me9.8.31`). The 2026-08-06 markup asked for the move — "I'm considering moving the
+/// timeline scrubber to the top under the search bar" — and the reason to take it is in this file's
+/// own comment: a drag has to reach the query box, because the selection is derived from the query
+/// text and never kept here. That makes this a query-editing control that happens to look like a
+/// chart, and query controls belong with the query.
+///
+/// **The header went with the move and did not come back.** Its numbers are on `StatusStrip` now,
+/// where they stopped being a second copy of the count the footer was printing, and its toggle is
+/// there too — so a shut scrubber draws nothing at all rather than a strip whose only job is to
+/// hold the way back in. Nothing about *when* it asks changed: `TimelineModel.shown` still gates
+/// the third `cs` per keystroke, and it is still the only thing hiding this ever bought.
 ///
 /// Three departures from the prototype, each because a histogram is not a scatter of marks.
 ///
@@ -150,72 +163,21 @@ struct TimelineDrawer: View {
     /// which at 180 bars in a 720 pt window is the common case.
     private static let gap: CGFloat = 1
 
-    var body: some View {
-        VStack(spacing: 0) {
-            Rectangle().fill(theme.color(.rule)).frame(height: 1)
-            if model.timeline.shown {
-                open
-            } else {
-                shut
-            }
-        }
-        .background(theme.color(.panel))
-    }
-
-    /// The closed drawer: one strip with the way back into it. Drawn rather than absent, because
-    /// a region that vanishes takes the knowledge that it exists with it.
-    private var shut: some View {
-        HStack(spacing: 10) {
-            Spacer(minLength: 0)
-            button("show timeline") { model.toggleTimeline() }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
-    }
-
-    private var open: some View {
-        VStack(spacing: 0) {
-            header
-            track
-            axis
-        }
-        .padding(.horizontal, 12)
-        .padding(.top, 7)
-        .padding(.bottom, 9)
-    }
-
-    /// What the picture is of, in numbers the picture itself cannot state.
-    ///
-    /// `inRange` is the drawer's own question — how much was going on then, free text ignored —
-    /// and `total` is the list's, repeated here because the two sit either side of the same
-    /// window and reading them apart is the whole point of the drawer being open.
     @ViewBuilder
-    private var header: some View {
-        HStack(spacing: 10) {
-            if let drawn = model.timeline.drawn {
-                Text(verbatim: "\(drawn.inRange)").foregroundStyle(theme.color(.ink2))
-                Text("in range")
-                Text(verbatim: "· \(drawn.total)").foregroundStyle(theme.color(.ink2))
-                Text("the query selects")
-                // The window as a reader would have typed it, which is `cs_core`'s rendering and
-                // not this app's: deriving a local day in a client is the shape of the bug
-                // `cs_core::time` exists to have fixed once.
-                Text(verbatim: "· \(drawn.window?.value ?? "all time")")
-                if drawn.undated > 0 {
-                    Text(verbatim: "· \(drawn.undated) undated")
-                        .help("no message in them ever landed, so no bar can hold them")
-                }
-            } else if model.timeline.failure != nil {
-                Text("the timeline could not be drawn")
-            } else {
-                Text("…")
+    var body: some View {
+        if model.timeline.shown {
+            VStack(spacing: 0) {
+                track
+                axis
             }
-            Spacer(minLength: 0)
-            button("hide") { model.toggleTimeline() }
+            .padding(.horizontal, 12)
+            .padding(.top, 2)
+            .padding(.bottom, 7)
+            // The same ground as the strip above it, and no rule between them: the two are one
+            // block under the search bar, and a line across the middle of it would say they are
+            // answers to different questions.
+            .background(theme.color(.panel))
         }
-        .font(theme.font(.micro, .mono))
-        .foregroundStyle(theme.color(.ink3))
-        .padding(.bottom, 6)
     }
 
     @ViewBuilder
@@ -309,24 +271,6 @@ struct TimelineDrawer: View {
     /// which is that bead's other half.
     private func hues(_ drawn: Timeline) -> [Color] {
         drawn.sources.map { theme.color(Display.sourceHue($0) ?? .ink3) }
-    }
-
-    /// `.tld-btn`: monospaced micro in a hairline box.
-    private func button(_ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(label)
-                .font(theme.font(.micro, .mono))
-                .foregroundStyle(theme.color(.ink3))
-                .padding(.horizontal, 7)
-                .padding(.vertical, 2)
-                .overlay(
-                    RoundedRectangle(cornerRadius: theme.metric(.r2))
-                        .strokeBorder(theme.color(.rule2)))
-                .contentShape(Rectangle())
-        }
-        // `.plain`, because a stock button paints itself in the system accent — a colour chosen
-        // somewhere this app cannot see.
-        .buttonStyle(.plain)
     }
 }
 

@@ -64,7 +64,12 @@
    to the half-pixel of height.
 
    That half-pixel is paid for, not waived: --fs-body goes up 0.5px and --row-pt and
-   --row-pb each come down 1px, so the row is a pixel shorter than the incumbent's. */
+   --row-pb each come down 1px, so the row is a pixel shorter than the incumbent's.
+
+   In AppKit it is not shorter, it is the same — 65.0pt against 65.0pt, measured by
+   `chat-search --density` at 900x620 (chat-search-me9.8.6). A serif face's line height
+   is not a browser's, and it takes back the pixel the padding gave up. Six rows on
+   screen either way, so the trade holds and there is no pixel here to spend twice. */
 .dir-paper {
   --ui: "Iowan Old Style", "Hoefler Text", Palatino, Georgia, serif;
 
@@ -178,7 +183,11 @@
 
    Mono sets wide, so the whole type scale drops half a pixel to a pixel. That plus the
    tightest rhythm of the four is where its rows-per-screen comes from; it is the only
-   direction that buys density rather than spending it. */
+   direction that buys density rather than spending it.
+
+   What it buys, measured: 5.0pt off the row and a seventh row on screen at 900x620 and
+   a tenth at 1200x800, and nothing at all at the 720x480 floor, where 5pt crosses no
+   row boundary (`chat-search --density`, chat-search-me9.8.6). */
 .dir-blueprint {
   --ui: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
 
@@ -308,7 +317,9 @@
   --r-6: 14px;
 
   /* Air between the row's lines, taken back out of the row's own padding so the trade
-     is visible rather than paid for in rows-per-screen. */
+     is visible rather than paid for in rows-per-screen. Which it is not:
+     `chat-search --density` reads this row at the incumbent's 65.0pt and the same six
+     rows on screen (chat-search-me9.8.6). */
   --row-px:   14px;
   --row-pt:   6px;
   --row-pb:   6px;

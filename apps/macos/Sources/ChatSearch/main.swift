@@ -84,6 +84,12 @@ struct Options {
     /// Cmd-comma, which is a key no script can press, and it is a second window — so `--shot`
     /// cannot photograph it and driving its controls cannot be checked without a way in.
     var settings = false
+    /// Swap every direction into one running window and print what a row costs in each. The seventh
+    /// non-affordance, and the fence on the one claim `--verify-theme` cannot reach: it measures
+    /// colour, and a direction can also move the type scale and the row's rhythm. What that costs is
+    /// rows-per-screen, which needs a window, a list and an index to be a number at all —
+    /// `chat-search-me9.8.6`.
+    var density = false
     /// Press the Edit menu's keys in the search field and report what each moved. The fourth
     /// non-affordance, and a mode of its own rather than a section of `--shot` for a reason that is
     /// the subject of the check: a key equivalent is delivered to the key window's first responder,
@@ -99,7 +105,9 @@ struct Options {
     /// it decides the rest: `--shot` draws what the script named it, and a frame that changed
     /// because of a file in somebody's home directory is a frame of that home directory.
     /// `--write-theme` is here because it must not remember whatever it was told to write out.
-    var scripted: Bool { measure || shot || clipboard || writeTheme || watchTheme }
+    /// `--density` is here twice over: it drives the two controls whose ordinary job is to write the
+    /// preference down, so a run that measured six directions would leave the sixth remembered.
+    var scripted: Bool { measure || shot || clipboard || writeTheme || watchTheme || density }
 
     /// ...and all but one stay out of the *front*, so they can be run beside whatever a person is
     /// actually doing, and so a latency taken here is comparable with `poc/swift/RESULTS.md` §1,
@@ -133,6 +141,7 @@ func parse(_ argv: [String]) -> Options {
         case "--no-timeline": o.timeline = false
         case "--settings": o.settings = true
         case "--clipboard": o.clipboard = true
+        case "--density": o.density = true
         case "--verify-theme": o.verifyTheme = true
         // Kept as typed rather than resolved here: a name this build does not carry gets a
         // sentence on stderr from `ThemeChoice`, which is also where the remembered one is read,
@@ -180,6 +189,10 @@ func parse(_ argv: [String]) -> Options {
                   --interval MS        milliseconds between simulated keystrokes (default 100)
                   --verify-theme       re-measure every compiled-in direction and exit. With
                                        --theme-file, measure that file instead
+                  --density            swap every direction into one window, print what a row
+                                       costs in each and write a frame of each beside --out.
+                                       The other half of the fence: no direction may draw
+                                       fewer rows on screen than the incumbent does
                   --shot               search, open the first result, write the window to --out
                   --query TEXT         what --shot searches for (default "borrow checker")
                   --out PATH           where --shot writes its PNG (default /tmp/chat-search.png)
@@ -461,6 +474,24 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuIt
             Task { @MainActor in
                 await Measure.clipboard(model: model, window: window, query: options.shotQuery)
                 NSApp.terminate(nil)
+            }
+            return
+        }
+
+        // Before `--shot`'s pass, and it replaces it rather than following it: what this one reads is
+        // a list with nothing open in front of it, and a transcript in the drawer would take the
+        // right-hand pane the reading comes off (`Measure.reading`).
+        //
+        // It ends on `exit` where every other pass ends on `NSApp.terminate`, because this one is a
+        // gate and a gate that always exits 0 is a printout. The status is the readings and never the
+        // policy, the same way `--verify-theme`'s is: what a direction that costs a row *means* is
+        // the last line's to say.
+        if options.density {
+            Task { @MainActor in
+                let status = await Measure.density(
+                    model: model, window: window, settings: settings, query: options.shotQuery,
+                    to: options.shotPath)
+                exit(status)
             }
             return
         }

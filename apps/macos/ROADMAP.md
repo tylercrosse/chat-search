@@ -46,7 +46,11 @@ fail the fenced measurements (`me9.8.12`), Gruvbox and Solarized ported on those
 app runs (`me9.8.39`). The seam holds: switching is one `.environment(\.theme, theme)` at the root,
 six directions come out of one binary with nothing under `Sources/ChatSearch` differing between
 them, the seventh does not have to be in the binary at all, and a save of it repaints the window
-without a relaunch.
+without a relaunch. `me9.8.6` closed the group by exercising that claim rather than restating it —
+seven swaps in one running window, 82 token values apiece and no view — and made the
+rows-per-screen argument the two colour ports never had to: `paper` and `ink` hold the incumbent's
+row to the decimal, `blueprint` buys a seventh row, and `--density` now fails any direction that
+would cost one.
 
 **4 · The instruments.** The minimap and its scroll relationship (`me9.8.18`), the bottom drawer's
 timeline and scrubber (`me9.8.20`), the main menu (`me9.8.24`), a `dir:` parsing bug (`me9.8.16`),
@@ -127,8 +131,8 @@ graph TD
 ```
 
 Kept out of the graph to keep it readable. Free-standing — nothing blocks them and they block
-nothing: `me9.8.6` (prove the seam by swapping a whole theme), `me9.8.11` (is spacing outside the
-row a token), `me9.8.14` (carry `model` and `thread_count` on the wire), `me9.8.23` (a group head
+nothing: `me9.8.11` (is spacing outside the row a token),
+`me9.8.14` (carry `model` and `thread_count` on the wire), `me9.8.23` (a group head
 counts rows in hand and cannot say what the corpus holds), `me9.8.25` (`cs timeline` cannot
 describe a `--tools` search). And one pair: `me9.8.13` (a hue for `google-takeout`, or a rule for
 sources the palette does not name) blocks `g6u` (the facet rail has no source colour).

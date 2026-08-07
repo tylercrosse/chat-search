@@ -471,6 +471,68 @@ done
 is sans on slate with a teal one, and nothing under `Sources/ChatSearch` differs between the two
 runs.
 
+#### What a swap costs, in rows
+
+Those six frames show the half of a direction that is obvious, which is colour. The half that is not
+is arithmetic: `paper` sets a serif face half a point larger than `terminal`'s sans and takes 2pt
+back out of the row's padding, `blueprint` is monospaced and half a point down at every step of the
+scale, `ink` spends 4pt of lead between the row's lines. Whether any of that costs a row is not a
+question a frame answers, and `--verify-theme` cannot reach it either — it measures colour.
+
+`--density` is the rest of the fence. It swaps all six into one running window over one query and one
+list, so the only thing that differs between the readings is the token values; six launches would
+each get their own layout pass, and the two colour ports would then have to be argued about rather
+than read off. A frame of each goes beside the numbers, which makes it the six-picture loop above in
+one process as well.
+
+```bash
+swift run -c release chat-search --density --out /tmp/d.png
+```
+
+Against the live index, 58 rows of `borrow checker`, at the default `900x620`:
+
+| direction | pt per row | pt of list | rows on screen | against the incumbent |
+| --- | ---: | ---: | ---: | --- |
+| `terminal` | 65.0 | 423.0 | 6, 7 counting the cut one | the incumbent |
+| `paper` | 65.0 | 422.0 | 6 | the same row |
+| `blueprint` | 60.0 | 427.0 | 7 | −5.0pt on the row, **+1 row** |
+| `ink` | 65.0 | 423.0 | 6 | the same row |
+| `gruvbox-derived` | 65.0 | 423.0 | 6 | the same row |
+| `solarized-derived` | 65.0 | 423.0 | 6 | the same row |
+| `terminal`, again | 65.0 | 423.0 | 6 | the same row |
+
+**`directions.css` makes three claims about the row, and this holds two of them exactly.** `ink` says
+its lead is "taken back out of the row's own padding so the trade is visible rather than paid for in
+rows-per-screen": 65.0pt, the same row, the same 6 rows. `blueprint` calls itself "a direction that
+buys density rather than spending it": 5pt off the row and a seventh row at 900×620 and at 1200×800 —
+though at the 720×480 floor those 5pt cross no boundary and it draws four rows like everything else.
+`paper` says its half-point of face is "paid for, not waived … so the row is a pixel shorter than the
+incumbent's", and in AppKit it is not shorter, it is the same: the serif face takes back the pixel
+the padding gave up. Its *list* is a point shorter as well — 422.0 against 423.0, because the chrome
+above and below grows with the type scale. Six rows either way, so the claim's conclusion survives
+and its arithmetic does not.
+
+**The instrument is checked inside the run.** The incumbent is measured first and last and comes back
+to the same 65.0 / 423.0 / 6, and `blueprint`'s 60.0 sits between two 65.0 readings — so row heights
+are re-measured on every swap rather than cached, which is what makes `paper`'s 65.0 a reading rather
+than a leftover. The height is a mean over integral row rects, so "the same row" means within the
+half-point that would round away: what this fences is rows-per-screen and not the last decimal of a
+row. At the three sizes anybody opens, that is 4 rows each at the 720×480 floor, 6 at 900×620 with
+`blueprint` at 7, and 9 at `scripts/shot.sh`'s 1200×800 with `blueprint` at 10.
+
+**What fails it is fewer rows, not taller ones.** A direction may spend a point on the row where the
+viewport has one to give; what a reader gets is the count. One that draws fewer than the incumbent
+does not ship, on the same terms as one that misses the ramp (docs/DECISIONS.md ADR 25) — re-solve
+the rhythm or the scale in `poc/ui/directions.css` and regenerate. A run with a token set off disk in
+force exits 2 and says which file: a user theme supersedes every direction rather than joining it, so
+there would be nothing to swap.
+
+**And the swap itself is what this was for.** `chat-search-me9.8.6` exists because a seam nobody
+exercises is one that turns out to be false the first time somebody needs it to be true. Seven swaps
+in one process, and the whole of each is two `choose` calls on `ThemeSettings`: 82 token values move
+and nothing else does. Nothing in the pass names a colour, a size or a metric, and no view was
+touched to make it possible.
+
 ### Two axes: an appearance, and a direction per side
 
 A direction says what both sides look like; the appearance says which side you are looking at.
@@ -682,6 +744,13 @@ It exists for the reason `palette.py --verify` exists. Solving a colour and writ
 two events, and generating adds a third — so what ships is now two steps from what was solved,
 and neither step is checked by anything that reads Swift.
 
+**What it cannot measure is the other half of a direction**, and that is why [`--density`](#what-a-swap-costs-in-rows)
+is a second flag rather than a section of this one. A ratio is arithmetic on two hex values, so this
+run needs no index, no window and no built `cs` — which is what makes it a gate somebody actually
+runs, and it happens before `cs` is even looked for. Rows-per-screen is not: it needs a window at a
+stated size, an index with rows in it and a `List` that has laid them out. Folding that into
+`--verify-theme` would make the cheap check as expensive as the expensive one.
+
 ### Adding a theme — Solarized, Gruvbox, one of your own
 
 A theme is not a list of hexes here. Half of one is *solved*: the four message kinds have to sit
@@ -691,7 +760,10 @@ So the path for a palette is to add its hues to `DIRECTIONS` in `poc/ui/palette.
 solve the eight fenced tokens, write the rest into `directions.css`, and name it on the `tokens.py`
 line above — at which point the app offers it to `--theme` and the gate measures it, both because
 it is in the generated list and for no other reason. A theme that skips the solve will fail
-`--verify-theme`, which is the check doing its job rather than being in the way.
+`--verify-theme`, which is the check doing its job rather than being in the way. A direction that
+also moves the type scale or the row's rhythm has a second fence to clear —
+[`--density`](#what-a-swap-costs-in-rows), which is where rows-per-screen is counted rather than
+assumed.
 
 **Which is a real cost, because the published palettes miss.** Solarized's kinds read
 2.79 / 3.43 / 4.75 / 5.61 against `base03` where the ramp asks for 2.20 / 4.00 / 7.20 / 13.00, and
@@ -752,7 +824,9 @@ body text.
 
 Neither sets a type, radius or rhythm token. A colour port cannot move rows-per-screen, so the
 density argument every other direction has to make does not arise, and `--shot --theme
-gruvbox-derived` differs from `--shot --theme terminal` in colour and in nothing else.
+gruvbox-derived` differs from `--shot --theme terminal` in colour and in nothing else. Read back
+rather than reasoned about: both come off `--density` at the incumbent's 65.0pt row and 423.0pt of
+list, to the decimal.
 
 ### A token set off disk
 

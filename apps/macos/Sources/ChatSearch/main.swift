@@ -391,20 +391,43 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuIt
         // keystroke is folded too — otherwise a scripted run would measure a list that unfolded
         // itself as it typed.
         if options.folded { model.foldAll(true) }
+        // `.fullSizeContentView`, which is ADR 27 and the whole of it: the content view grows to
+        // the window's top edge, so the band the traffic lights sit in is drawn by this app in
+        // `--bg` instead of by the system in a grey it chose. Measured one flag apart on the same
+        // SDK — rgb(30,34,38) without it, rgb(10,65,79) with it, alpha 255 and nothing composited
+        // over either. `chat-search-me9.8.28` photographed both.
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: options.size),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
+        // Set, and then not drawn. The string is still what the window server reports — it is what
+        // `⌘Tab`, Mission Control and `Window ▸` say, and what a screenshot script finds the window
+        // by — and `titleVisibility` decides only whether AppKit paints it in the band. It has to
+        // not, because the search bar is in that band now and a system-drawn title would be a
+        // second thing in the same 32 points.
         window.title = "chat-search"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
         // The one colour SwiftUI does not own. It shows through for a frame during a live resize,
-        // and the system default is a grey nobody in this app chose.
+        // and the system default is a grey nobody in this app chose. It is now also what the
+        // titlebar band would fall back to, which is the same colour by construction.
         window.backgroundColor = settings.theme.nsColor(.bg)
         window.center()
         // The delegate is for one thing: this window closing takes the settings window with it.
         // `applicationShouldTerminateAfterLastWindowClosed` is what makes closing the window quit
         // the app, and a settings panel left open behind it would quietly turn one close into two.
         window.delegate = self
-        let hosting = NSHostingView(rootView: Root(model: model, settings: settings))
+        // The lights are measured off this window and handed to the view tree, rather than the
+        // view tree carrying a number for where Apple puts three buttons. `TitleBar` says why.
+        let hosting = NSHostingView(
+            rootView: Root(model: model, settings: settings, lights: TitleBar.inset(of: window)))
+        // Without this, `.fullSizeContentView` buys the *background* and nothing else: the content
+        // view does grow to the top edge, but `NSHostingView` hands SwiftUI a 32 pt top safe area
+        // for the titlebar and lays every view out below it. The window then draws its own `bg` in
+        // that band — the right colour, and an empty strip exactly as tall as the titlebar it
+        // replaced, which is a repaint rather than the reclaim this was for. Clearing the region is
+        // what actually lets the search bar rise beside the lights.
+        hosting.safeAreaRegions = []
         window.contentView = hosting
         window.orderFrontRegardless()
         self.window = window

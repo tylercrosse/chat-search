@@ -17,6 +17,9 @@ import SwiftUI
 struct SearchView: View {
     @Bindable var model: SearchModel
     @Environment(\.theme) private var theme
+    /// Where the traffic lights end. This view is the first strip of a `.fullSizeContentView`
+    /// window, so it is the only one in the app that shares a band with chrome it does not own.
+    @Environment(\.titleBarInset) private var lights
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -70,13 +73,21 @@ struct SearchView: View {
     /// The group control leads the query it modifies, which is `poc/ui`'s arrangement and its
     /// reasoning: it reads in the order it applies — group by project, *then* narrow with the
     /// query — where on the right it sat between the query and the count and read as status.
+    ///
+    /// **It is the top strip of the window now** (ADR 27, `chat-search-me9.8.30`). The leading
+    /// inset is the traffic lights, measured off the window rather than stated — see `TitleBar` —
+    /// and the minimum height is the band they sit in, so that the chips line up with them instead
+    /// of riding a point or two high. Both are only true of this one strip: the window's ordinary
+    /// margin is still 12 points and everything under here uses it.
     private var searchBar: some View {
         HStack(spacing: 12) {
             groupControl
             field
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, lights)
+        .padding(.trailing, 12)
         .padding(.vertical, 7)
+        .frame(minHeight: 32)
     }
 
     /// The axis, as five chips of which four are offered.

@@ -1149,3 +1149,107 @@ the ask, and at that point the server can fold — because it would be told, not
 ADR 23's trigger fires: a second expensive optional field makes the sectioned reply the right
 design, and "retiring `kind_runs` by economics rather than by schema" is one of the futures that
 design was rejected against.
+
+---
+
+## 27. The macOS 26 design system is inherited; the titlebar is taken back
+
+`accepted` · 2026-08-06
+
+**Context.** `swift --version` reports `Target: arm64-apple-macosx26.0`, and `Package.swift` said
+that declaring `platforms: [.macOS(.v15)]` "keeps a hand-fenced palette out of Liquid Glass". That
+was wrong, and it was wrong in the direction that hides itself: adoption keys off the SDK a binary
+is **linked against**, never the platform it is built for. What the shipped binary records:
+
+```
+$ vtool -show-build apps/macos/.build/release/chat-search
+    platform MACOS   minos 15.0   sdk 26.2
+```
+
+`chat-search-me9.8.28` settled it by photograph rather than by argument, because the app's own
+camera cannot see its own chrome — `Measure.capture` is `cacheDisplay` on `window.contentView`, so
+there is no titlebar in the rectangle and no window server in the path. Build once, rewrite **only**
+the SDK field with `vtool -set-build-version macos 15.0 15.0 -replace`, re-sign, photograph both
+with `screencapture -l` against the real window server. Rewriting the field back to its own value
+produced a byte-identical capture, so the rewrite changes nothing and the value changes this:
+
+| the real app, 1200×800 content | as built, `sdk 26.2` | same bytes, `sdk 15.0` |
+| --- | --- | --- |
+| window height | 832 pt | 828 pt |
+| titlebar band | rgb(31,33,37) | rgb(39,42,46) |
+| corner radius | ~21 pt | ~15 pt |
+| title | leading | centred |
+| separator under the titlebar | none | hairline |
+
+A probe with a toolbar shows the reach the app's plain window hides: titlebar+toolbar 66 pt against
+52, capsule buttons against rounded rects, `List` transparent against backed, no focus ring against
+one.
+
+**What is not happening, which decides most of this.** No glass *material* is on screen. The
+titlebar is opaque at alpha 255 and samples nothing — the probe put a striped window directly
+behind it and no stripe came through. The app has no toolbar content, no sidebar, no popover and no
+sheet, which is where macOS 26 actually puts glass. What is inherited is metrics, shapes and chrome
+colours. **The complaint that opened the bead is a colour disagreement, not a translucency
+problem**: rgb(31,33,37) chosen by the system beside `bg` at rgb(10,65,78) chosen by `CsTheme`.
+
+**Decision.** Neither opt out nor opt in. Stay on the macOS 26 SDK with no compatibility key and no
+change to the macOS 15 floor, and take back the one surface that was wrong: the window gets
+`.fullSizeContentView` with `titlebarAppearsTransparent`, so the content draws to the top edge in
+its own tokens. Implemented by `chat-search-me9.8.30`, which wanted the content to own the titlebar
+anyway; recorded here because "nobody opted out" and "opting out was rejected" are the same diff
+and different facts.
+
+Measured, on the same SDK, same probe, one flag apart:
+
+| top band | |
+| --- | --- |
+| plain window | rgb(30,34,38) — the system's grey, matching the real app's rgb(31,33,37) |
+| `.fullSizeContentView` | **rgb(10,65,79) — `CsTheme`'s own `bg`**, alpha 255, nothing composited over it |
+
+**Why not opt out.** `UIDesignRequiresCompatibility` is cheaper than it looked — the bead assumed a
+bundle-less SwiftPM executable had nowhere to put it, and that is false. It works two ways, both
+measured on a copy of this package: linked into `__TEXT,__info_plist` with `-sectcreate` from
+`linkerSettings`, and as a plain `Info.plist` file beside the binary, which `Bundle.main` reads for
+an unbundled executable. `poc/swift` still builds either way, because the flags sit on the
+`ChatSearch` executable and the path dependency reaches `CsKit`.
+
+It is rejected on aim, not on cost. **It moves the band from rgb(31,33,37) to rgb(39,42,46)** — a
+different grey chosen by the same authority — so it does not fix the thing that was wrong. It buys
+"stop the design system moving under me", which nobody asked for, at the price of `unsafeFlags` and
+a key Apple describes as a transition affordance that a later SDK stops honouring. (That expiry is
+reported, not measured; what is measured is that it works on 26.5.2 today.) Paying an expiring key
+to avoid a material that is not being drawn is paying for a picture that does not exist.
+
+**Why not opt in.** `NSGlassEffectView` is `API_AVAILABLE(macos(26.0))`, so adopting it costs the
+floor `chat-search-me9.8.27` deliberately bought — there is no 16 through 25, so 15 is one release
+of headroom and 26 is none. It also costs the fence: ADR 25 rests on a contrast ratio between two
+tokens, and a glass surface's effective background is whatever window is behind this one, which is
+not a token and cannot be made into one. Either the fence stops applying to the chrome or it grows
+a notion of "a backdrop I cannot see", which is a fence that passes everything. And `--shot` cannot
+photograph a window-server blur at all, so every glass surface adopted is a surface no pull request
+screenshot shows. Mostly, though: there is nothing on screen for it to land on. It is a decision
+waiting for a surface.
+
+**What this costs, stated plainly.**
+
+1. **It is not a rejection of the design system.** Control shapes, metrics and chrome colours stay
+   the system's and will keep moving at every SDK bump. Only the titlebar comes back.
+2. **The window's shape stays the system's** — corner radius measured ~21 pt with the flags and
+   without them.
+3. **The traffic lights stay system-drawn and now sit on a themed ground.** That is a contrast pair
+   `ThemeCheck` knows nothing about, and a light direction is where it would first go wrong. Filed
+   rather than waved at.
+4. **The app owns more chrome.** The title, its inset, and the ~78 pt the lights occupy become a
+   per-direction problem.
+
+**Revisit when.** The app grows a toolbar, sidebar, popover or sheet — that is the first time an
+opt-in has a subject, and it should be decided against a photograph of the real surface rather than
+in the abstract. Also when an SDK bump moves something the fence cannot absorb, which is the case
+this decision deliberately leaves un-defended.
+
+Answering either needs a window-server capture, and the repository does not have one: `--shot` is
+`cacheDisplay`, so **no pull request screenshot in this project has ever shown window chrome, and
+none can**. The instruments this decision was measured with are in `.shots/me9.8.28-probe/`,
+untracked, next to the captures — a working, focus-stealing-free `screencapture -l` run against the
+real app among them. Folding that into `scripts/shot.sh` is filed separately; until it lands, the
+probes are a directory somebody has to be told about, which is the weakest part of this entry.

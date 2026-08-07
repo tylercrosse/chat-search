@@ -153,6 +153,25 @@ pub fn snippet_marked_at(
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
     pub limit: i64,
+    /// How many of the best rows to step past before `limit` starts counting — the second page
+    /// of a ranking, and nothing else.
+    ///
+    /// **It moves the window, not the ranking.** Every page of a query at one `limit` is cut
+    /// from the same ranking: [`rank`]'s scan ceiling is a function of `limit` alone, so
+    /// changing only this changes only which slice comes back. Nothing re-sorts, nothing
+    /// re-scores, and a client that appends page after page holds one list in one order. That is
+    /// what the macOS app's grouping assumes — `Grouping.swift`'s "nothing is re-ranked" — and
+    /// it is why the ceiling is not allowed to follow the offset down. It did, in the first cut
+    /// of this: page two of `the` then arrived with 11 of page one's sixty rows in it and 11
+    /// more that no page would ever show.
+    ///
+    /// **What it costs is depth.** The ceiling bounds the ranking at whatever conversations the
+    /// best `limit * 50` messages fall into, and a broad query selects far more than that — so
+    /// there is a depth past which a page comes back empty while `total` goes on saying there is
+    /// more. That is not paging failing, it is the ranking ending, and a client has to be able
+    /// to say so. `crates/cs/tests/paging.rs` pins the arithmetic and
+    /// `docs/JSON-CONTRACT.md#paging` is where a client is told, with the measured numbers.
+    pub offset: i64,
     pub field: Field,
     /// Include messages on branches that were edited away.
     pub include_off_path: bool,
@@ -217,6 +236,7 @@ impl SearchOptions {
     pub fn new(now_ms: i64) -> Self {
         Self {
             limit: 10,
+            offset: 0,
             field: Field::Prose,
             include_off_path: false,
             now_ms,
@@ -1148,10 +1168,11 @@ pub(crate) fn recent(
     query: &Query,
     now_ms: i64,
     limit: i64,
+    offset: i64,
     shape: bool,
 ) -> rusqlite::Result<Vec<Group>> {
     crate::sittings::ensure(conn)?;
-    let mut binds = vec![Value::Integer(limit)];
+    let mut binds = vec![Value::Integer(limit), Value::Integer(offset.max(0))];
     let filters = filter_sql(query, now_ms, &mut binds);
     // Named once: it is both what the row displays and what the list is ordered by, and those
     // two disagreeing is how a "most recent" list ends up sorted by a date it does not show.
@@ -1168,8 +1189,13 @@ pub(crate) fn recent(
          {join}
          WHERE {openers}{filters}
          -- `NULLS LAST` is not portable to older SQLite; this expresses the same order.
-         ORDER BY {ended} IS NULL, {ended} DESC
-         LIMIT ?1",
+         -- `c.id` last makes the order total rather than merely sorted, which is what an
+         -- OFFSET needs: two conversations sharing an `ended_at` to the millisecond would
+         -- otherwise be free to swap between pages, so one would arrive twice and the other
+         -- never. It changes nothing a reader can see, since it only separates rows that were
+         -- already in an arbitrary order.
+         ORDER BY {ended} IS NULL, {ended} DESC, c.id
+         LIMIT ?1 OFFSET ?2",
         turns = crate::sittings::total("user_turns"),
         msgs = crate::sittings::total("msg_count"),
         prose = crate::sittings::total("prose_count"),
@@ -1316,13 +1342,16 @@ pub(crate) fn search_grouped_counted(
     q: &SearchOptions,
 ) -> rusqlite::Result<Counted> {
     if !query.is_searchable() {
-        let groups = recent(conn, query, q.now_ms, q.limit, q.shape)?;
+        let groups = recent(conn, query, q.now_ms, q.limit, q.offset, q.shape)?;
         // Always exact, and always cheap enough to take here: this branch ranks nothing, so
         // the count is a scan of `conversation` — thousands of rows, not the millions of
         // postings a term matches. Nothing to defer.
-        let matched = if (groups.len() as i64) < q.limit {
+        let matched = if q.offset == 0 && (groups.len() as i64) < q.limit {
             // Same rule as the ranked branch below: a short list is its own total, because
-            // `recent` stops for nothing but `limit`.
+            // `recent` stops for nothing but `limit`. Only from the top, though — a short page
+            // at a depth is short because the list ran out under it, and reporting its length
+            // as the total would say the archive holds sixty conversations on the second page
+            // of a browse through three thousand.
             groups.len()
         } else {
             count_filtered(conn, query, q.now_ms)?
@@ -1335,15 +1364,25 @@ pub(crate) fn search_grouped_counted(
     Ok(Counted { groups: best_of(conn, query, q, ranked)?, matched })
 }
 
-/// The `limit` best of a ranking, with their display columns fetched.
+/// The `limit` best of a ranking after `offset` of them, with their display columns fetched.
+///
+/// The window is cut here and not in SQL because the ranking is not a SQL ordering: scores are
+/// folded per conversation in [`rank`] after the rows come back, so the only place the ordering
+/// exists is the vector this is handed. An offset past the end is an empty page rather than an
+/// error — that is what running out of ranked rows looks like, and a client reading `count` sees
+/// it without having to be told.
 fn best_of(
     conn: &Connection,
     query: &Query,
     q: &SearchOptions,
-    mut ranked: Vec<Ranked>,
+    ranked: Vec<Ranked>,
 ) -> rusqlite::Result<Vec<Group>> {
-    ranked.truncate(q.limit as usize);
-    hydrate(conn, query, q.field, q.shape, ranked)
+    let page: Vec<Ranked> = ranked
+        .into_iter()
+        .skip(q.offset.max(0) as usize)
+        .take(q.limit.max(0) as usize)
+        .collect();
+    hydrate(conn, query, q.field, q.shape, page)
 }
 
 /// How many conversations hold a message this query matches, `limit` ignored.
@@ -1433,6 +1472,16 @@ fn rank(
     crate::sittings::ensure(conn)?;
     // Pull well beyond `limit` conversations' worth of messages, since one conversation can
     // account for many hits and would otherwise crowd out the tail.
+    //
+    // **`limit` and not `offset + limit`, and that is the whole of what makes a page a page.**
+    // Deepening the scan to reach a deeper page sounds like the obvious thing and it re-ranks
+    // the answer underneath the reader: measured against the real archive on 2026-08-07, taking
+    // page two of `the` at sixty from a scan sized for a hundred and twenty handed back 11 rows
+    // page one had already shown and skipped 11 more that no page would ever show. `code` was
+    // 14 and 14. So the ceiling is a function of the page size alone, every page of a query is
+    // cut from the same ranking, and a client that appends gets one list rather than the seam
+    // between two. What it costs is stated on [`SearchOptions::offset`]: the ranking runs out
+    // before `total` does.
     let ceiling = (q.limit * 50).clamp(500, 5_000);
 
     // Ranking reads no message text. `message.text` is by far the widest column, and a broad
@@ -1786,11 +1835,11 @@ mod group_tests {
             )
             .unwrap();
         }
-        let got = recent(&conn, &Query::exact("agent:codex"), NO_DECAY, 10, false).unwrap();
+        let got = recent(&conn, &Query::exact("agent:codex"), NO_DECAY, 10, 0, false).unwrap();
         assert_eq!(got.len(), 2);
         assert!(got.iter().all(|g| g.source == "codex"));
 
-        let capped = recent(&conn, &Query::exact(""), NO_DECAY, 1, false).unwrap();
+        let capped = recent(&conn, &Query::exact(""), NO_DECAY, 1, 0, false).unwrap();
         assert_eq!(capped.len(), 1);
     }
 
@@ -2002,7 +2051,7 @@ mod group_tests {
             ("main", false, 1, "assistant", "tool_call", false, "Bash(git log)"),
         ]);
 
-        let groups = recent(&conn, &Query::exact(""), NO_DECAY, 10, true).unwrap();
+        let groups = recent(&conn, &Query::exact(""), NO_DECAY, 10, 0, true).unwrap();
         assert!(groups[0].match_seqs.is_empty(), "nothing was searched for");
         assert_eq!(
             serde_json::to_value(&groups[0].kind_runs).unwrap(),
@@ -2321,7 +2370,7 @@ mod sitting_tests {
         // The list a typeahead opens on, where the shredding shows worst: unfolded, the
         // activity log is a third of everything a reader scrolls past.
         let conn = corpus();
-        let groups = recent(&conn, &Query::exact(""), 0, 20, false).unwrap();
+        let groups = recent(&conn, &Query::exact(""), 0, 20, 0, false).unwrap();
         let ids: Vec<&str> = groups.iter().map(|g| g.conv_id.as_str()).collect();
         // Ordered by when each row *ended*, so the sitting sorts on its last record rather
         // than on the one that opened it two hours earlier.

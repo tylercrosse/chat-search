@@ -130,6 +130,17 @@ enum Command {
         query: String,
         #[arg(long, default_value = "10")]
         limit: i64,
+        /// Start `--limit` this far down the ranking — the next page of the same answer.
+        ///
+        /// The rows are the ones a bigger `--limit` would have put last, so appending page
+        /// after page gives the same list in the same order. Two things move with the depth
+        /// and docs/JSON-CONTRACT.md says what they cost: the ranking scans deeper to reach
+        /// a deeper page, and it stops scanning deeper at a fixed ceiling, past which a page
+        /// comes back empty while `total` still says there is more.
+        ///
+        /// Not available with `--flat`, which orders messages with no tiebreak.
+        #[arg(long, default_value = "0")]
+        offset: i64,
         #[arg(long)]
         db: Option<PathBuf>,
         /// Restrict to one source id.
@@ -401,8 +412,8 @@ fn main() -> Result<()> {
                 tui::run(&config_path, db, source.as_deref(), limit, print)
             }
         }
-        Command::Search { query: q, limit, db, source, tools, include_off_path, prefix, nested, flat, json } => {
-            commands::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)
+        Command::Search { query: q, limit, offset, db, source, tools, include_off_path, prefix, nested, flat, json } => {
+            commands::search(&config_path, db, &q, limit, offset, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)
         }
         Command::Facets { query: q, db, json } => facets(&config_path, db, &q, json),
         Command::Timeline { query: q, db, buckets, drag, prefix, json } => {

@@ -77,6 +77,13 @@ pub struct Answer {
     pub ms: f64,
     /// How many conversations came back — the length of `results`.
     pub count: usize,
+    /// How far into the ranking `results` starts — [`SearchOptions::offset`], echoed.
+    ///
+    /// Echoed rather than assumed, for the reason `query` is: a page whose depth is only known
+    /// to whoever asked for it cannot be told apart from the first one once the two replies are
+    /// in the same buffer, and a client with several in flight has exactly that problem. `0` on
+    /// every reply nobody asked to page, which is every reply before this key existed.
+    pub offset: usize,
     /// How many conversations the query selects with `limit` ignored.
     ///
     /// Read it beside `settled`. A hundred results out of a hundred and a hundred out of two
@@ -156,6 +163,7 @@ pub fn answer(reader: &Reader, query: &Query, opts: &SearchOptions) -> rusqlite:
         // SQL underneath it.
         ms: elapsed_ms(started),
         count: results.len(),
+        offset: opts.offset.max(0) as usize,
         total,
         settled,
         unapplied_filters: query.rejected(),
@@ -631,6 +639,7 @@ mod tests {
                 "index_state",
                 "mark_offsets",
                 "ms",
+                "offset",
                 "query",
                 "results",
                 "settled",
@@ -642,6 +651,7 @@ mod tests {
         assert_eq!(v["v"], 1);
         assert_eq!(v["query"], "borrow");
         assert_eq!(v["count"], 2, "two conversations mention it");
+        assert_eq!(v["offset"], 0, "an unpaged reply states its depth rather than omitting it");
         assert_eq!(v["total"], 2);
         assert_eq!(v["settled"], true);
         assert_eq!(v["unapplied_filters"], serde_json::json!([]));

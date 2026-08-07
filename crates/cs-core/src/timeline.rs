@@ -181,6 +181,12 @@ pub struct Drag {
 /// same [`SearchOptions`] the search was given, `now_ms` included — a `date:` filter resolved
 /// against a second instant describes a second set, and a drawer under a list is the one place
 /// that has to be showing the same one.
+///
+/// [`SearchOptions::field`] and `include_off_path` are that rule's other two edges, and they are
+/// the ones a caller forgets, because nothing about a picture of tool traffic looks different
+/// from a picture of prose. `cs timeline` grew flags for both under `chat-search-me9.8.25`; the
+/// pin is `the_drawer_reads_whichever_field_the_search_beside_it_was_asked_for` below. `limit` is
+/// the one field here ignores, since this counts what the query selects with the page left out.
 pub fn timeline(
     reader: &Reader,
     query: &Query,
@@ -501,6 +507,7 @@ mod tests {
     use super::*;
     use crate::build::IndexState;
     use crate::model::{Conversation, Kind, Message, Role, Titles};
+    use crate::search::Field;
 
     /// 2026-08-05T00:00:00Z, later than every fixture instant so nothing is dated in the future.
     const NOW: i64 = 1_785_888_000_000;
@@ -565,6 +572,68 @@ mod tests {
                 at(source, &format!("c{i}"), NOW - (40 - i * 2) * DAY, &[text])
             })
             .collect()
+    }
+
+    /// The same forty days with tool traffic hung off them, plus one conversation whose only
+    /// tool call is on a branch that was edited away.
+    ///
+    /// `lifetimes` is deliberately in both tables and in *different* conversations: seven have
+    /// it in prose, five in a tool call, and the sixth tool call is off the head path. A drawer
+    /// that read the wrong table, or ignored `include_off_path`, therefore comes back with a
+    /// number rather than with the same number by luck.
+    fn tool_corpus() -> Vec<Conversation> {
+        let mut convs: Vec<Conversation> = corpus()
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| tooled(c, if i % 4 == 0 { "rg lifetimes src" } else { "cargo build" }))
+            .collect();
+        convs.push(edited_away(
+            at("codex", "edited", NOW - 5 * DAY, &["python imports"]),
+            "rg lifetimes src",
+        ));
+        convs
+    }
+
+    /// A tool call hung off the conversation's last message, at the same instant it ended, so
+    /// what changes between the two fixtures is which table a term is found in and nothing else.
+    fn tooled(mut conv: Conversation, call: &str) -> Conversation {
+        let last = conv.messages.last().expect("`at` writes a message per text").clone();
+        conv.messages.push(Message {
+            native_id: format!("{}t", last.native_id),
+            parent_native_id: Some(last.native_id.clone()),
+            seq: last.seq + 1,
+            role: Role::Assistant,
+            kind: Kind::ToolCall,
+            text: call.into(),
+            ..last
+        });
+        conv
+    }
+
+    /// Two replies under the same parent, the later one being the one that stayed — the
+    /// edit-branch case, and the only shape in which a match is off the head path. The
+    /// abandoned sibling is what `include_off_path` reaches and nothing else does.
+    fn edited_away(mut conv: Conversation, call: &str) -> Conversation {
+        let parent = conv.messages.last().expect("`at` writes a message per text").clone();
+        conv.messages.push(Message {
+            native_id: "abandoned".into(),
+            parent_native_id: Some(parent.native_id.clone()),
+            seq: parent.seq + 1,
+            role: Role::Assistant,
+            kind: Kind::ToolCall,
+            text: call.into(),
+            ..parent.clone()
+        });
+        conv.messages.push(Message {
+            native_id: "kept".into(),
+            parent_native_id: Some(parent.native_id.clone()),
+            seq: parent.seq + 2,
+            role: Role::Assistant,
+            kind: Kind::Prose,
+            text: "python imports, once more".into(),
+            ..parent
+        });
+        conv
     }
 
     fn drawn(reader: &Reader, text: &str) -> Timeline {
@@ -731,6 +800,36 @@ mod tests {
             let t = timeline(&reader, &query, &opts(), BUCKETS, None).unwrap();
             assert_eq!(t.total, answer.total, "{text}");
         }
+    }
+
+    #[test]
+    fn the_drawer_reads_whichever_field_the_search_beside_it_was_asked_for() {
+        // The same claim, made once per way of asking rather than once for prose. A drawer
+        // that always read `fts_prose` passes the test above and still puts a prose number
+        // under a tools list — and tool traffic is where 66–85% of message-level matches land,
+        // so that list is the common one rather than an exotic one.
+        let reader = reader(&tool_corpus());
+        let asks = [
+            SearchOptions { field: Field::Prose, ..opts() },
+            SearchOptions { field: Field::Tools, ..opts() },
+            SearchOptions { field: Field::Tools, include_off_path: true, ..opts() },
+        ];
+        let mut totals = Vec::new();
+        for ask in &asks {
+            for text in ["lifetimes", "lifetimes agent:codex", "imports"] {
+                let query = Query::exact(text);
+                let mut answer = crate::answer(&reader, &query, ask).unwrap();
+                answer.settle(&reader).unwrap();
+                let t = timeline(&reader, &query, ask, BUCKETS, None).unwrap();
+                assert_eq!(t.total, answer.total, "{text} as {:?}", ask.field);
+                if text == "lifetimes" {
+                    totals.push(t.total);
+                }
+            }
+        }
+        // And the three readings are three different sets, which is what stops this passing
+        // against a drawer that ignored the options it was handed.
+        assert_eq!(totals, vec![7, 5, 6], "prose, tool traffic, and the branch edited away");
     }
 
     #[test]

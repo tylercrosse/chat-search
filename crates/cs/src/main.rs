@@ -182,6 +182,12 @@ enum Command {
     ///
     /// It counts rather than lists, and it counts *here*, because a client holding a `--limit`
     /// page holds a biased sample of this axis: ranking is not chronological.
+    ///
+    /// Every knob that changes *which set* `cs search` describes is repeated here — `--tools`,
+    /// `--include-off-path`, `--prefix` — because `total` is promised to be the search's own
+    /// total, and a drawer asked a different question than the list above it is a drawer
+    /// disagreeing with the footer. `--limit` is not among them and never can be: the count is
+    /// what the query selects with the page ignored.
     Timeline {
         /// The query the distribution is of. Same syntax as `cs search`.
         // `allow_hyphen_values` for the reason `cs search` needs it: `-agent:codex` is one of
@@ -199,6 +205,13 @@ enum Command {
         /// nothing else about the reply.
         #[arg(long, value_name = "FROM..UNTIL")]
         drag: Option<String>,
+        /// Draw the distribution of a tool-traffic search instead of a prose one. Pass it when
+        /// the search beside this was asked that way.
+        #[arg(long)]
+        tools: bool,
+        /// Include messages on branches that were edited away, as `cs search` does.
+        #[arg(long)]
+        include_off_path: bool,
         /// Treat the last word as a prefix, for typeahead. Pass it when the search beside this
         /// was asked that way: the two readings rank different sets, and a drawer under a list
         /// has to be describing that list.
@@ -405,8 +418,18 @@ fn main() -> Result<()> {
             commands::search(&config_path, db, &q, limit, source.as_deref(), tools, include_off_path, prefix, nested, flat, json)
         }
         Command::Facets { query: q, db, json } => facets(&config_path, db, &q, json),
-        Command::Timeline { query: q, db, buckets, drag, prefix, json } => {
-            commands::timeline(&config_path, db, &q, buckets, drag.as_deref(), prefix, json)
+        Command::Timeline { query: q, db, buckets, drag, tools, include_off_path, prefix, json } => {
+            commands::timeline(
+                &config_path,
+                db,
+                &q,
+                buckets,
+                drag.as_deref(),
+                tools,
+                include_off_path,
+                prefix,
+                json,
+            )
         }
         Command::Pick { conv_id, query: q, db, source, limit, quiet, kind } => {
             commands::pick(&config_path, db, &conv_id, &q, source.as_deref(), limit, quiet, kind.as_deref())

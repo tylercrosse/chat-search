@@ -275,20 +275,31 @@ fn log_search(
 
 /// When a query's answers happened, and what a drag on that axis would write.
 ///
-/// The one search knob it takes is `--prefix`, because that one changes the answer: the two
-/// readings of a final word rank different sets, and a drawer under a list has to be describing
-/// that list. `--tools`, `--include-off-path` and `--source` are absent rather than defaulted —
-/// no client draws a timeline under them yet, and a flag on a published command is a promise.
+/// It takes every `cs search` knob that changes *which set* is described — `--prefix`,
+/// `--tools`, `--include-off-path` — because `total` is promised to be that search's own total
+/// and a drawer asked a narrower question than the list above it disagrees with the footer while
+/// looking right. Tool traffic is the case that made this worth having rather than tidy: 66–85%
+/// of message-level matches land there, so a prose-only drawer cannot draw half the corpus.
+///
+/// `--source` stays absent, and that is not the same omission. It desugars into an `agent:`
+/// token, so a caller that wants it already has a way to say it — in the query text, which this
+/// takes. `--tools` and `--include-off-path` have no spelling in the grammar at all.
+///
+/// `--limit` is the knob that must never appear here: this counts what the query selects with
+/// the page ignored, which is the whole reason the counting happens in this process.
 ///
 /// **Nothing here is logged.** `cs search` records a need somebody had; this is a client asking
 /// what a picture looks like, once per keystroke, and every one of them would land in the log
 /// under the same text as the search beside it.
+#[allow(clippy::too_many_arguments)]
 pub fn timeline(
     config_path: &Path,
     db_path: Option<PathBuf>,
     text: &str,
     buckets: usize,
     drag: Option<&str>,
+    tools: bool,
+    include_off_path: bool,
     prefix: bool,
     json: bool,
 ) -> Result<()> {
@@ -297,7 +308,11 @@ pub fn timeline(
     let index = open_index(&db_path, json)?;
     let parsed =
         if prefix { cs_core::Query::typeahead(text) } else { cs_core::Query::exact(text) };
-    let opts = cs_core::SearchOptions::new(cs_core::now_ms());
+    let opts = cs_core::SearchOptions {
+        field: if tools { cs_core::Field::Tools } else { cs_core::Field::Prose },
+        include_off_path,
+        ..cs_core::SearchOptions::new(cs_core::now_ms())
+    };
     let dragged = drag.map(parse_drag).transpose()?;
     let drawn = cs_core::timeline(&index, &parsed, &opts, buckets, dragged)?;
 

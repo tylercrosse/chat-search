@@ -444,7 +444,7 @@ client that spawns `cs` rather than linking it (`chat-search-me9.8.20`).
 ## The timeline — `cs timeline --json`
 
 The third reply, and the facet rail for the one axis a rail cannot enumerate. `cs timeline
-[QUERY] --json [--buckets N] [--drag FROM..UNTIL] [--prefix]`:
+[QUERY] --json [--buckets N] [--drag FROM..UNTIL] [--prefix] [--tools] [--include-off-path]`:
 
 ```json
 {
@@ -498,6 +498,17 @@ conversations a term landed in. For a query with nothing searchable in it there 
 have matched, so `matches` is zero throughout; `total` still counts, because a browse still has
 an answer and the list below it is showing one.
 
+**A drawer has to be asked the way the list was** (`chat-search-me9.8.25`). Three flags change
+*which set* is being described rather than how it is drawn, and every one of them is spelled the
+same here as on `cs search`: `--prefix`, `--tools` and `--include-off-path`. Pass to this
+whatever was passed to the search beside it. `--tools` is the one that matters in practice —
+66–85% of message-level matches land in tool traffic, so a prose drawer under a tools list is a
+picture of a different query that looks entirely right, with a `total` that silently contradicts
+the footer above it. `--source` has no twin here because it desugars into an `agent:` token,
+which `query` already carries; `--limit` has none and cannot, since the count is what the query
+selects with the page ignored. Nothing on this wire moved and it is not a `v` bump: a caller
+that passes neither new flag gets exactly the reply it got before.
+
 | key | type | null? | |
 | --- | --- | --- | --- |
 | `v` | integer | never | `1`. Moves under the same rule as the search envelope's. |
@@ -513,7 +524,7 @@ an answer and the list below it is showing one.
 | `buckets` | array | never; may be empty | Oldest first, abutting, covering the whole axis. Empty exactly when the index holds no dated conversation. |
 | `undated` | integer | never | Conversations the filters keep that have no `ended_at` and are therefore in no bucket — four of this corpus's 4,426. Carried for the reason `dirs.undirected` is: a picture that silently drops what it cannot place is a picture claiming to be everything. |
 | `in_range` | integer | never | Of what the bars draw, how many are inside `window`. Free text ignored, like the bars. Equal to the sum of `conversations` when `window` is null. |
-| `total` | integer | never | How many conversations the query selects with `limit` ignored — **the same number, spelled the same way, as the search envelope's `total`**, and always settled. Counted here rather than read off a search because the two are two processes and can land a keystroke apart. |
+| `total` | integer | never | How many conversations the query selects with `limit` ignored — **the same number, spelled the same way, as the search envelope's `total`** for a search asked the same way, and always settled. Counted here rather than read off a search because the two are two processes and can land a keystroke apart. |
 | `window` | object | **nullable** | The `date:` window in force, described below. Null when the query names none, and **also null when the only one it names is negated**: the complement of a window is not a rectangle, and drawing it as one would put the selection over exactly the stretch the filter threw away. |
 | `all` | object | never | `selected` is true exactly when the query carries no `date:` token; `query` is the text with every one of them gone. The same shape as a rail's All chip, because it is the same thing — the click that clears the selection. |
 | `drag` | object | **nullable** | What a drag writes, described below. Null unless `--drag` was passed, which is the only thing that flag changes about this reply. |

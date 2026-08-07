@@ -186,6 +186,9 @@ impl Drop for Fixture {
 }
 
 const TERM: &str = "borrow";
+/// A word only the fixture's tool call says, so a tools search and a prose search over this
+/// corpus are demonstrably two different sets rather than the same one asked twice.
+const TOOL_TERM: &str = "src";
 
 fn msg(seq: i64, role: Role, kind: Kind, ts: Option<i64>, text: &str) -> Message {
     Message {
@@ -427,6 +430,39 @@ fn the_timeline_emits_exactly_the_keys_the_contract_documents() {
     // describing a state the code stopped producing.
     assert!(drawn["window"].is_null(), "this query names no date:");
     assert!(drawn["drag"].is_null(), "and nothing was dragged");
+}
+
+#[test]
+fn a_drawer_asked_the_way_the_list_was_reports_the_list_s_own_total() {
+    // `chat-search-me9.8.25`: `cs timeline` took `--prefix` and no other search knob, so a
+    // client searching tool traffic drew a prose distribution beneath it — a picture of a
+    // different query, under a `total` contradicting the footer above it. Driven through the
+    // binary rather than through `cs_core`, because the whole of what was missing was the flag
+    // reaching `SearchOptions`, and only the binary can be wrong about that.
+    let f = Fixture::new();
+
+    for flags in [&[][..], &["--tools"][..], &["--tools", "--include-off-path"][..]] {
+        for query in [TERM, TOOL_TERM] {
+            assert_eq!(
+                f.timeline(query, flags)["total"],
+                f.search(query, flags)["total"],
+                "{query:?} {flags:?}: the drawer and the list are describing different sets"
+            );
+        }
+    }
+
+    // And the two readings are two sets rather than one asked twice: each term is in exactly
+    // one of the tables. Without this the assertions above would hold against a drawer that
+    // ignored the flag entirely.
+    assert_eq!(f.search(TOOL_TERM, &["--tools"])["total"], 1, "the one tool call that says it");
+    assert_eq!(f.search(TOOL_TERM, &[])["total"], 0, "and no prose does");
+    assert_eq!(f.search(TERM, &["--tools"])["total"], 0, "nor the other way about");
+    assert!(f.search(TERM, &[])["total"].as_u64().unwrap() > 0);
+
+    // `--include-off-path` is along for parity and this fixture holds no branch edited away, so
+    // what it pins here is that the flag is accepted and routed to the same place on both
+    // sides. That it selects a *wider* set lives in `cs_core::timeline`'s own tests, where a
+    // fixture can carry a superseded sibling without disturbing every count in this file.
 }
 
 #[test]

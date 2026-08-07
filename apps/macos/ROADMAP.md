@@ -129,9 +129,10 @@ graph TD
 Kept out of the graph to keep it readable. Free-standing — nothing blocks them and they block
 nothing: `me9.8.6` (prove the seam by swapping a whole theme), `me9.8.11` (is spacing outside the
 row a token), `me9.8.14` (carry `model` and `thread_count` on the wire), `me9.8.23` (a group head
-counts rows in hand and cannot say what the corpus holds), `me9.8.25` (`cs timeline` cannot
-describe a `--tools` search). And one pair: `me9.8.13` (a hue for `google-takeout`, or a rule for
-sources the palette does not name) blocks `g6u` (the facet rail has no source colour).
+counts rows in hand and cannot say what the corpus holds), `dn3` (nothing in the app can ask for
+tool traffic — `me9.8.25` put the flags on `cs timeline`, and no client sets them). And one pair:
+`me9.8.13` (a hue for `google-takeout`, or a rule for sources the palette does not name) blocks
+`g6u` (the facet rail has no source colour).
 
 ### Why the edges are there
 

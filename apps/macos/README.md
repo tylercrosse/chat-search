@@ -1955,9 +1955,14 @@ Three frames beside the ordinary ones: `-scrubbed.png` with the selection standi
 - **A negated `date:` draws no rectangle.** The complement of a window is not a rectangle, and
   drawing it as one would put the selection over exactly the stretch the filter threw away. The
   counts beside it are still right.
-- **`cs search --tools` has no timeline.** `cs timeline` takes `--prefix` and no other search
-  knob, so a query asked against tool traffic cannot be drawn — which on this corpus is where most
-  message-level matches land. `chat-search-me9.8.25`.
+- **Nothing here can ask for tool traffic, so the drawer never draws any.** The gap moved rather
+  than closed: `cs timeline` now takes `--tools` and `--include-off-path` beside `--prefix`
+  (`chat-search-me9.8.25`), so the reply exists — but `CsClient` passes neither flag to either
+  command and no control in this window would set one. On this corpus that is where most
+  message-level matches land, and the two readings are genuinely two sets: `index.db` is 123
+  conversations in prose and 141 in tool calls. Whatever adds the switch has to pass it to the
+  search *and* the timeline on the same keystroke, or the drawer describes a set the list does
+  not. `chat-search-dn3`.
 
 ## Library: the half that is not derived
 

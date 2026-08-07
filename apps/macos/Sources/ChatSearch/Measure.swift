@@ -119,7 +119,9 @@ enum Measure {
         try? await Task.sleep(for: .seconds(2))
         // Before anything is opened, because that is both the state a person browses in and the
         // only moment the list is the rightmost pane in the window.
-        density(model: model, window: window)
+        if let read = reading(model: model, window: window) {
+            print("  density at \(read.at): \(read.sentence)")
+        }
         // `--longest` opens the biggest conversation the query returned rather than the best. The
         // minimap's hard case is the corpus's longest conversation and no query puts it first, so
         // without this the one thing that has to be looked at cannot be reached from a script.
@@ -220,13 +222,42 @@ enum Measure {
 
     /// What a row costs, and therefore how much of the answer a screen holds.
     ///
+    /// A value rather than a printed line, because two callers want different halves of it:
+    /// `--shot` says the sentence beside its frames, and `--density` compares the number across
+    /// every direction the build carries, where a sentence per direction is a table nobody can read
+    /// down.
+    private struct Density {
+        /// The window it was taken in, as `900×620`. Carried with the reading because a row's cost
+        /// is only half of rows-per-screen — the other half is how much list there was.
+        let at: String
+        /// Mean height of the rows in the viewport, in points.
+        let row: Double
+        /// The list's own height: the window, less whatever chrome the direction gave it. It moves
+        /// with the type scale too — `chat-search-me9.8.34` raised the scale a point and the
+        /// viewport shrank 7pt, because the search field and the drawer above and below it grew.
+        let viewport: Double
+        /// Rows the viewport touches, the one the window edge cuts included.
+        let cut: Int
+
+        /// Whole rows — what somebody scanning gets without scrolling, and the number a direction
+        /// is not allowed to spend (`poc/ui/DESIGN-BRIEF.md`).
+        var whole: Int { Int((viewport / row).rounded(.down)) }
+
+        var sentence: String {
+            "\(fmt(row)) pt per row, \(fmt(viewport)) pt of list → \(whole) rows on screen, "
+                + "\(cut) counting the one the edge cuts"
+        }
+    }
+
+    /// One reading off the list as it stands, or nil having said why there was none.
+    ///
     /// The number the type scale is spent against, and until `chat-search-me9.8.34` nothing
     /// reported it. `poc/ui/directions.html` fences rows-per-screen *between* directions and says
     /// so — it stands 800px in for a viewport nobody has — which makes it silent about what a row
     /// costs at a size somebody opens. Counting them off the PNG is the alternative and it is
     /// worst at exactly the size that matters: at the 720×480 floor the last row is cut by the
     /// edge, and whether a half-drawn row counts is a judgement made by whoever is looking. So
-    /// both counts are printed and the arithmetic one is stated first.
+    /// both counts are carried and the arithmetic one is stated first.
     ///
     /// The height is a mean over the rows on screen rather than the document divided by its rows.
     /// A `List` estimates the height of everything it has not laid out yet, so the document is
@@ -234,7 +265,7 @@ enum Measure {
     /// *shorter rows at 720 than at 900*, a difference in the instrument reported as a difference
     /// in the row. The rows in the viewport are the ones that certainly have been measured.
     @MainActor
-    private static func density(model: SearchModel, window: NSWindow) {
+    private static func reading(model: SearchModel, window: NSWindow) -> Density? {
         let bounds = window.contentView?.bounds.size ?? window.frame.size
         let at = "\(Int(bounds.width))×\(Int(bounds.height))"
         // The results list is an `NSTableView` inside its scroll view, which is a fact about how
@@ -244,7 +275,7 @@ enum Measure {
               let table = scroll.documentView as? NSTableView
         else {
             print("  density at \(at): no results list to measure")
-            return
+            return nil
         }
         let drawn = table.rows(in: table.visibleRect)
         let heights = (0..<drawn.length).map { table.rect(ofRow: drawn.location + $0).height }
@@ -253,11 +284,147 @@ enum Measure {
               row > 0
         else {
             print("  density at \(at): the list has laid out no rows to measure")
-            return
+            return nil
         }
-        print("  density at \(at): \(fmt(row)) pt per row, \(fmt(visible)) pt of list → "
-            + "\(Int((visible / row).rounded(.down))) rows on screen, "
-            + "\(drawn.length) counting the one the edge cuts")
+        return Density(at: at, row: row, viewport: visible, cut: drawn.length)
+    }
+
+    /// Every direction the build carries, swapped into one running window, and what a row costs in
+    /// each.
+    ///
+    /// The claim the token layer makes is that a direction is a set of values, so changing one is an
+    /// assignment rather than a sweep — and a claim nobody exercises is one that turns out to be
+    /// false the first time somebody needs it to be true. `chat-search-me9.8.6` is that exercise,
+    /// and the whole of the swap is the two `choose` calls below: no view is named here, and none
+    /// was touched to make this run.
+    ///
+    /// **It measures rather than photographs, because the cost a direction hides is arithmetic.**
+    /// Six pictures out of six launches already exist and they show colour, which is the half that
+    /// is obvious. The half that is not: `paper` sets a serif face half a point larger than
+    /// `terminal`'s sans and takes 2pt back out of the row's padding, `blueprint` is monospaced and
+    /// half a point down at every step of the scale, `ink` spends 4pt of lead between the row's
+    /// lines. Whether any of that costs a row is not a question a frame answers, and rows-per-screen
+    /// is what `poc/ui/DESIGN-BRIEF.md` names first on its list of what would actually break this.
+    ///
+    /// **One window, one query, one list.** The readings go through the same viewport over the same
+    /// rows, so the only thing that differs between them is the token values. Six launches would
+    /// each get their own layout pass, and the two colour ports would then have to be argued about
+    /// rather than read off.
+    ///
+    /// **The incumbent is measured twice, first and last.** A `List` that has laid out its rows in
+    /// six directions is not obviously the list that started, and a fence built on a drifting
+    /// instrument fences nothing. The second reading is the check on the first, and it is the only
+    /// line here that says something about this code rather than about a theme.
+    @MainActor
+    static func density(
+        model: SearchModel, window: NSWindow, settings: ThemeSettings, query: String, to path: String
+    ) async -> Int32 {
+        print(drivenLine())
+        print(machineLine())
+        // A token set off disk supersedes every direction rather than joining it (ADR 25 rule 3), so
+        // a run with one in force would draw the same theme seven times and report that nothing
+        // costs a row. Said out loud rather than worked around: what that file draws is a reading of
+        // its own, and `--verify-theme --theme-file` is where it is taken.
+        if let user = settings.user {
+            print("\(user.name) is in force from \(settings.userFile?.path ?? "a file"), and a user "
+                + "theme supersedes every direction — there would be nothing to swap. Re-run with "
+                + "--no-theme-file.")
+            return 2
+        }
+        model.query = query
+        model.queryChanged()
+        try? await Task.sleep(for: .seconds(2))
+
+        let incumbent = Theme.shipped
+        let order = Theme.directions + [incumbent]
+        var readings: [(name: String, density: Density)] = []
+        print("\(order.count) swaps in one window, over \(model.conversations.count) rows of "
+            + "\"\(query)\":")
+        for (index, direction) in order.enumerated() {
+            let again = index == order.count - 1
+            // The whole of the swap, and the whole of what the seam costs a caller. Both sides,
+            // because a direction is whole only when the two agree — one side on its own is colour,
+            // and colour cannot move a row (`ThemeSettings.sidesChanged`).
+            settings.choose(light: direction)
+            settings.choose(dark: direction)
+            // Longer than the 400ms the other passes settle for: a direction that moves the type
+            // scale relayouts every row in the list rather than repainting it.
+            try? await Task.sleep(for: .milliseconds(600))
+            guard let read = reading(model: model, window: window) else { continue }
+            let name = direction.name + (again ? ", again" : "")
+            print("  \(name.padding(toLength: 22, withPad: " ", startingAt: 0))\(read.sentence)"
+                + "   \(against(read, incumbent: readings.first?.density))")
+            if !again {
+                let file = path.replacingOccurrences(of: ".png", with: "-\(direction.name).png")
+                print("    \(file) \(capture(window, to: file))")
+            }
+            readings.append((name, read))
+        }
+
+        return verdict(readings)
+    }
+
+    /// How one direction's reading stands against the incumbent's — which is the only comparison
+    /// that means anything, since "unchanged or better" is against what shipped and not against the
+    /// direction measured before this one.
+    private static func against(_ read: Density, incumbent: Density?) -> String {
+        guard let incumbent else { return "the incumbent" }
+        let rows = read.whole - incumbent.whole
+        let height = read.row - incumbent.row
+        let row = height == 0 ? "the same row" : "\(fmt(height))pt on the row"
+        switch rows {
+        case 0: return "\(row), same \(read.whole) rows"
+        case 1...: return "\(row), +\(rows) row\(rows == 1 ? "" : "s")"
+        default:
+            return "\(row), COSTS \(-rows) ROW\(rows == -1 ? "" : "S") — "
+                + "\(read.whole) against \(incumbent.whole)"
+        }
+    }
+
+    /// The last line, and the run's exit status.
+    ///
+    /// A direction that draws fewer rows than the incumbent fails this, and that is the fence
+    /// `chat-search-me9.8.6` asked for rather than a preference of this instrument's: density is
+    /// what makes an archive scannable, a direction is offered by a picker to somebody who did not
+    /// solve it, and a look that quietly costs a row of every screenful is the way this interface
+    /// gets worse without anybody deciding to make it worse.
+    ///
+    /// Taller rows are not the failure — fewer rows is. A direction is free to spend a point on the
+    /// row where the viewport has one to give, and the count is what the reader actually gets.
+    private static func verdict(_ readings: [(name: String, density: Density)]) -> Int32 {
+        guard let incumbent = readings.first?.density else {
+            print("\nnothing was measured: the list drew no rows in any direction.")
+            return 1
+        }
+        // The instrument's own reading before any theme's: an incumbent that does not come back to
+        // where it started says the readings between are about this pass and not about the tokens.
+        let last = readings.last?.density
+        let drifted = last?.whole != incumbent.whole || last?.row != incumbent.row
+        if drifted {
+            print("\nthe instrument moved under the measurement: \(incumbent.sentence) first, "
+                + "\(last?.sentence ?? "nothing") last. The readings between are not comparable.")
+            return 1
+        }
+        let missed = readings.dropFirst().filter { $0.density.whole < incumbent.whole }
+        guard missed.isEmpty else {
+            print("\nFAILED — \(missed.map(\.name).joined(separator: ", ")) draw fewer than the "
+                + "\(incumbent.whole) rows \(readings[0].name) draws at \(incumbent.at). Density is "
+                + "what makes the archive scannable: re-solve the row's rhythm or the type scale in "
+                + "poc/ui/directions.css and regenerate, or the direction does not ship.")
+            return 1
+        }
+        print("\n\(readings.count - 1) directions swapped into one window at \(incumbent.at), and "
+            + "every one holds \(incumbent.whole) rows or better. A swap is \(tokenValues) token "
+            + "values and no view.")
+        return 0
+    }
+
+    /// What a direction is, counted rather than claimed: every colour on both sides, and one type
+    /// scale and one geometry for the pair. The same 82 declarations `--write-theme` writes out, and
+    /// derived from the token enums so that adding a token moves this line too.
+    private static var tokenValues: Int {
+        2 * ColorToken.allCases.count + SizeToken.allCases.count + FaceToken.allCases.count
+            + MetricToken.allCases.count
     }
 
     /// Every preset, on one conversation, plus the three claims about the fidelity model that no

@@ -73,8 +73,12 @@ enum Grouping: String, CaseIterable, Identifiable, Sendable {
     ///
     /// The residue group is last wherever there is one. It makes no rank claim: two thirds of a
     /// list can land in it, and leading with it would bury the axis you asked for.
-    func groups(of rows: [Conversation]) -> [ConversationGroup] {
-        switch self {
+    ///
+    /// The census is what the corpus holds for these keys, where anything does — see `Census`. It
+    /// arrives after the gather rather than during it because it is a fact about the axis and the
+    /// reply beside this one, not about the rows.
+    func groups(of rows: [Conversation], against census: Census?) -> [ConversationGroup] {
+        let cut: [ConversationGroup] = switch self {
         case .none:
             []
         case .project:
@@ -97,6 +101,36 @@ enum Grouping: String, CaseIterable, Identifiable, Sendable {
                 hue: { Display.sourceHue($0) })
         case .run:
             Self.runs(rows)
+        }
+        return Self.placed(cut, against: census?.totals(for: self))
+    }
+
+    /// Attach the corpus count to every head, or to none of them.
+    ///
+    /// **Whole or not at all**, the same rule the head's date range is under and for the same
+    /// reason: a screen where one head reads `56 of 458` and the head under it reads `39` is two
+    /// numbers of different kinds side by side, and nothing on the screen says which is which.
+    ///
+    /// A residue group takes the whole screen back on its own. Those are the rows the axis could
+    /// not place, so their key names nothing the corpus could be counted by — `no working
+    /// directory` is an absence rather than a directory. The `dir:` rail does carry `undirected`,
+    /// which is that absence counted corpus-wide, and it is deliberately not read here: it would
+    /// be one corpus-true head under a screenful of heads counting the rows in hand.
+    ///
+    /// The guard is the last line of defence rather than the rule. Which axes have a corpus count
+    /// is `Census.totals(for:)`'s answer and it is all-or-nothing by construction today; a census
+    /// that could place *some* of an axis would leave this flickering between keystrokes as the
+    /// answer moved, which is a reason to complete such a census rather than to ship it partial.
+    private static func placed(
+        _ groups: [ConversationGroup], against totals: [String: Int]?
+    ) -> [ConversationGroup] {
+        guard let totals, groups.allSatisfy({ !$0.isResidue && totals[$0.key] != nil }) else {
+            return groups
+        }
+        return groups.map { group in
+            var placed = group
+            placed.corpus = totals[group.key]
+            return placed
         }
     }
 
@@ -177,9 +211,9 @@ enum Grouping: String, CaseIterable, Identifiable, Sendable {
 ///
 /// Membership is over **the rows in hand** — the `--limit` window of the ranked answer, not the
 /// corpus. The prototype's project rows can print a corpus-true count (`114 · 30 here`) because it
-/// groups an export of the whole index; nothing on this wire carries the size of a `cwd` or of a
-/// run, so the key line above the list says which number this is rather than a header implying one
-/// the client does not have.
+/// groups an export of the whole index; on this wire only `corpus` below carries such a number,
+/// and only on the axis `Census` can reach. Every head says which of the two it is holding, so
+/// `39` never appears on its own (`chat-search-me9.8.23`).
 struct ConversationGroup: Identifiable {
     /// Stable across a re-group, so a `List` section keeps its identity while you type.
     let key: String
@@ -193,6 +227,11 @@ struct ConversationGroup: Identifiable {
     /// A run that used more than one tool, which is the fact the old cross-tool filter threw runs
     /// away to isolate. Always false off the run axis.
     let crossTool: Bool
+    /// How many conversations the corpus holds for this group, or nil when this screen has only
+    /// the rows in hand to count. Written by `Grouping.placed` after the gather and never by a
+    /// gather, because whether such a number exists is a fact about the axis and the rail beside
+    /// the answer rather than about these rows.
+    fileprivate(set) var corpus: Int?
 
     init(
         key: String, label: String, items: [Conversation], hue: ColorToken? = nil,

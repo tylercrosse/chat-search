@@ -2,8 +2,8 @@ import CsKit
 import CsTheme
 import SwiftUI
 
-/// The head of one group: its name, how many rows are under it, when they happened, and the shape
-/// of that in time.
+/// The head of one group: its name, how many rows are under it and which number that is, when they
+/// happened, and the shape of that in time.
 ///
 /// `poc/ui`'s `.pj-head` is the layout — twisty, name, tags, count, span, sparkline — with one of
 /// its cells deliberately absent here:
@@ -68,10 +68,17 @@ struct GroupHeader: View {
             // it means `39` is a wrong number rather than an elided one — and the reader pane
             // beside this list leaves the column ~400pt at the window's floor, so something has
             // to give. The name gives first, and it elides in the middle where a path survives it.
-            Text(verbatim: "\(group.items.count)")
-                .foregroundStyle(theme.color(.ink))
+            // The word beside the number is part of the number and is clipped with it, for the
+            // same reason: `39` where it means `39 here` is also a wrong number.
+            count
                 .monospacedDigit()
+                // The pair has a space in it now, which is a place a `Text` will wrap before it
+                // will truncate — and a cell that answered a narrow column by becoming two lines
+                // would move the height of every head on the screen. `.fixedSize()` is what every
+                // other must-not-degrade cell in this file already carries.
+                .fixedSize()
                 .layoutPriority(3)
+                .help(countHelp)
 
             // Whole or not at all. An elided date range says less than no date range does —
             // `Oct 8 ’2…` is a worse cell than an empty one — so this is the piece that leaves
@@ -108,6 +115,42 @@ struct GroupHeader: View {
     /// about the axis rather than about the rows: `no working directory` and `no last message` are
     /// two different absences and only the axis knows which one this is.
     private var name: String { group.isResidue ? (axis.residue?.label ?? "ungrouped") : group.label }
+
+    /// The count, and — in one word — which number it is (`chat-search-me9.8.23`).
+    ///
+    /// `39` alone is the defect: it is the rows this query returned that landed in this group,
+    /// which is the `--limit` window and not the corpus, and a head reading `39` cannot say
+    /// whether the project has 39 conversations or 400. So the number never appears without the
+    /// set it counted. `39 here` is that set named; `56 of 458` is the corpus's number beside it,
+    /// on the one axis a census reaches (see `Census`), and it is the prototype's `114 · 30 here`
+    /// written the way an English sentence reads.
+    ///
+    /// One `Text` and not two views, so the pair is laid out and clipped as a unit — half of a
+    /// two-part number is a wrong number. The qualifier is `--ink3`: it changes how to read the
+    /// count without competing with it, which is the same weight the tag beside the name carries.
+    private var count: Text {
+        let here = Text(verbatim: group.items.count.formatted())
+            .foregroundStyle(theme.color(.ink))
+        // `formatted()` and not interpolation, because the corpus's number is in the thousands and
+        // the rail on the left of this same window draws `2,011` for the source this head is
+        // counting. Two spellings of one number on one screen is the smaller version of the thing
+        // this whole head is about.
+        let qualifier = group.corpus.map { " of \($0.formatted())" } ?? " here"
+        return here + Text(verbatim: qualifier).foregroundStyle(theme.color(.ink3))
+    }
+
+    /// The whole sentence, on hover. The cell has room for one word and this is the paragraph that
+    /// word stands for — including, on a corpus-true head, that the number on the right is
+    /// query-blind: the index holds 458 claude-code conversations whatever was typed in the box.
+    private var countHelp: String {
+        let here = group.items.count.formatted()
+        guard let corpus = group.corpus else {
+            return "\(here) of the rows this query returned — the --limit window of the answer, "
+                + "not the corpus"
+        }
+        return "\(here) of the rows this query returned, out of \(corpus.formatted()) this index "
+            + "holds in all"
+    }
 
     /// The right-hand cell. A run's label is already its day span, so repeating it there says
     /// nothing; how long the run lasted does, and it is a duration rather than a clock (see

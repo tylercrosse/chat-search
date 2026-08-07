@@ -188,6 +188,7 @@ enum Measure {
             let file = path.replacingOccurrences(of: ".png", with: "-by-\(axis.rawValue).png")
             print("  by \(axis.rawValue) → \(model.groups.count) groups over "
                 + "\(model.conversations.count) rows, \(residue) in the residue")
+            countsPass(model: model)
             print("  \(file) \(capture(window, to: file))")
 
             // And the same axis shut, which is the picture the fold was argued from and against.
@@ -1252,6 +1253,45 @@ enum Measure {
         }
         walk(window.contentView)
         return found
+    }
+
+    /// What each head's number is, which the words in the frame say and the frame cannot check.
+    ///
+    /// `chat-search-me9.8.23` is one claim — a head either states a corpus-true count or says
+    /// which number it is, and no screen carries both kinds — and a PNG carries the words without
+    /// carrying any of what makes them true.
+    ///
+    /// Three things, then. How many heads on this axis hold the corpus's number, which is the
+    /// all-or-nothing rule read off the screen rather than off `Grouping.placed` — the residue
+    /// head is counted here, because a residue head holding a corpus number is the state that rule
+    /// forbids. Whether any head claims more rows than the index holds in all, which is what a
+    /// corpus number joined against the wrong key would look like. And, on `project`, how much of
+    /// the answer the `dir:` rail could have placed — the measurement the whole decision rests on,
+    /// taken here so that it is a number somebody can re-take rather than a sentence in a commit
+    /// message. It read 1 of 11 on `borrow checker` when `chat-search-me9.8.23` closed; a run that
+    /// reads 11 of 11 means the rail became a census and `project` is owed its number.
+    @MainActor
+    private static func countsPass(model: SearchModel) {
+        let heads = model.groups
+        let placed = heads.filter { $0.corpus != nil }
+        // A head cannot hold more rows than the corpus it was counted against, so one that does is
+        // two numbers from two different sets drawn as though they were one.
+        let overclaimed = placed.filter { ($0.corpus ?? 0) < $0.items.count }
+        print("    heads holding the corpus's number: \(placed.count) of \(heads.count)"
+            + (overclaimed.isEmpty
+                ? "" : " — \(overclaimed.count) of them claim more here than the index holds"))
+        if model.grouping == .project, let rail = model.rail?.dirs {
+            // The residue head is out of this one, and only this one. Its key is a sentinel no
+            // `dir:` chip can equal, so counting it would put a head in the denominator that is
+            // excluded from the numerator by construction — and the ratio this line exists to
+            // watch could then never reach the top of its own scale.
+            let placeable = heads.filter { !$0.isResidue }
+            let chips = Set(rail.values.map(\.value))
+            let reachable = placeable.filter { chips.contains($0.key) }.count
+            print("    the dir rail could place \(reachable) of \(placeable.count): "
+                + "\(rail.values.count) chips over \(rail.indexed) directories, "
+                + "\(rail.undirected) conversations in none")
+        }
     }
 
     /// The fold's other half, which is not a picture: where the cursor is allowed to be.

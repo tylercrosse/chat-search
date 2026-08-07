@@ -412,8 +412,10 @@ struct SearchView: View {
     /// The prototype's `.ribbon-key`, and it exists for the residue: a count of groups says
     /// nothing about the rows that landed in none of them, and on `project` that is two thirds of
     /// the corpus. It also states the set being grouped — the rows in hand, which is the `--limit`
-    /// window of the answer and not the corpus — because a group header showing `12` cannot say
-    /// which of the two it counted.
+    /// window of the answer and not the corpus — which is the sentence each head's own `here` or
+    /// `of 458` is the one-word form of (`chat-search-me9.8.23`). Said once at the top and once
+    /// per head, because a head can be read without the line above it and a screen of heads on an
+    /// axis with no corpus count needs one place that explains the word.
     private var groupKey: some View {
         // Three facts, in the order they may be given up in. The reader pane leaves this column
         // ~400pt at the window's floor, which is about seventy characters of the micro face, so

@@ -550,7 +550,8 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuIt
         self.frames = frames
         model.frames = frames
         Task { @MainActor in
-            await Measure.typing(model: model, frames: frames, interval: options.interval)
+            await Measure.typing(
+                model: model, window: window, frames: frames, interval: options.interval)
             NSApp.terminate(nil)
         }
     }

@@ -368,75 +368,117 @@ struct SearchView: View {
     private var results: some View {
         VStack(spacing: 0) {
             if model.grouping != .none { groupKey }
-            List(selection: opened) {
-                if model.grouping == .none {
-                    ForEach(model.conversations) { row($0) }
-                } else {
-                    ForEach(model.groups) { group in
-                        Section {
-                            // A folded group draws its head and no rows, which is also exactly
-                            // what `SearchModel.lines` says about it — one fold state, read in
-                            // both places rather than two that can disagree.
-                            if !model.isFolded(group.key) {
-                                ForEach(group.items) { row($0) }
-                            }
-                        } header: {
-                            // The whole head is the control and it is a `Button`, which is what
-                            // `poc/ui`'s `.pj-head` is too: a glyph at the micro size is a target
-                            // nobody hits twice, and a tap gesture on a section header is a hit
-                            // test this app would then own. The cursor moves here before the fold,
-                            // so a click and an arrow key are never two cursors — which is also
-                            // what leaves `toggleFold` no row to rescue on this path.
-                            Button {
-                                model.cursor = .head(group.key)
-                                model.toggleFold(group.key)
-                                // As on the axis chips: a click anywhere but the field is a click
-                                // that took focus off it, and this app is one box that never gives
-                                // it up.
-                                focused = true
-                            } label: {
-                                GroupHeader(
-                                    group: group, axis: model.grouping,
-                                    folded: model.isFolded(group.key),
-                                    cursored: model.cursor == .head(group.key))
-                            }
-                            // `.plain`, because a stock button paints itself in the system accent
-                            // — a colour chosen somewhere this app cannot see.
-                            .buttonStyle(.plain)
-                            .listRowInsets(EdgeInsets())
-                            .listRowSeparator(.hidden)
-                        }
+            ScrollViewReader { scroll in
+                list
+                    // **A new answer goes back to the top, and paging is why it had to.** SwiftUI
+                    // keeps a `List`'s content offset when its contents are replaced, so a reader
+                    // who had scrolled down and then typed a character was left in the middle of
+                    // a different answer — odd on its own, and expensive once there is something
+                    // below the bottom: the trigger below would see a list already at its bottom
+                    // and fetch page two of a query nobody had read page one of. Measured before
+                    // this line existed: a page per keystroke, and the deliberate scroll that
+                    // should have asked for one asked for nothing, because the value was already
+                    // true and `onScrollGeometryChange` fires on change.
+                    //
+                    // `ScrollViewReader` and not `ScrollPosition`, which `chat-search-me9.8.27`
+                    // measured and found does not move a `List` at all.
+                    .onChange(of: model.answerSerial) {
+                        guard let top = topOfList else { return }
+                        scroll.scrollTo(top, anchor: .top)
                     }
-                }
-            }
-            .listStyle(.plain)
-            // The list is the page, so it takes the page's ground rather than the system's list
-            // ground. `.plain` and not `.inset` for the same reason the insets below are set by
-            // hand: the row's margin is `--row-px`, which a direction gets to move.
-            .scrollContentBackground(.hidden)
-            .background(theme.color(.bg))
-            // Reaching the bottom is the whole gesture — no button, no page number, and nothing
-            // to learn. It is read off the scroll view's own geometry rather than off which rows
-            // have reported themselves through `onAppear`: `chat-search-me9.8.27` raised the
-            // floor to macOS 15 for exactly this publisher, and the reader's minimap is the other
-            // thing it bought. `onAppear` on the last row would fire on a list shorter than its
-            // viewport and on a section header the fold had just closed.
-            //
-            // A screenful of slack, so the next page is being fetched while there is still
-            // something to read rather than at the moment the scroll stops. `max(1)` because a
-            // list with nothing in it publishes a zero-height container, and a zero threshold
-            // would make every empty state ask for a page.
-            .onScrollGeometryChange(for: Bool.self) { geometry in
-                let slack = max(geometry.containerSize.height, 1)
-                return geometry.contentOffset.y + geometry.containerSize.height
-                    >= geometry.contentSize.height - slack
-            } action: { _, atBottom in
-                if atBottom { model.loadNextPage() }
             }
             // What the bottom of the list is, said in words rather than by simply stopping.
             listFoot
         }
         .frame(minWidth: 280)
+    }
+
+    /// The id of the first line the list draws, for the scroll back to the top.
+    ///
+    /// Ungrouped that is the best row, and `ForEach` has already given it `Conversation.id`.
+    /// Grouped it is the first head, which is tagged by hand — prefixed, because a group key is a
+    /// `cwd` or a source id and a scroll view has one namespace for every id in it. Nil when
+    /// there is nothing to scroll to, which is an empty answer.
+    private var topOfList: String? {
+        guard model.grouping != .none else { return model.conversations.first?.id }
+        return model.groups.first.map { Self.headID($0.key) }
+    }
+
+    private static func headID(_ key: String) -> String { "head:\(key)" }
+
+    private var list: some View {
+        List(selection: opened) {
+            if model.grouping == .none {
+                ForEach(model.conversations) { row($0) }
+            } else {
+                ForEach(model.groups) { group in
+                    Section {
+                        // A folded group draws its head and no rows, which is also exactly
+                        // what `SearchModel.lines` says about it — one fold state, read in
+                        // both places rather than two that can disagree.
+                        if !model.isFolded(group.key) {
+                            ForEach(group.items) { row($0) }
+                        }
+                    } header: {
+                        // The whole head is the control and it is a `Button`, which is what
+                        // `poc/ui`'s `.pj-head` is too: a glyph at the micro size is a target
+                        // nobody hits twice, and a tap gesture on a section header is a hit
+                        // test this app would then own. The cursor moves here before the fold,
+                        // so a click and an arrow key are never two cursors — which is also
+                        // what leaves `toggleFold` no row to rescue on this path.
+                        Button {
+                            model.cursor = .head(group.key)
+                            model.toggleFold(group.key)
+                            // As on the axis chips: a click anywhere but the field is a click
+                            // that took focus off it, and this app is one box that never gives
+                            // it up.
+                            focused = true
+                        } label: {
+                            GroupHeader(
+                                group: group, axis: model.grouping,
+                                folded: model.isFolded(group.key),
+                                cursored: model.cursor == .head(group.key))
+                        }
+                        // `.plain`, because a stock button paints itself in the system accent
+                        // — a colour chosen somewhere this app cannot see.
+                        .buttonStyle(.plain)
+                        .listRowInsets(EdgeInsets())
+                        .listRowSeparator(.hidden)
+                        // Named so the scroll back to the top has something to aim at. Only the
+                        // heads need it; a row already carries `Conversation.id` from `ForEach`.
+                        .id(Self.headID(group.key))
+                    }
+                }
+            }
+        }
+        .listStyle(.plain)
+        // The list is the page, so it takes the page's ground rather than the system's list
+        // ground. `.plain` and not `.inset` for the same reason the insets below are set by
+        // hand: the row's margin is `--row-px`, which a direction gets to move.
+        .scrollContentBackground(.hidden)
+        .background(theme.color(.bg))
+        // Reaching the bottom is the whole gesture — no button, no page number, and nothing to
+        // learn. It is read off the scroll view's own geometry rather than off which rows have
+        // reported themselves through `onAppear`: `chat-search-me9.8.27` raised the floor to
+        // macOS 15 for exactly this publisher, and the reader's minimap is the other thing it
+        // bought. `onAppear` on the last row would fire on a list shorter than its viewport and
+        // on a section header the fold had just closed.
+        //
+        // A screenful of slack, so the next page is being fetched while there is still something
+        // to read rather than at the moment the scroll stops. That is generous enough to be true
+        // of a *short* list at any offset — which is why the answer goes back to the top above,
+        // and why it can be this generous: a list with a page below it is sixty rows and never
+        // short.
+        //
+        // `max(1)` because a list with nothing in it publishes a zero-height container, and a
+        // zero threshold would make every empty state ask for a page.
+        .onScrollGeometryChange(for: Bool.self) { geometry in
+            let slack = max(geometry.containerSize.height, 1)
+            return geometry.contentOffset.y + geometry.containerSize.height
+                >= geometry.contentSize.height - slack
+        } action: { _, atBottom in
+            if atBottom { model.loadNextPage() }
+        }
     }
 
     /// One line under the list saying why it ends where it does.

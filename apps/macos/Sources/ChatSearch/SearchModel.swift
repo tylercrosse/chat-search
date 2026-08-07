@@ -47,6 +47,13 @@ final class SearchModel {
     /// asks once — a scroll produces a great many geometry callbacks and each of them would
     /// otherwise be a `cs`.
     private(set) var paging = false
+    /// Bumped by each *answer* and never by a page. What the list watches to know it is looking
+    /// at a new set of rows rather than more of the same ones.
+    ///
+    /// A serial and not the query text, because the two are not the same event: `askAgain` runs
+    /// the same text again and produces a new answer, and a keystroke that leaves the results
+    /// unchanged still produces one.
+    private(set) var answerSerial = 0
     /// Where the index stands, from whichever half of the contract said so — the `index_state`
     /// on an answered envelope or the `error.code` on a refusal. Both paths land here, which is
     /// what lets one `switch` in the view cover all four states.
@@ -524,6 +531,7 @@ final class SearchModel {
         health = .answering(result.response.indexState)
         conversations = result.response.results
         answeredQuery = query
+        answerSerial += 1
         marks = result.response.markOffsets
         total = result.response.total
         settled = result.response.settled

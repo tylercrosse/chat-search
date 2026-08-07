@@ -2061,6 +2061,135 @@ Three things this does not do:
   chip would say this corpus has four axes; drawing it live would need a grammar that does not
   exist. `chat-search-me9.18`, and `chat-search-6eb.18` for the discovery half.
 
+## Past the first sixty
+
+The window drew a scrubber over 1,894 conversations above a list that could only ever hold 60 of
+them, and the asymmetry was on screen the whole time: `cs_core::timeline` counts the whole matching
+set on purpose, and the strip's own `total` is the count with `--limit` ignored. Reaching the
+bottom of the list now fetches the next sixty and appends them (`chat-search-me9.8.33`).
+
+No button and no page number. The gesture is scrolling, which is the gesture already in use, and
+the trigger is `onScrollGeometryChange` — the publisher `chat-search-me9.8.27` raised the floor to
+macOS 15 for, and the minimap is the other thing it bought. It fires a screenful early, so the page
+is being fetched while there is still something to read. `onAppear` on the last row was the
+alternative and is wrong twice: it fires on a list shorter than its own viewport, and again on a
+section header a fold has just closed.
+
+### A new answer goes back to the top, and paging is why
+
+SwiftUI keeps a `List`'s content offset when its contents are replaced. That was odd on its own —
+scroll down, type a character, and you are in the middle of a different answer — and it became
+expensive the moment there was something below the bottom. Traced with the trigger printing every
+time it fired: **a page was fetched once per keystroke and the deliberate scroll that should have
+asked for one asked for nothing.** Both halves are the same cause. The list was already at its
+bottom when the answer landed, so the trigger fired there; and `onScrollGeometryChange` fires on
+*change*, so a value already `true` stayed true and scrolling produced nothing.
+
+No geometric threshold fixes that, because the geometry was not lying: the list really was near
+its bottom. `off=448 box=467 doc=1017` is a list with 102 points left under the viewport. So the
+answer is `ScrollViewReader.scrollTo(_:anchor:)` on a serial that each *answer* bumps and no page
+does — `ScrollPosition` being the API that reads like the right one and does not move a `List` at
+all, which `chat-search-me9.8.27` measured. Only the group heads needed an explicit id for it; a
+row already carries `Conversation.id` from its `ForEach`.
+
+**Driving that from a script took two attempts, and the failure is worth recording** because
+anything else measuring a `List` will hit it. One jump to `documentView.height − viewport` lands in
+the *middle*: `List` realises rows lazily, so the document is only as tall as what has been laid
+out, and it grows underneath you — measured at offset 1,253 of a document that turned out to be
+2,540. `Measure.scrollToBottom` therefore scrolls a screenful at a time until the offset stops
+moving, which is what a wheel does. It is capped, and the cap is not a formality: a `List`
+re-estimating its own height can go on answering "yes, it moved" by a point or two indefinitely,
+which is one run that scrolled for fifteen minutes without reaching a bottom.
+
+### A page is a window, not a second answer
+
+`--offset` is new on `cs search --json` and the whole of its design is one property: every page of
+one query at one `--limit` is cut from the *same* ranking, so this client appends rather than
+merging. No row twice, none stepped over, and the concatenation is in rank order — which is exactly
+what `Grouping` already gathers on ("nothing is re-ranked — the rows arrive best first and that
+order *is* the answer").
+
+The obvious implementation does not have that property, and it took measuring to see it. `cs`
+scores the best `limit * 50` messages a query matches and folds them into conversations; sizing
+that scan by `offset + limit`, so that a deeper page could be reached, re-ranks the answer
+underneath the reader. Page two of `the` at `--limit 60`, taken from a scan sized for a hundred and
+twenty, held **11 of page one's own sixty rows** and skipped 11 more that no page would ever show.
+`code` was 14 and 14. So the scan ignores the offset, and the price is paid at the bottom of the
+list instead of in the middle of it. `docs/JSON-CONTRACT.md#paging` is the client-facing statement.
+
+What that buys the grouped list is the thing the axes needed: a page can only lengthen a group or
+add one at the bottom, so nothing above the reader's scroll position moves. **`run` is the
+exception and now says so** — it sorts by time rather than by rank, so a row from further down the
+ranking can be older than rows already drawn and land in a run above them. The key line above the
+list carries `a page re-sorts this` on that axis, in the residue's colour, and the chip's hover
+carries the reason.
+
+### The list ends before the count does
+
+This is the part worth reading twice, because it is the one thing on screen that would otherwise be
+a lie. The ranking is bounded by that scan ceiling, so a broad query runs out of *ranked rows* long
+before it runs out of matches. Paging to the end at `--limit 60`, against the live index:
+
+| query | rows reachable | `total` while unsettled | `total` once settled | pages |
+| --- | ---: | ---: | ---: | ---: |
+| `the` | 897 | 897 | 3,549 | 15 |
+| `code` | 746 | 746 | 1,598 | 13 |
+| `borrow checker` | 58 | 58 | 58 | 1 |
+| `schema migration` | 67 | 67 | 67 | 2 |
+
+The middle column is the useful one. **While `settled` is false the floor and the reachable depth
+are the same number** — both are the length of the same ranked list — so the strip reading `60 of
+897+` is telling a reader, before they start, where the list will stop. The two only part company
+once that floor settles into the whole count, which this window never asks for.
+
+So there is a line under the list saying where it ends: `reading further down the ranking…` while a
+page is out, then `that is all 58` or `660 rows — the ranking ends here` with the reason on hover.
+A list that simply stopped would read as a list still loading, and the number above it would read
+as a promise of 2,652 more rows one scroll away. It is drawn outside the `List` rather than as its
+last row, which is `chat-search-9uu`'s doing — a row appearing and disappearing at the bottom is
+one more change to a collection an `NSTableView` is mid-update on.
+
+The strip's left number climbs as pages land and goes on meaning exactly what it meant: rows in
+hand. It was the first page's size and is now every page fetched, which is a change to the
+arithmetic and none at all to the sentence.
+
+### What a page costs
+
+`--measure` takes it, by scrolling the list rather than by calling the model — so what it measures
+is the trigger as well. Two of the typing phrases and two broad prefixes, and the broad ones are
+the point: `borrow checker` returns 58 rows and has no second page at all, so a paging measurement
+taken only on the phrases would report that paging is free by never doing any.
+
+| query | first answer | ten pages of 60 rows | main-thread lag p50 | vsyncs missed |
+| --- | ---: | --- | ---: | --- |
+| `borrow checker` | 58 rows, 243 ms | none — the answer is the whole ranking | 0.6 ms | 1 of 419 |
+| `sqlite fts5` | 44 rows, 128 ms | none — the answer is the whole ranking | 0.6 ms | 1 of 422 |
+| `the` | 60 rows, 1,339 ms | 231–350 ms, one 945 | 0.6 ms | 8 of 278 |
+| `code` | 60 rows, 192 ms | 159–268 ms | 0.6 ms | 7 of 178 |
+
+**A page costs about what the first answer costs**, which is the expected answer and is worth
+having rather than assuming: the scan is the same size for every page, so nothing gets more
+expensive as a reader goes deeper. The first `the` above is cold — the same query measured through
+`cs` alone, medians of nine interleaved rounds with the leading arm rotated, is 293.2 ms for page
+one against 289.7 for page two. The top two rows are the other half of the check: a query whose
+ranking fits in one page is scrolled to its bottom just as hard and asks for nothing.
+
+The frames are the part that matters more. Appending 600 rows over ten pages costs 7–8 missed
+vsyncs against the 1 of ~420 a scroll through a finished list shows, and the main thread stays at
+p50 0.6 ms throughout. So a page is paid in wall clock, not in a stutter.
+
+### What it does not do
+
+- **No cursor, and no way to page a `--flat` search.** That envelope orders messages by score with
+  no tiebreak, so under an offset one message would arrive on both pages and another on neither.
+  `cs search --flat --offset` exits nonzero saying so rather than ignoring the flag.
+- **Nothing pages backwards or drops rows off the top.** 660 rows is 660 rows in memory. `List`
+  recycles the views (`chat-search-me9.22` measured 5.2 MB scrolling 3,200 rows), so what is held
+  is the decoded `Conversation` structs; at the depth a broad query can reach that is under a
+  thousand of them.
+- **The reader's drawer is untouched.** It holds whichever conversation was opened, and a page
+  landing under it changes nothing about what it is showing.
+
 ## The scrubber, under the query
 
 A track the width of the window, under the status strip and above all three panes: everything the
@@ -2387,7 +2516,40 @@ frames.
 
 ## Known
 
-AppKit logs `Application performed a reentrant operation in its NSTableView delegate` a few times
-per typing run, and says it will become an assert. It predates this app — `cs-spike typing` logs
-it identically — and comes from replacing a `List`'s contents while the table is mid-update.
-Filed as `chat-search-9uu`.
+### The reentrant `NSTableView` warning, and five things that do not fix it
+
+AppKit logs `Application performed a reentrant operation in its NSTableView delegate` 6–7 times per
+typing run and says it will become an assert. It predates this app — `cs-spike typing` logs it
+identically — and `chat-search-9uu` names the cause as replacing a `List`'s contents while the
+table is mid-update, with two remedies to try.
+
+`chat-search-me9.8.33` was supposed to be that fix, since paging appends rather than replaces.
+**It is not, and the measurements are here rather than in the bead because the next person to reach
+for one of these should not have to take them again.** Counts are `grep -c reentrant` on stderr of
+`chat-search --measure`, which types four phrases and then pages four queries; the two halves are
+counted separately.
+
+| | typing | paging | note |
+| --- | ---: | ---: | --- |
+| as it ships | 6–7 | 8 over 20 appends | the baseline, and where it still is |
+| `queryChanged` deferred a runloop turn | 6–7 | — | the `.onChange` off the update pass |
+| results assigned a runloop turn later | 6–8 | — | 9uu's first suggested remedy |
+| the assignment with animations disabled | 6–9 | — | |
+| `List` with no `selection:` binding | — | — | 14–16 over the whole run, unmoved |
+| **rows never replaced at all** | **0** | **0** | |
+
+The last row is the finding. Freezing the collection — an environment variable around the one
+assignment, for one build — takes the count to exactly zero, so the cause is confirmed: any
+mutation of the row collection can provoke it. What that also says is that **appending is not the
+remedy 9uu hoped for.** Eight warnings over 20 appends against 6 over ~47 keystrokes: the same
+phenomenon at a rate that does not improve, and the shape of the mutation makes no difference
+to it.
+
+Nor could it, in hindsight. "Diffing into the existing array rather than replacing it" is a remedy
+for a `UITableView` you drive by hand; with `@Observable` and SwiftUI's `List` there is one change
+notification either way and the diffing is SwiftUI's, so an in-place edit and a whole reassignment
+are the same event from the table's side.
+
+The lever the app has left is not to change the rows, which is not available to a search field. So
+9uu stays open, and what this bead moved is that it is now a measured problem rather than a
+suspected one. Nothing visible goes wrong: main-thread lag is p50 0.6 ms in every run above.

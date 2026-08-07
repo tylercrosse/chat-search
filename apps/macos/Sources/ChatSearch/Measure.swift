@@ -71,7 +71,9 @@ enum Measure {
     /// `NSEvent` — there is no hardware event to read in a scripted run — which is the same
     /// method the spike's `typing` bench used, so the numbers line up with §1's.
     @MainActor
-    static func typing(model: SearchModel, frames: FrameClock, interval: Duration) async {
+    static func typing(
+        model: SearchModel, window: NSWindow, frames: FrameClock, interval: Duration
+    ) async {
         print("keystroke → frame, on the promoted app. \(machineLine())")
         print("  \(fmt(interval.ms)) ms per character, no debounce, one `cs search --json` each")
         print("  \(drivenLine())\n")
@@ -100,27 +102,34 @@ enum Measure {
                 + "\(frames.missed) of \(frames.lag.count) vsyncs missed")
         }
 
-        await paging(model: model, frames: frames)
+        await paging(model: model, window: window, frames: frames)
     }
 
-    /// What the second page costs against the first answer, and where the list actually ends.
+    /// What a page costs against the first answer, and where the list actually ends.
     ///
-    /// **The cost is a keystroke→frame number and not a `cs` number**, because a page is not a
-    /// keystroke: nothing is waiting on it, the rows already on screen stay there while it runs,
-    /// and what a reader can feel is whether the frame carrying it was late. So both are here —
-    /// the round trip so it can be compared with the answer above, and the main-thread lag over
-    /// the same window so the appending itself is accounted for.
+    /// **Driven by scrolling the list rather than by calling `loadNextPage`**, which is the
+    /// difference between measuring paging and measuring the trigger with it. `SearchView` reads
+    /// the scroll view's own geometry, and a scroll wheel is one of the things a script cannot
+    /// press — but the scroll view is an `NSScrollView` and `scroll(to:)` moves it, exactly as
+    /// the minimap pass drives the drawer. If the whole arrangement ever comes apart, this run
+    /// asks for no pages and says so rather than falling back to the model and reporting a
+    /// number for a gesture nobody can make.
     ///
-    /// The queries are two of the typing phrases and two broad prefixes, and the broad ones are
-    /// the point: `borrow checker` returns 58 rows and has no second page at all, so a paging
-    /// measurement taken only on the phrases above would report that paging is free by never
-    /// doing any. `chat-search-me9.8.33`.
+    /// **The cost is reported two ways**, because a page is not a keystroke: nothing is waiting
+    /// on it and the rows already on screen stay there while it runs. The round trip so it can be
+    /// compared with the answer above, and the main-thread lag over the same window, because what
+    /// a reader can actually feel is whether the frames carrying it were late.
+    ///
+    /// Two of the typing phrases and two broad prefixes, and the broad ones are the point:
+    /// `borrow checker` returns 58 rows and has no second page at all, so a paging measurement
+    /// taken only on the phrases above would report that paging is free by never doing any.
+    /// `chat-search-me9.8.33`.
     @MainActor
-    private static func paging(model: SearchModel, frames: FrameClock) async {
+    private static func paging(model: SearchModel, window: NSWindow, frames: FrameClock) async {
         print("\ncost of a page against the cost of the first answer, on the promoted app")
-        print("  the list is scrolled to the bottom by asking for the page directly, which is the")
-        print("  one thing a script can do that a scroll wheel does; the trigger itself is the")
-        print("  scroll view's own geometry (SearchView) and is not exercised here")
+        print("  each page is fetched by scrolling the results list to its bottom, so what is")
+        print("  measured is the trigger as well — no reader is open, so the rightmost scroll")
+        print("  view is the list")
         print("  \(drivenLine())\n")
 
         for query in ["borrow checker", "sqlite fts5", "the", "code"] {
@@ -130,37 +139,84 @@ enum Measure {
             model.query = query
             try? await Task.sleep(for: .seconds(2))
 
-            let first = model.lastTiming
+            guard let scroll = rightmostScrollView(window) else {
+                print("  \"\(query)\": no scroll view under the list — nothing to drive")
+                continue
+            }
+            let firstMs = model.lastTiming?.total ?? 0
             let firstRows = model.conversations.count
             frames.reset()
 
             var pages: [(rows: Int, ms: Double)] = []
-            // Ten at most. The point is what a page costs and where the list ends, and on the
-            // broadest prefix this archive holds that is fifteen pages — enough of them to have
-            // been established well before the tenth.
-            while model.hasMorePages, pages.count < 10 {
+            // Ten at most. The point is what a page costs and roughly where the list ends, and on
+            // the broadest prefix this archive holds that is fifteen pages — established well
+            // before the tenth, and `cs`'s own harness pages all the way for the exact number.
+            while pages.count < 10 {
                 let before = model.conversations.count
+                guard await scrollToBottom(scroll, model) else { break }
+                // From here and not from before the scroll: the scroll is this instrument's
+                // stand-in for a wheel and its cost is the poll interval, where the page is the
+                // thing being measured. `scrollToBottom` returns within a frame of the request
+                // going out, so this is the round trip plus at most one 16 ms tick.
                 let t0 = CACurrentMediaTime()
-                model.loadNextPage()
-                // Polled rather than awaited: `loadNextPage` is fire-and-forget by design, since
-                // no part of the interface waits for a page. A tenth of the shortest page
-                // measured, so the reading is the page rather than the poll.
                 while model.paging {
                     try? await Task.sleep(for: .milliseconds(2))
                 }
-                pages.append((model.conversations.count - before, (CACurrentMediaTime() - t0) * 1000))
+                pages.append(
+                    (model.conversations.count - before, (CACurrentMediaTime() - t0) * 1000))
             }
 
-            let ended = model.exhausted ? "the ranking ends" : "stopped at ten pages"
+            let ended = model.exhausted ? "the ranking ends here" : "stopped at ten pages"
             let total = model.settled ? "\(model.total)" : "\(model.total)+"
-            print("  \"\(query)\" — first answer \(firstRows) rows in "
-                + "\(fmt(first?.total ?? 0)) ms, of \(total)")
-            print("    pages           \(pages.map { "\($0.rows) rows \(fmt($0.ms)) ms" }.joined(separator: " · "))")
+            print("  \"\(query)\" — first answer \(firstRows) rows in \(fmt(firstMs)) ms, of \(total)")
+            print("    pages           "
+                + (pages.isEmpty
+                    ? "none — the first answer is the whole ranking"
+                    : pages.map { "\($0.rows) rows \(fmt($0.ms)) ms" }.joined(separator: " · ")))
             print("    main-thread lag \(line(frames.lag))")
             print("      \(model.conversations.count) rows in hand after "
                 + "\(pages.count) page(s), \(ended), "
                 + "\(frames.missed) of \(frames.lag.count) vsyncs missed")
         }
+    }
+
+    /// Scroll the list to its bottom, and report whether that asked for a page.
+    ///
+    /// **A screenful at a time and not one jump to the end**, which is a fact about `List` rather
+    /// than a nicety: it lays rows out lazily, so `documentView` is only as tall as what has been
+    /// realised. One jump to `documentView.height − viewport` lands in the middle, the list then
+    /// realises the rest and grows underneath, and the scroll view is not at the bottom after
+    /// all — measured, at offset 1,253 of a document that turned out to be 2,540. Repeating until
+    /// the offset stops moving is what a scroll wheel does and is the only way to reach the end.
+    ///
+    /// Returns false when the list would not move any further and no page was asked for, which
+    /// is the bottom of a list with nothing below it.
+    ///
+    /// **Capped, and the cap is not a formality.** A `List` re-estimates its own document height
+    /// as rows are realised, so "did the offset stop moving" can go on being answered *yes* by a
+    /// point or two indefinitely — measured as a run that scrolled for fifteen minutes without
+    /// reaching a bottom. A screenful of travel that buys less than a screenful of movement is
+    /// the end of the list for this instrument's purposes, and the cap is the backstop under that.
+    @MainActor
+    private static func scrollToBottom(_ scroll: NSScrollView, _ model: SearchModel) async -> Bool {
+        var previous = -1.0
+        // 400 steps is 400 screenfuls, which is far past any list this can produce — ten pages of
+        // sixty rows is about sixty of them.
+        for _ in 0..<400 {
+            if model.paging { return true }
+            let clip = scroll.contentView
+            let box = clip.bounds.height
+            clip.scroll(to: NSPoint(x: 0, y: clip.bounds.origin.y + box))
+            scroll.reflectScrolledClipView(clip)
+            // One frame at 60 Hz, which is long enough for the geometry to be published and for
+            // the rows the jump exposed to be laid out.
+            try? await Task.sleep(for: .milliseconds(16))
+            let now = scroll.contentView.bounds.origin.y
+            // Half a screenful, not a point: see above.
+            if now < previous + box / 2 { return model.paging }
+            previous = now
+        }
+        return model.paging
     }
 
     /// Search, open the first result, and draw the window to a PNG from inside the process.

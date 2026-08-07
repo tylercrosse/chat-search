@@ -118,12 +118,22 @@ The title is still set and deliberately not drawn. `window.title` is what ⌘Tab
 `Window ▸` and a screenshot script looking for the window all read; `titleVisibility` decides only
 whether AppKit paints it, and it must not, because the search bar is in that band now.
 
-**The lights are measured, not stated.** They stay system-drawn on top of the content, at
-coordinates nothing here decides, so the search bar is inset past them — by `standardWindowButton`'s
-answer for where they actually are, not by a number typed into a view. The same SDK bump this whole
-argument is about moved the titlebar 28 pt → 32 and the corner radius ~15 → ~21; a constant would
-already have been wrong once. `TitleBar` is the whole of it, and `TitleBar.statedInset` is the
-fallback for a window with no buttons to ask.
+**Both of the strip's odd numbers are measured, not stated**, and `TitleBar` is the whole of it.
+The leading inset is `standardWindowButton`'s own answer for where the lights reach — 69 pt on
+macOS 26.5.2, plus the 12 pt margin the strip would have had anyway — because they stay
+system-drawn on top of the content at coordinates nothing here decides. The strip's minimum height
+is `frame.height - contentLayoutRect.height`, the band the window says it is not laying content out
+in. Neither is a constant for the reason this whole argument exists: the same SDK bump moved that
+band 28 pt → 32 and the corner radius ~15 → ~21, so a number typed into a view would already have
+been wrong once, on a release nobody opted in to. `TitleBar.Metrics.stated` is the fallback for a
+window with no titlebar to ask.
+
+**Full screen is the one state where both go to zero**, and it is measured through the style mask
+rather than the buttons, because `standardWindowButton` goes on reporting the same 69 pt edge in
+full screen as out of it — the lights have moved into the auto-hiding overlay, and asking them
+would inset 81 points into a band that is not there. `AppHost.windowDidEnterFullScreen` reassigns
+`NSHostingView.rootView`, which SwiftUI diffs like any other value change, so the query box keeps
+its text and its focus across the transition.
 
 What it bought, measured on the same query and the same `--size`, `--density`'s own reading of the
 list's viewport:

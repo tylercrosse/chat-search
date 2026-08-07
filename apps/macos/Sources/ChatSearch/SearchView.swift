@@ -17,9 +17,10 @@ import SwiftUI
 struct SearchView: View {
     @Bindable var model: SearchModel
     @Environment(\.theme) private var theme
-    /// Where the traffic lights end. This view is the first strip of a `.fullSizeContentView`
-    /// window, so it is the only one in the app that shares a band with chrome it does not own.
-    @Environment(\.titleBarInset) private var lights
+    /// Where the traffic lights end, and how tall the band holding them is. This view draws the
+    /// first strip of a `.fullSizeContentView` window, so it is the only one in the app that shares
+    /// a band with chrome it does not own.
+    @Environment(\.titleBar) private var titleBar
     @FocusState private var focused: Bool
 
     var body: some View {
@@ -74,20 +75,27 @@ struct SearchView: View {
     /// reasoning: it reads in the order it applies — group by project, *then* narrow with the
     /// query — where on the right it sat between the query and the count and read as status.
     ///
-    /// **It is the top strip of the window now** (ADR 27, `chat-search-me9.8.30`). The leading
-    /// inset is the traffic lights, measured off the window rather than stated — see `TitleBar` —
-    /// and the minimum height is the band they sit in, so that the chips line up with them instead
-    /// of riding a point or two high. Both are only true of this one strip: the window's ordinary
-    /// margin is still 12 points and everything under here uses it.
+    /// **It is the top strip of the window now** (ADR 27, `chat-search-me9.8.30`), which is where
+    /// its two odd numbers come from. The leading inset is the traffic lights; the minimum height
+    /// is the band they are centred in, so a direction whose type scale shrank this strip below
+    /// the band could not leave the rule under it lying across the lights. Neither is stated here
+    /// — `TitleBar` measures both off the window, for the reason it gives. Both are true of this
+    /// one strip only: the window's ordinary margin is still 12 points, and everything below uses
+    /// it.
+    ///
+    /// It comes out 34 pt against a 32 pt band, so the chips ride a point above the lights' own
+    /// centre. Left alone rather than dialled out with a smaller padding: the strip's height is
+    /// the type scale's to decide and a direction is allowed to move it, which is a claim
+    /// `--density` fences and a hardcoded inset would quietly break.
     private var searchBar: some View {
         HStack(spacing: 12) {
             groupControl
             field
         }
-        .padding(.leading, lights)
+        .padding(.leading, titleBar.inset)
         .padding(.trailing, 12)
         .padding(.vertical, 7)
-        .frame(minHeight: 32)
+        .frame(minHeight: titleBar.band)
     }
 
     /// The axis, as five chips of which four are offered.

@@ -356,6 +356,9 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuIt
     /// second reading of the flags (`chat-search-me9.8.39`).
     let watching: URL?
     private var window: NSWindow?
+    /// The window's SwiftUI half, held for one reason: full screen changes what the top of the
+    /// window looks like, and `rootView` is where that is handed back in (`titleBarChanged`).
+    private var hosting: NSHostingView<Root>?
     /// Built the first time Cmd-comma is pressed and kept afterwards, so the window comes back
     /// where it was left rather than centred again.
     private var settingsWindow: NSWindow?
@@ -417,10 +420,14 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuIt
         // `applicationShouldTerminateAfterLastWindowClosed` is what makes closing the window quit
         // the app, and a settings panel left open behind it would quietly turn one close into two.
         window.delegate = self
-        // The lights are measured off this window and handed to the view tree, rather than the
-        // view tree carrying a number for where Apple puts three buttons. `TitleBar` says why.
+        // The band and the lights in it are measured off this window and handed to the view tree,
+        // rather than the view tree carrying numbers for where Apple puts three buttons and how
+        // tall it makes a titlebar. `TitleBar` says why. Taken before the window is shown, because
+        // the style mask settles both, and taken again on the one event that changes the style
+        // mask — see `windowDidEnterFullScreen`.
         let hosting = NSHostingView(
-            rootView: Root(model: model, settings: settings, lights: TitleBar.inset(of: window)))
+            rootView: Root(
+                model: model, settings: settings, titleBar: TitleBar.metrics(of: window)))
         // Without this, `.fullSizeContentView` buys the *background* and nothing else: the content
         // view does grow to the top edge, but `NSHostingView` hands SwiftUI a 32 pt top safe area
         // for the titlebar and lays every view out below it. The window then draws its own `bg` in
@@ -431,6 +438,7 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuIt
         window.contentView = hosting
         window.orderFrontRegardless()
         self.window = window
+        self.hosting = hosting
         // A scripted run does not steal focus — `.accessory` above — which also keeps the number
         // comparable with `poc/swift/RESULTS.md` §1, taken the same way. A latency measured in a
         // frontmost app and one measured in a background app are not the same measurement.
@@ -624,6 +632,29 @@ final class AppHost: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuIt
         NSApp.appearance = settings.appearance.nsAppearance
         window?.backgroundColor = settings.theme.nsColor(.bg)
     }
+
+    /// Full screen takes the titlebar away, and the search bar has to stop reserving room in it.
+    ///
+    /// The window is full-screen capable without asking: `.resizable` with the default collection
+    /// behaviour is what the green button acts on. Going in moves the traffic lights into the
+    /// auto-hiding overlay and `contentLayoutRect` to the whole frame, so the strip's 81 pt leading
+    /// inset and 32 pt floor become 81 points of nothing and a band that is not there. Measured on
+    /// this window rather than assumed — and the reason it is measured through `styleMask` is that
+    /// `standardWindowButton` goes on reporting the same 69 pt edge in both states, so the buttons
+    /// alone cannot tell you which one you are in (`TitleBar.fullScreen`).
+    ///
+    /// Handed back in by reassigning `rootView`, which is a value update SwiftUI diffs like any
+    /// other: the view identities are unchanged, so the query box keeps its text and its focus and
+    /// the reader keeps whatever it had open. There is no second window and no second model.
+    private func titleBarChanged() {
+        guard let window, let hosting else { return }
+        hosting.rootView = Root(
+            model: model, settings: settings, titleBar: TitleBar.metrics(of: window))
+    }
+
+    func windowDidEnterFullScreen(_ note: Notification) { titleBarChanged() }
+
+    func windowDidExitFullScreen(_ note: Notification) { titleBarChanged() }
 
     /// The main window closing takes the settings window with it, so that closing the app's window
     /// still quits the app rather than leaving a settings panel holding the process open.

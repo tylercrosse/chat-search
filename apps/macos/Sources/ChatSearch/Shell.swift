@@ -10,18 +10,18 @@ import SwiftUI
 /// inside `body` is the whole of the subscription, and swapping the value redraws every view under
 /// it — which is what the token seam was built before the views to buy (`chat-search-me9.8.8`).
 ///
-/// The lights come the other way — measured once off the window and never moved — but through the
-/// same environment, because the view that needs them is three levels down and the levels between
-/// have no opinion about window chrome (`TitleBar`).
+/// The titlebar's measurements come the other way — taken once off the window and never moved —
+/// but through the same environment, because the view that needs them is three levels down and the
+/// levels between have no opinion about window chrome (`TitleBar`).
 struct Root: View {
     let model: SearchModel
     let settings: ThemeSettings
-    let lights: CGFloat
+    let titleBar: TitleBar.Metrics
 
     var body: some View {
         Shell(model: model)
             .environment(\.theme, settings.theme)
-            .environment(\.titleBarInset, lights)
+            .environment(\.titleBar, titleBar)
     }
 }
 

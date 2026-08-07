@@ -110,6 +110,25 @@ impl Fixture {
         self.write_into(&self.source, rel, body);
     }
 
+    /// Narrow what the `codex` source watches, the way a person editing `[[sources]]` does.
+    /// There is no flag for this and there should not be: an include list is a decision, and
+    /// the archiver's job is to notice it was made rather than to make it.
+    fn narrow_the_codex_include(&self, glob: &str) {
+        let text = std::fs::read_to_string(&self.config)
+            .unwrap()
+            .replace("include = [\"**/*.jsonl\"]", &format!("include = [\"{glob}\"]"));
+        std::fs::write(&self.config, text).unwrap();
+    }
+
+    /// Every manifest event this archive has recorded, as raw JSONL.
+    fn manifest(&self) -> String {
+        let dir = self.home.join("archive/raw/test-box/manifest");
+        std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| std::fs::read_to_string(e.unwrap().path()).ok())
+            .collect()
+    }
+
     /// An unpacked export, backdated. Age is read off the file's mtime and not off when the
     /// archiver saw it, so backdating the file is what produces a stale export in a test that
     /// finishes in under a second.
@@ -212,6 +231,34 @@ fn a_file_that_vanished_is_not_silence() {
 
     let out = f.stdout(&[]);
     assert!(out.contains("  codex "), "a vanished file went unreported: {out:?}");
+}
+
+#[test]
+fn narrowing_an_include_list_is_neither_news_nor_a_vanishing() {
+    // The mirror image of the test above, and the reason the two must be told apart
+    // (chat-search-aig). Nothing happened to the file: it is on disk, it is in the archive,
+    // and the operator is the one who stopped watching it — so there is nothing to tell them
+    // 288 times a day. Recording it as vanished would be loud *and* wrong, and it would be
+    // wrong permanently: the manifest is append-only and ADR 9 folds those events into the
+    // flag that says reopening will fail.
+    let f = Fixture::new();
+    f.write("proj/keep.jsonl", "{\"one\":1}\n");
+    f.write("proj/drop.jsonl", "{\"two\":2}\n");
+    f.stdout(&[]);
+
+    f.narrow_the_codex_include("**/keep.jsonl");
+    assert_eq!(f.stdout(&[]), "", "a config edit is not news");
+    assert!(
+        !f.manifest().contains("vanished"),
+        "a file still on disk was recorded as gone:\n{}",
+        f.manifest()
+    );
+
+    // Silent is not hidden: the state is standing, so asking shows it for as long as it lasts.
+    let out = f.stdout(&["--verbose"]);
+    assert!(out.contains("excluded"), "{out}");
+    assert!(out.contains("  codex "), "{out}");
+    assert!(f.stdout(&["--verbose"]).contains("excluded"), "it did not settle into silence");
 }
 
 #[test]

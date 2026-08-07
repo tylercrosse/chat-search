@@ -543,7 +543,11 @@ fn archive(
                 Change::Appended => Op::Appended,
                 Change::Rewritten => Op::Rewritten,
                 Change::Vanished => Op::Vanished,
-                Change::Unchanged => continue, // nothing observed worth recording
+                // Nothing observed worth recording. `Unchanged` because nothing happened to
+                // the file; `Excluded` because nothing happened to it either — the include
+                // list stopped naming it, and the config already says so. An event here
+                // would be this run inventing a fact about the source (`cs_archive::Change`).
+                Change::Unchanged | Change::Excluded => continue,
             };
 
             if c.change.needs_capture() {
@@ -613,6 +617,9 @@ fn archive(
             "appended": scan.count(Change::Appended),
             "rewritten": scan.count(Change::Rewritten),
             "vanished": scan.count(Change::Vanished),
+            // Archived, still on disk, no longer named by the include list. Standing state
+            // rather than news, so it repeats every run and never breaks the silence.
+            "excluded": scan.count(Change::Excluded),
             "unchanged": scan.count(Change::Unchanged),
             "cloned": cloned, "copied": copied,
             // `bytes` is kept as-is for consumers that already read it, but it is apparent
@@ -682,15 +689,15 @@ fn archive(
             if dry_run {
                 println!("dry run — nothing written\n");
             }
-            println!("  {:<13} {:>5} {:>9} {:>10} {:>9} {:>10} {:>8} {:>7} {:>7}",
-                     "source", "new", "appended", "rewritten", "vanished", "unchanged",
-                     "cloned", "copied", "ms");
+            println!("  {:<13} {:>5} {:>9} {:>10} {:>9} {:>9} {:>10} {:>8} {:>7} {:>7}",
+                     "source", "new", "appended", "rewritten", "vanished", "excluded",
+                     "unchanged", "cloned", "copied", "ms");
             for r in &reports {
                 let g = |k: &str| r[k].as_u64().unwrap_or(0);
-                println!("  {:<13} {:>5} {:>9} {:>10} {:>9} {:>10} {:>8} {:>7} {:>7}",
+                println!("  {:<13} {:>5} {:>9} {:>10} {:>9} {:>9} {:>10} {:>8} {:>7} {:>7}",
                          r["source"].as_str().unwrap_or("?"),
                          g("new"), g("appended"), g("rewritten"), g("vanished"),
-                         g("unchanged"), g("cloned"), g("copied"), g("ms"));
+                         g("excluded"), g("unchanged"), g("cloned"), g("copied"), g("ms"));
             }
             println!("\n  {:.1} MB apparent size · {:.1} MB allocated blocks · {} ms",
                      mb(tot.apparent), mb(tot.allocated), started.elapsed().as_millis());
@@ -872,6 +879,7 @@ fn scan(config_path: &PathBuf, only: Option<&str>, json: bool) -> Result<()> {
             "appended": scan.count(Change::Appended),
             "rewritten": scan.count(Change::Rewritten),
             "vanished": scan.count(Change::Vanished),
+            "excluded": scan.count(Change::Excluded),
             "unchanged": scan.count(Change::Unchanged),
             // `bytes_to_capture` keeps its existing meaning — apparent size — for consumers
             // that already read it. `allocated_to_capture` is what those files occupy, which
@@ -896,18 +904,19 @@ fn scan(config_path: &PathBuf, only: Option<&str>, json: bool) -> Result<()> {
         }));
     } else {
         println!("manifest holds {} known files\n", manifest.len());
-        println!("  {:<13} {:>6} {:>6} {:>9} {:>10} {:>9} {:>10} {:>7}",
-                 "source", "files", "new", "appended", "rewritten", "vanished", "unchanged", "ms");
+        println!("  {:<13} {:>6} {:>6} {:>9} {:>10} {:>9} {:>9} {:>10} {:>7}",
+                 "source", "files", "new", "appended", "rewritten", "vanished", "excluded",
+                 "unchanged", "ms");
         for r in &reports {
             if let Some(skip) = r.get("skipped") {
                 println!("  {:<13} — {}", r["source"].as_str().unwrap_or("?"), skip.as_str().unwrap_or(""));
                 continue;
             }
             let g = |k: &str| r[k].as_u64().unwrap_or(0);
-            println!("  {:<13} {:>6} {:>6} {:>9} {:>10} {:>9} {:>10} {:>7}",
+            println!("  {:<13} {:>6} {:>6} {:>9} {:>10} {:>9} {:>9} {:>10} {:>7}",
                      r["source"].as_str().unwrap_or("?"),
                      g("files"), g("new"), g("appended"), g("rewritten"),
-                     g("vanished"), g("unchanged"), g("ms"));
+                     g("vanished"), g("excluded"), g("unchanged"), g("ms"));
         }
         let sum = |k: &str| -> u64 { reports.iter().filter_map(|r| r.get(k)?.as_u64()).sum() };
         println!("\n  {:.1} MB apparent size · {:.1} MB allocated blocks would be captured · {} ms total",

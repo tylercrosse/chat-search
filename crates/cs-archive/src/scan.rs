@@ -22,6 +22,14 @@ pub enum Change {
     Rewritten,
     /// Recorded before, absent now.
     Vanished,
+    /// Captured before, still on disk, and no longer named by the include list.
+    ///
+    /// Nothing happened to the file, so this is a *state* and not an event: it records
+    /// nothing in the manifest and breaks no silence. Saying `Vanished` here instead would
+    /// write "absent now" about a file that is sitting there, into a log that is append-only
+    /// (ADR 19) and that ADR 9 folds into `deleted_upstream_at` — the one flag whose whole
+    /// job is to warn that reopening will fail. Narrowing a glob must not manufacture that.
+    Excluded,
 }
 
 impl Change {
@@ -37,6 +45,7 @@ impl Change {
             Change::Appended => "appended",
             Change::Rewritten => "rewritten",
             Change::Vanished => "vanished",
+            Change::Excluded => "excluded",
         }
     }
 }
@@ -47,7 +56,9 @@ pub struct FileChange {
     pub rel_path: String,
     pub abs_path: PathBuf,
     pub change: Change,
-    /// `None` only for `Vanished`, where there is no longer a file to fingerprint.
+    /// `None` for `Vanished`, where there is no longer a file to fingerprint, and for
+    /// `Excluded`, where there is one but nothing read it — an excluded file is skipped by
+    /// the walk before any stat, which is the point of excluding it.
     pub fingerprint: Option<Fingerprint>,
     /// Blocks the filesystem has handed this file, in bytes — what it occupies, as against
     /// the `fingerprint.size` it claims. `0` for `Vanished`, which occupies nothing.
@@ -55,6 +66,8 @@ pub struct FileChange {
     /// Reporting a capture's cost in terms of `size` overstates it: block rounding aside,
     /// an append re-captures the whole file, so the same bytes are billed on every scan
     /// (chat-search-a7k.6).
+    ///
+    /// `0` for `Vanished`, which occupies nothing, and for `Excluded`, which is never stat'd.
     pub allocated_bytes: u64,
 }
 
@@ -104,10 +117,19 @@ pub fn scan_source(source: &Source, manifest: &Manifest) -> Result<SourceScan> {
 
     let mut changes = Vec::new();
     let mut present: HashSet<String> = HashSet::new();
+    // Files the walk found and the include list declined. Only ones this archive already
+    // holds are worth remembering: for every other unmatched file — the `.DS_Store`, the
+    // stray binary, the 175 MiB of Gemini checkpoints nobody ever captured — there is
+    // nothing to say, and the set would grow with the source directory instead of with the
+    // history.
+    let mut unwatched: HashSet<String> = HashSet::new();
 
     for abs in files {
         let Some(rel) = relative(&source.path, &abs) else { continue };
         if !matcher.is_match(&rel) {
+            if manifest.get(&source.id, &rel).is_some_and(|e| e.op != Op::Vanished) {
+                unwatched.insert(rel);
+            }
             continue;
         }
         present.insert(rel.clone());
@@ -150,17 +172,21 @@ pub fn scan_source(source: &Source, manifest: &Manifest) -> Result<SourceScan> {
         });
     }
 
-    // Anything the manifest still considers live but that the walk did not find is gone.
+    // Anything the manifest still considers live but that the walk did not match is either
+    // gone or merely no longer watched, and the two must not be confused: the walk saw the
+    // whole directory, so a path it found and declined is one this run *chose* to stop
+    // capturing.
     for rel in manifest.live_paths(&source.id) {
-        if !present.contains(rel) {
-            changes.push(FileChange {
-                rel_path: rel.to_string(),
-                abs_path: source.path.join(rel),
-                change: Change::Vanished,
-                fingerprint: None,
-                allocated_bytes: 0,
-            });
+        if present.contains(rel) {
+            continue;
         }
+        changes.push(FileChange {
+            rel_path: rel.to_string(),
+            abs_path: source.path.join(rel),
+            change: if unwatched.contains(rel) { Change::Excluded } else { Change::Vanished },
+            fingerprint: None,
+            allocated_bytes: 0,
+        });
     }
 
     Ok(SourceScan { source: source.id.clone(), changes })
@@ -212,7 +238,11 @@ fn classify(
 }
 
 /// Empty patterns means "every file". Patterns are matched against the source-relative path.
-fn build_matcher(patterns: &[String]) -> Result<GlobSet> {
+///
+/// Reachable from `config` so the shipped include lists can be tested the way a scan applies
+/// them. A glob checked by eye is a glob that captures three quarters of a source and reports
+/// success — the same reason `unreachable` tests its recommended blocks through `globset`.
+pub(crate) fn build_matcher(patterns: &[String]) -> Result<GlobSet> {
     if patterns.is_empty() {
         return Ok(GlobSetBuilder::new()
             .add(Glob::new("**").expect("literal glob"))
@@ -292,6 +322,10 @@ mod tests {
         fn scan(&self, m: &Manifest) -> SourceScan {
             scan_source(&self.source, m).unwrap()
         }
+        /// The config edit that narrows or widens what this source watches.
+        fn include(&mut self, include: &[&str]) {
+            self.source.include = include.iter().map(|s| s.to_string()).collect();
+        }
         fn commit(&self, m: &mut Manifest, s: &SourceScan) {
             for c in &s.changes {
                 let op = match c.change {
@@ -299,7 +333,7 @@ mod tests {
                     Change::Appended => Op::Appended,
                     Change::Rewritten => Op::Rewritten,
                     Change::Vanished => Op::Vanished,
-                    Change::Unchanged => continue,
+                    Change::Unchanged | Change::Excluded => continue,
                 };
                 m.apply(Event {
                     ts: 0,
@@ -411,6 +445,65 @@ mod tests {
 
         f.write("a.jsonl", "x\n");
         assert_eq!(f.scan(&m).count(Change::New), 1);
+    }
+
+    #[test]
+    fn narrowing_the_include_list_excludes_a_file_rather_than_burying_it() {
+        // The state a glob narrowing leaves behind (chat-search-aig): the file is still on
+        // disk and still in the archive, and only the watching stopped. Calling that
+        // `Vanished` would write "absent now" into an append-only log about a file anyone
+        // can see, and ADR 9 folds exactly those events into `deleted_upstream_at`.
+        let mut f = Fixture::new(&["**/*.json"]);
+        f.write("proj/chats/session.json", "{\"a\":1}\n");
+        f.write("proj/checkpoints/huge.json", "{\"b\":2}\n");
+        let mut m = Manifest::default();
+        let s = f.scan(&m);
+        assert_eq!(s.count(Change::New), 2);
+        f.commit(&mut m, &s);
+
+        f.include(&["**/chats/*.json"]);
+        let s = f.scan(&m);
+        assert_eq!(s.count(Change::Vanished), 0, "nothing left the disk");
+        assert_eq!(s.count(Change::Excluded), 1);
+        assert_eq!(s.count(Change::Unchanged), 1, "the chat file is still watched");
+        let excluded = s.changes.iter().find(|c| c.change == Change::Excluded).unwrap();
+        assert_eq!(excluded.rel_path, "proj/checkpoints/huge.json");
+
+        // And it stays a state rather than becoming an event: committing records nothing, so
+        // the next scan says the same thing instead of falling silent.
+        f.commit(&mut m, &s);
+        assert_eq!(f.scan(&m).count(Change::Excluded), 1);
+    }
+
+    #[test]
+    fn a_file_that_is_both_unwatched_and_deleted_still_reports_vanished() {
+        // The half of the distinction that must not be lost: exclusion is read off the walk,
+        // so a path the walk never found is gone whatever the include list now says.
+        let mut f = Fixture::new(&["**/*.json"]);
+        f.write("proj/checkpoints/huge.json", "{\"b\":2}\n");
+        let mut m = Manifest::default();
+        let s = f.scan(&m);
+        f.commit(&mut m, &s);
+
+        f.include(&["**/chats/*.json"]);
+        std::fs::remove_file(f.root.join("proj/checkpoints/huge.json")).unwrap();
+        let s = f.scan(&m);
+        assert_eq!(s.count(Change::Vanished), 1);
+        assert_eq!(s.count(Change::Excluded), 0);
+    }
+
+    #[test]
+    fn a_file_the_archive_never_held_is_not_reported_when_the_glob_declines_it() {
+        // Exclusion is about capture history, not about the directory: the ordinary
+        // unmatched file — every `.DS_Store` under every source — has never been captured and
+        // has nothing to say, and reporting those would make the count grow with the source
+        // rather than with the edits.
+        let f = Fixture::new(&["**/chats/*.json"]);
+        f.write("proj/chats/session.json", "{\"a\":1}\n");
+        f.write("proj/checkpoints/huge.json", "{\"b\":2}\n");
+        let s = f.scan(&Manifest::default());
+        assert_eq!(s.changes.len(), 1);
+        assert_eq!(s.count(Change::Excluded), 0);
     }
 
     #[test]

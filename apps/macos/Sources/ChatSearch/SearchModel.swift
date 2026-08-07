@@ -47,6 +47,9 @@ final class SearchModel {
     /// The facet rail, from `cs facets`. Nil until the first reply lands, and left standing when
     /// a later one fails — a rail that blinked out on a hiccup would look like a corpus that had
     /// lost its sources.
+    ///
+    /// Read twice: as chips, and as the census behind a group head's count. It is the only reply
+    /// this window holds that counts the corpus rather than the answer (`Census`).
     private(set) var rail: FacetRail?
     /// Which of the two views is on screen. Grouping is not one of these, which is the whole
     /// point of `chat-search-4ar.10`: three of the prototype's four views were `GROUP BY` over one
@@ -175,6 +178,16 @@ final class SearchModel {
             guard let self else { return }
             guard let rail = try? await client.facets(text), !Task.isCancelled else { return }
             self.rail = rail
+            // The rail is a census as well as a rail: it is where a group head gets the corpus's
+            // number from, on the axis that has one (`Census`). It usually lands *before* the
+            // answer it belongs to — ~9 ms against the search's 280–340 ms — and `apply` gathers
+            // against whatever rail is standing, so this is the backstop for the other order: the
+            // first reply of a launch, and a facets call that loses the race. Gathering again
+            // costs nothing the cursor can feel — same keys, same rows, same order, so no line
+            // moves and no fold is lost — but it is a wasted pass over the answer on every
+            // keystroke of an axis that has no corpus number to pick up, so only the axes a
+            // census reaches take it.
+            if Census(rail).totals(for: self.grouping) != nil { self.regroup() }
         }
     }
 
@@ -301,7 +314,7 @@ final class SearchModel {
     }
 
     private func regroup() {
-        groups = grouping.groups(of: conversations)
+        groups = grouping.groups(of: conversations, against: rail.map(Census.init))
     }
 
     /// Put the cursor on a line the list actually draws.

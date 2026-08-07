@@ -181,6 +181,12 @@ pub struct Drag {
 /// same [`SearchOptions`] the search was given, `now_ms` included — a `date:` filter resolved
 /// against a second instant describes a second set, and a drawer under a list is the one place
 /// that has to be showing the same one.
+///
+/// [`SearchOptions::field`] and `include_off_path` are that rule's other two edges, and they are
+/// the ones a caller forgets, because nothing about a picture of tool traffic looks different
+/// from a picture of prose. `cs timeline` grew flags for both under `chat-search-me9.8.25`; the
+/// pin is `the_drawer_reads_whichever_field_the_search_beside_it_was_asked_for` below. `limit` is
+/// the one field here ignores, since this counts what the query selects with the page left out.
 pub fn timeline(
     reader: &Reader,
     query: &Query,

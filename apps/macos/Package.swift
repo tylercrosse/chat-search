@@ -19,7 +19,14 @@ import PackageDescription
 // guards around that and around `onGeometryChange`, so adopt deliberately.
 //
 // Fifteen and not twenty-six, which is what this machine runs: there is no macOS 16 through 25, so
-// one release of headroom is a year of it, and it keeps a hand-fenced palette out of Liquid Glass.
+// one release of headroom is a year of it.
+//
+// What it does not buy is any distance from Liquid Glass, which this line claimed until
+// `chat-search-me9.8.28` photographed it. Adoption keys off the SDK the binary is *linked against*
+// — `vtool -show-build` reports `sdk 26.2` on what this manifest produces — and never off the
+// platform it is built *for*. The app has been drawn by the macOS 26 design system since the day
+// the toolchain updated. ADR 27 records what is being done about that; this list has nothing to do
+// with it and only ever bought API headroom.
 let package = Package(
     name: "chat-search-macos",
     platforms: [.macOS(.v15)],

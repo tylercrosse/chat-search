@@ -414,6 +414,12 @@ fn preview(frame: &mut Frame, area: Rect, app: &App) {
 
     match app.preview.as_ref() {
         Some(p) => lines.extend(p.lines(&app.theme, w)),
+        // Three states, not two. A keystroke defers the read until the keyboard goes quiet
+        // (`j1n`), so an empty pane is usually a pane mid-word rather than a broken one, and
+        // drawing the failure here would report an error on every letter typed.
+        None if app.preview_deferred() => {
+            lines.push(Line::from(Span::styled("  reading…", app.theme.dim)));
+        }
         // Distinguished from an empty conversation: the read failed, and saying "no
         // messages" would blame the data for what the query did (me9.5, one layer down).
         None => lines.push(Line::from(Span::styled(

@@ -3,28 +3,28 @@ import CsTheme
 import SwiftUI
 
 /// One line under the search bar saying what came back: how many, how settled, what it cost, and —
-/// while the drawer under it is open — what the picture below is of.
+/// while the scrubber under it is open — what the picture below is of.
 ///
 /// **`poc/ui`'s `.fbar`, moved to the top of the window with the scrubber's own header folded into
 /// it** (`chat-search-me9.8.31`). The 2026-08-06 markup asked for the move on layout grounds — "the
 /// # of results + timing info should be directly under the search bar" — and the merge is what the
 /// move turned up: this window was printing the same count twice, six hundred points apart, and the
 /// two copies disagreed. `58 of 58 · 334 ms` sat in the footer while `3,617 in range · 58 the query
-/// selects` sat above the scrubber, from two replies that arrive separately and can land in either
-/// order.
+/// selects` sat above the scrubber (`TimelineDrawer`, which is still what the type is called), from
+/// two replies that arrive separately and can land in either order.
 ///
 /// **They disagreed by nearly four times, and on the ordinary keystroke rather than a rare one.**
-/// The list's total is a prefix search's, which is a floor on almost every keystroke; the drawer's
-/// is `cs timeline`'s, which is always whole. Typing `the` against this archive, both on screen at
-/// once: `897+` in the footer against `3,549 the query selects` in the drawer, and 3,549 is exactly
-/// what a settled `cs search "the"` returns. Two numbers, one fact.
+/// The list's total is a prefix search's, which is a floor on almost every keystroke; the
+/// scrubber's is `cs timeline`'s, which is always whole. Typing `the` against this archive, both on
+/// screen at once: `897+` in the footer against `3,549 the query selects` below it, and 3,549 is
+/// exactly what a settled `cs search "the"` returns. Two numbers, one fact.
 ///
 /// The one that survives is the list's, ranged — `Shell`'s rule before this bead moved it up here:
 /// `total` is a number only when `settled` and a floor otherwise, so it is printed with a `+` and
-/// not as a fact. **The drawer's settled total is deliberately not borrowed for it.** It is the
-/// better number and reading it would make the count exact whenever the drawer happens to be open
+/// not as a fact. **The scrubber's settled total is deliberately not borrowed for it.** It is the
+/// better number and reading it would make the count exact whenever the scrubber happens to be open
 /// and vague whenever it is shut, which is a count that appears to move when a region is closed —
-/// and the drawer is a third `cs` per keystroke that exists to be closable.
+/// and the scrubber is a third `cs` per keystroke that exists to be closable.
 struct StatusStrip: View {
     @Bindable var model: SearchModel
     @Environment(\.theme) private var theme
@@ -89,8 +89,8 @@ struct StatusStrip: View {
             // already has a clock around the spawn, so the two numbers are decoded rather than
             // taken. A latency you cannot see while you type is a latency you will argue about.
             if let t = model.lastTiming { timing(t, serverMs: serverMs) }
-            // The drawer's toggle, which had to come with its header. It is on this line rather
-            // than inside the region it opens because a shut drawer now draws nothing at all: the
+            // The scrubber's toggle, which had to come with its header. It is on this line rather
+            // than inside the region it opens because a shut scrubber now draws nothing at all: the
             // old closed state was a whole strip whose only job was to hold the way back in, and
             // that is 20 points of the 480 pt floor spent on one button.
             button(model.timeline.shown ? "hide timeline" : "show timeline") {
@@ -101,8 +101,8 @@ struct StatusStrip: View {
 
     /// The answer: rows in hand, of everything the query selects.
     ///
-    /// Saying "1,025 matches" when the answer is four times that is the one thing this field exists
-    /// to stop a client doing, so an unsettled total is ranged rather than printed.
+    /// Saying "897 matches" when the answer is 3,549 is the one thing this field exists to stop a
+    /// client doing, so an unsettled total is ranged rather than printed.
     private var counts: some View {
         Text(
             "\(model.conversations.count) of "
@@ -111,17 +111,17 @@ struct StatusStrip: View {
             .fixedSize()
             .help(
                 model.settled
-                    ? "every conversation the query selects, with the list's --limit ignored"
-                    : "a floor and not a count — a prefix search stops early, so the whole number "
-                        + "is this or more")
+                    ? "rows in hand, of every conversation the query selects with --limit ignored"
+                    : "rows in hand, of a floor and not a count — a prefix search stops early, so "
+                        + "the whole number is this or more")
     }
 
     /// What the picture under this line is of, in numbers the picture itself cannot state.
     ///
-    /// **Only while there is a picture.** A shut drawer asks `cs timeline` for nothing, by design,
-    /// so `TimelineModel.drawn` goes on holding whatever the last open one left — and a count
-    /// standing next to a count from a query somebody typed past is the defect this whole strip was
-    /// filed to remove, not one to reintroduce at the other end.
+    /// **Only while there is a picture.** A shut scrubber asks `cs timeline` for nothing, by
+    /// design, so `TimelineModel.drawn` goes on holding whatever the last open one left — and a
+    /// count standing next to a count from a query somebody typed past is the defect this whole
+    /// strip was filed to remove, not one to reintroduce at the other end.
     @ViewBuilder
     private func range(undated: Bool) -> some View {
         if model.timeline.shown, let drawn = model.timeline.drawn {
@@ -158,9 +158,9 @@ struct StatusStrip: View {
         .help("the whole spawn, and what cs says the query itself took inside it")
     }
 
-    /// `.tld-btn`: monospaced micro in a hairline box. It kept the drawer's size rather than taking
-    /// this line's, because it is the same control it always was and a boxed label the size of the
-    /// text beside it reads as a word somebody boxed.
+    /// `.tld-btn`: monospaced micro in a hairline box. It kept the scrubber's size rather than
+    /// taking this line's, because it is the same control it always was and a boxed label the size
+    /// of the text beside it reads as a word somebody boxed.
     private func button(_ label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Text(label)

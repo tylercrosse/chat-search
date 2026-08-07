@@ -169,7 +169,14 @@ pub fn candidate_sources() -> Vec<Source> {
         // the importer's problem, not capture's.
         ("codex", "~/.codex/sessions", Layout::Mirror, vec!["**/rollout-*.jsonl", "**/rollout-*.jsonl.zst"]),
         ("claude-code", "~/.claude/projects", Layout::Mirror, vec!["**/*.jsonl"]),
-        ("gemini-cli", "~/.gemini/tmp", Layout::Mirror, vec!["**/*.json"]),
+        // `~/.gemini/tmp/<projectHash>/` holds three JSON shapes and only one is a
+        // conversation. Sweeping all of them archived 175.5 MiB of `checkpoints/` — tool-write
+        // snapshots taken before every `write_file`, six of them ~29 MiB apiece — to reach
+        // 324 KiB of chats, which is 7.3% of this whole archive for 0.07% of the index
+        // (chat-search-aig, measured 2026-08-01). `logs.json` is small and left out for the
+        // other reason: it is a prompt log the importer already declines as redundant with the
+        // chats beside it (chat-search-n58.22 is where that would be revisited).
+        ("gemini-cli", "~/.gemini/tmp", Layout::Mirror, vec!["**/chats/*.json"]),
         // Claude Desktop's Cowork and Chat tabs. One session is two files — `local_<uuid>.json`
         // for the title and model, `local_<uuid>/audit.jsonl` for the messages — so both
         // patterns are needed or half of every conversation goes missing. The `local_*.json`
@@ -248,6 +255,27 @@ mod tests {
         // handful of real searches, which is recoverable by searching again.
         assert!(!recording_queries_with(true, Some("fasle")));
         assert!(!recording_queries_with(true, Some("")));
+    }
+
+    #[test]
+    fn the_gemini_glob_reaches_the_chats_and_not_the_checkpoints_beside_them() {
+        // Measured on the live archive: 34 files captured, of which 15 chats were 324 KiB and
+        // 15 checkpoints were 175.5 MiB (chat-search-aig). `gemini.rs` declines both other
+        // shapes by their contents, but capture runs long before any importer does, so
+        // declining to parse a file is not the same as declining to pay for it.
+        let gemini = candidate_sources().into_iter().find(|s| s.id == "gemini-cli").unwrap();
+        let m = crate::scan::build_matcher(&gemini.include).unwrap();
+
+        assert!(m.is_match("2df4271300f9be6046dd0db74eff4d3d/chats/session-2026-01-14T08-28-ab7e9dcf.json"));
+        // Not every project directory is a hash: Gemini names one after the workspace when it
+        // can, and a glob anchored on hex would capture some sessions and not others.
+        assert!(m.is_match("personal-site/chats/session-2025-10-19T21-38-fb65e7fe.json"));
+
+        assert!(
+            !m.is_match("de716be395009fe9d077d68154f2a399a/checkpoints/2026-01-31T08-53-53_544Z-tests.py-write_file.json"),
+            "the 29 MiB tool-write snapshots are the whole point of narrowing this"
+        );
+        assert!(!m.is_match("personal-site/logs.json"), "a prompt log, not a conversation");
     }
 
     #[test]

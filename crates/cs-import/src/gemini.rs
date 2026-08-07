@@ -4,17 +4,20 @@
 //! array. There is no branching, no subagent, no fork and no rename, so the DAG this
 //! produces is a chain and the only title candidate is the opening user turn.
 //!
-//! The source globs `**/*.json` under the Gemini state directory, so two other file shapes
-//! reach this importer and have to be declined:
+//! Two other JSON shapes live under the same state directory and are declined here:
 //!
 //! * `<projectHash>/logs.json` — a thin prompt log, a JSON *array* of `{sessionId, messageId,
 //!   type, message, timestamp}`. Largely redundant with the chats files and not imported.
 //! * `<projectHash>/checkpoints/*.json` — tool-write snapshots keyed `clientHistory`/
 //!   `toolCall`, taken before a `write_file` or `replace`. Not conversation prose.
 //!
-//! Both are rejected by *shape* rather than by path: neither carries a `sessionId` alongside
-//! a `messages` array, so there is no need to teach this module the archive's directory
-//! layout, and a file that moves still parses the same way.
+//! The shipped include list stopped naming either of them (`**/chats/*.json`,
+//! chat-search-aig), which is a decision about what to *capture* and changes nothing here.
+//! Both are still rejected by *shape* rather than by path: neither carries a `sessionId`
+//! alongside a `messages` array, so this module need not know the archive's directory layout
+//! (ADR 1), a file that moves still parses the same way, and every archive captured before
+//! the narrowing — including the reference one — still holds both shapes and is still
+//! reparsed from scratch on every index.
 
 use cs_core::model::{model_name, Conversation, Kind, Message, Role, Titles};
 use serde_json::Value;

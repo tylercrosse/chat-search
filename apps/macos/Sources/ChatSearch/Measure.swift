@@ -1709,8 +1709,15 @@ enum Measure {
         guard let png = rep.representation(using: .png, properties: [:]) else {
             return "(could not encode the bitmap)"
         }
+        let url = URL(fileURLWithPath: path)
         do {
-            try png.write(to: URL(fileURLWithPath: path))
+            // The directory as well as the file, because every pass here derives several paths from
+            // one `--out` and a directory that is not there costs a run all of its frames — six of
+            // them under `--density` — while the numbers beside them come out fine. A `Foundation`
+            // error per frame is a poor way to say "mkdir".
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try png.write(to: url)
             return "(\(png.count) bytes)"
         } catch {
             return "(\(error))"

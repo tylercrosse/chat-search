@@ -2,8 +2,11 @@
 
 The Swift surface. A search field, a grouping control, a facet rail, a result list, a reader beside
 it, a timeline under all of it, and a way back into the conversation — `chat-search-me9.8.2` onward
-is what makes it worth using. Two views, because three of the prototype's four were the same list
-cut differently.
+is what makes it worth using. One view, because three of the prototype's four were the same list
+cut differently and the fourth is [scrapped for now](#library-scrapped-and-still-compiled). The
+window has no titlebar of the system's either: the search bar is the top strip and the traffic
+lights sit on the theme's own ground — [taking the titlebar
+back](#taking-the-titlebar-back).
 
 ```bash
 cargo build --release                       # the app finds ./target/release/cs by itself
@@ -85,6 +88,83 @@ SwiftUI's three containers that recycles — 5.2 MB scrolling the whole corpus a
 not offer the other two.
 
 [`docs/JSON-CONTRACT.md`]: ../../docs/JSON-CONTRACT.md
+
+## Taking the titlebar back
+
+The complaint that started this — *make the window match the theme (ex. solarized)* — was not a
+missing theme. Solarized-derived is one of the six directions and always was. It was that the
+window's top 32 points were the system's grey sitting above six carefully solved palettes, and
+`chat-search-me9.8.28` went and photographed why: the app is linked against the macOS 26 SDK and is
+drawn by its design system, whatever `platforms:` says. **ADR 27 is the decision** — neither opt
+out with a compatibility key nor opt in to `NSGlassEffectView`, but take back the one surface that
+was wrong.
+
+Three lines of window, and the third is the one nobody expects:
+
+```swift
+styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+window.titlebarAppearsTransparent = true
+window.titleVisibility = .hidden
+hosting.safeAreaRegions = []          // ← without this, nothing moves
+```
+
+**`.fullSizeContentView` on its own buys the background and nothing else.** The content view does
+grow to the window's top edge, and the window paints `--bg` there, so a screenshot looks right —
+but `NSHostingView` hands SwiftUI a top safe area exactly as tall as the titlebar it replaced and
+lays every view out below it. What you get is a themed empty strip of the same 32 points: a
+repaint, not a reclaim. Clearing `safeAreaRegions` is what lets the search bar rise into the band.
+
+The title is still set and deliberately not drawn. `window.title` is what ⌘Tab, Mission Control,
+`Window ▸` and a screenshot script looking for the window all read; `titleVisibility` decides only
+whether AppKit paints it, and it must not, because the search bar is in that band now.
+
+**The lights are measured, not stated.** They stay system-drawn on top of the content, at
+coordinates nothing here decides, so the search bar is inset past them — by `standardWindowButton`'s
+answer for where they actually are, not by a number typed into a view. The same SDK bump this whole
+argument is about moved the titlebar 28 pt → 32 and the corner radius ~15 → ~21; a constant would
+already have been wrong once. `TitleBar` is the whole of it, and `TitleBar.statedInset` is the
+fallback for a window with no buttons to ask.
+
+What it bought, measured on the same query and the same `--size`, `--density`'s own reading of the
+list's viewport:
+
+| asked for | window | list viewport | whole rows |
+| --- | --- | --- | --- |
+| `--size 900x620`, before | 900×652 | 423 pt | 6 |
+| `--size 900x620`, after | 900×620 | **460 pt** | **7** |
+| `--size 720x480`, before | 720×512 | 283 pt | 4 |
+| `--size 720x480`, after | 720×480 | **320 pt** | 4 |
+
+That is 37 pt more list in a window 32 pt shorter — 69 pt at the same window height — and it is
+where `chat-search-me9.8.31`'s status strip and scrubber are going. **The 480 pt floor still
+holds**: ask for `--size 400x300` and the window comes up 720×480, where before it came up 720×512.
+The floor is the same number and is now a taller 480, because the band is inside it.
+
+And the band is the theme's ground, in all six directions and on both sides of the appearance axis.
+`--shot` can check this since the change — `cacheDisplay` is on `window.contentView`, which is now
+the whole window — but the reading below is off `screencapture -l` against the real window server,
+because that is the only capture that also has the lights in it. Band against page, modal colour of
+a rectangle rather than one pixel:
+
+```
+dark  terminal   band (28,33,35)    page (28,33,35)    --bg (27,33,35)
+dark  solarized  band (14,42,53)    page (14,42,53)    --bg  (0,43,54)
+light paper      band (245,241,231) page (245,241,231) --bg (246,241,230)
+...12 of 12, no frame where the band is not the page's ground
+```
+
+Before, the same two readings disagreed: rgb(31,33,37) over a rgb(28,33,35) page on `terminal`, and
+a flat white rgb(255,255,255) over rgb(245,241,231) on `paper`. **The authored token and the drawn
+pixel differ by a point or two** — sRGB tokens through a P3 display and back, and by 14 on
+solarized's `#002b36`, whose red channel is out of gamut coming the other way. That transform hits
+the whole window equally, which is why the check is band-against-page and not
+band-against-`Tokens.swift`.
+
+**What this costs, and ADR 27 says so too.** The traffic lights now sit on a themed ground, which is
+a contrast pair `ThemeCheck` knows nothing about — it fences token against token, and a
+system-drawn button is neither. The window's shape stays the system's. And the reason there is no
+picture of the *active* lights anywhere in this repository is that the only focus-free capture is of
+a window that is not frontmost, which draws them grey.
 
 ## Facets: the query text is the filter
 
@@ -279,11 +359,12 @@ which of them you are in. That is a radio group, macOS has one shape for it, and
 says what the one list looks like. This window has one list and one axis cutting it, so the shape
 arrives without adaptation: a section header, then `None ⌘1`, `Project ⌘2`, `Run ⌘3`, `Source ⌘4`.
 
-**The digits are free, and the app that would have wanted them is being scrapped.** Cmd-1 upward is
+**The digits are free, and the app that would have wanted them has been scrapped.** Cmd-1 upward is
 a tab or a place in most apps; there are no tabs here, and the only other candidate — the
-Search/Library switch, mouse-only in exactly the same way — is what `chat-search-me9.8.30` removes.
+Search/Library switch, mouse-only in exactly the same way — is what `chat-search-me9.8.30` removed.
 Finder splits those two questions the same way in any case: the digits say how the list is cut, and
-a *place* is `⇧⌘` and a letter.
+a *place* is `⇧⌘` and a letter — which is the shape [Library](#library-scrapped-and-still-compiled)
+would come back in if it does.
 
 Neither the words nor the digits are a second list of axes beside the chips. The titles are
 `Grouping`'s own, capitalised, and the digit is the axis's position in `allCases` — so an axis added
@@ -1519,32 +1600,24 @@ machine nobody is sitting at.
 
 It writes fifteen frames, and one line before any of them: what a row costs and how many of them
 the window holds, read off the list while nothing is open — [the row](#the-row) is where that
-reading is explained. The first frame is the drawer as it opens; the next two are the minimap's
-relationship checks — the drawer is driven half a document, then the map is dragged to 75% — and
-the fourth is after typing on with the conversation still open, which is the state a list-driven
-selection closes without being asked to. The last seven are two per grouping axis, open and folded,
-plus Library. Each relationship frame prints where the transcript ended up and where the box went,
-to a fraction of a message; on the corpus's longest conversation that is 0.00–0.58 at rest,
-273.36–273.52 after the fling and 1812.00–1818.09 after the drag, run to run, plus the box's travel
-over the fling and over twenty 6 pt nudges and a drag into the longest message there is. The
-grouped frames print group and residue counts beside them,
-reading is explained. The first frame is the drawer as it opens; the next two are the minimap's
-relationship checks — the drawer is driven half a document, then the map is dragged to 75% — and
-the fourth is after typing on with the conversation still open, which is the state a list-driven
-selection closes without being asked to. The last seven are two per grouping axis, open and folded,
-plus Library. Each relationship frame prints where the transcript ended up and where the box went;
-on the corpus's longest conversation that is messages 0–8 at rest, 300–330 after the fling and
-1810–1818 after the drag, run to run. The grouped frames print group and residue counts beside them,
 reading is explained. The first frame is the drawer as it opens; the next four are one per
 [preset](#the-four-knobs); the two after those are the minimap's relationship checks — the drawer
 is driven half a document, then the map is dragged to 75% — and the eighth is after typing on with
 the conversation still open, which is the state a list-driven selection closes without being asked
-to. The last seven are two per grouping axis, open and folded,
-plus Library. Each relationship frame prints where the transcript ended up and where the box went;
-on the corpus's longest conversation that is messages 0–8 at rest, 300–330 after the fling and
-1810–1818 after the drag, run to run. The grouped frames print group and residue counts beside them,
-which caught a group head clipping `39` to `3` and a residue head eliding `no working directory` to
-`n…y`.
+to. Then six, two per grouping axis, open and folded. The last is the timeline drawer shut. Each
+relationship frame prints where the transcript ended up and where the box went, to a fraction of a
+message; on the corpus's longest conversation that is 0.00–0.58 at rest, 273.36–273.52 after the
+fling and 1812.00–1818.09 after the drag, run to run, plus the box's travel over the fling and over
+twenty 6 pt nudges and a drag into the longest message there is. The grouped frames print group and
+residue counts beside them, which caught a group head clipping `39` to `3` and a residue head
+eliding `no working directory` to `n…y`.
+
+**Since `chat-search-me9.8.30` these frames contain the titlebar.** `cacheDisplay` is on
+`window.contentView`, and under `.fullSizeContentView` that view is the whole window — so what was
+outside the rectangle is now inside it. What is still outside is the traffic lights, which are
+drawn in the window's frame above the content view and belong to the window server; a `--shot`
+frame has the band and not the buttons. The one Library frame this pass used to end on is gone with
+the view.
 
 **The fold's other half has no picture, so the same pass drives it.** `chat-search-me9.8.15` is two
 claims — a group folds, and a folded group cannot hold the cursor — and only the first shows up in
@@ -2033,17 +2106,17 @@ Three frames beside the ordinary ones: `-scrubbed.png` with the selection standi
   knob, so a query asked against tool traffic cannot be drawn — which on this corpus is where most
   message-level matches land. `chat-search-me9.8.25`.
 
-## Library: the half that is not derived
+## Library: scrapped, and still compiled
 
 Everything in Search is a projection of the archive and survives `rm index.db && cs index`. Nothing
 in Library would: a collection, a pin, a project merge, a dismissal are all things a person said,
 and ADR 3 puts those in `library.db` rather than in the index for exactly that reason. That is why
 Collections kept failing to find a tab in the prototype — it was the only authored thing on screen,
-competing with derived views for space — and it is why the tab that grouping freed goes here.
+competing with derived views for space — and it is why the tab that grouping freed went here.
 
-It is empty, and it says so four times over, because there is nowhere to author into: `library.db`
-is `chat-search-6eb.14` and is not built. This is the third bead to press on it, after `6eb.15`'s
-title override and `6eb.25`'s generated summaries.
+**`chat-search-me9.8.30` took the tab away again**, in the 2026-08-06 markup's own words: *scrap
+Library for now*. Four shelves that say what they will hold one day were paying a permanent 30 pt
+strip at the top of a window whose floor is 480, and the strip existed only to switch to them.
 
 | shelf | what it will hold | waiting on |
 | --- | --- | --- |
@@ -2052,10 +2125,17 @@ title override and `6eb.25`'s generated summaries.
 | Project merges | `/dev/career` (89) + `/dev/projects/career` (65) = 154, suggested and never applied | a corpus-true directory list — `chat-search-1ld` |
 | Pinned | the conversation a rule would not have found | `chat-search-6eb.14` |
 
-Library hides the search field, the group control and the facet rail rather than drawing them
-inert, which is the defect Sittings had: a view that facets do not narrow should not draw the
-facets. The footer says what the view under it is made of, and here that is the one sentence that
-separates the two — `authored, not derived — survives a reindex`.
+`LibraryView.swift` is still in the target and still compiles — deliberately, with the reason at
+the top of the file. Nothing constructs it, so it is dead code by every measure a linter has, and
+that is the trade: excluding it from `Package.swift` would be the same deletion with a longer fuse,
+because the file's value is that it goes on typechecking against the token seam. A direction that
+adds a token or a `Theme` API that moves breaks it here and now, rather than in six months when
+somebody wants the shelves back. Bringing it back is then a decision about where it goes — a menu
+item and ⇧⌘L rather than a tab strip is the obvious answer — and not an archaeology exercise.
+
+What it is waiting for has not changed: `library.db` is `chat-search-6eb.14` and is not built.
+The view was the third bead to press on that, after `6eb.15`'s title override and `6eb.25`'s
+generated summaries.
 
 ## The four index states
 

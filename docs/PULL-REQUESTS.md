@@ -84,13 +84,23 @@ apps/macos/.build/release/chat-search --shot \
 ```
 
 Writes fifteen frames — the reader, one per fidelity preset, scrolled, scrubbed, typed-on, each of
-the three grouping axes open and folded, and the library — plus minimap geometry, main-thread frame
-lag, and the three claims about the fidelity model that no frame makes. `--settings`, `--theme`,
-`--folded`, `--group` and `--longest` reach the states a script otherwise cannot.
+the three grouping axes open and folded, and the timeline drawer shut — plus minimap geometry,
+main-thread frame lag, and the three claims about the fidelity model that no frame makes.
+`--settings`, `--theme`, `--folded`, `--group` and `--longest` reach the states a script otherwise
+cannot.
 
 `Measure.capture` draws the view hierarchy through `cacheDisplay`, so there is no window server
 involved. That is why it works from a background session with nothing granted to it, and it is the
 reason an agent can be asked for these at all.
+
+**What it cannot show is the window's own chrome, and that is now a smaller gap than it was.** The
+capture is `cacheDisplay` on `window.contentView`, and since `chat-search-me9.8.30` gave the window
+`.fullSizeContentView` that view is the whole window — so the titlebar band, which the app draws
+itself, is in every frame. The traffic lights still are not: they live in the window frame above
+the content view. A change to *those* — their inset, or how a direction reads behind them — has to
+be photographed with `screencapture -l` against a real window, which is a thing this repository has
+scripts for only under `.shots/me9.8.28-probe/` and untracked. Say so in the body rather than
+describing a picture you did not take.
 
 ### Both sides, and getting them into a body
 

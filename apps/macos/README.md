@@ -1,12 +1,13 @@
 # chat-search for macOS
 
-The Swift surface. A search field, a grouping control, a facet rail, a result list, a reader beside
-it, a timeline under all of it, and a way back into the conversation — `chat-search-me9.8.2` onward
-is what makes it worth using. One view, because three of the prototype's four were the same list
-cut differently and the fourth is [scrapped for now](#library-scrapped-and-still-compiled). The
-window has no titlebar of the system's either: the search bar is the top strip and the traffic
-lights sit on the theme's own ground — [taking the titlebar
-back](#taking-the-titlebar-back).
+The Swift surface. A search field, a grouping control, one status strip and a timeline directly
+under them, a facet rail, a result list, a reader beside it, and a way back into the conversation —
+`chat-search-me9.8.2` onward is what makes it worth using. One view, because three of the
+prototype's four were the same list cut differently and the fourth is [scrapped for
+now](#library-scrapped-and-still-compiled). The window has no titlebar of the system's either: the
+search bar is the top strip and the traffic lights sit on the theme's own ground — [taking the
+titlebar back](#taking-the-titlebar-back). There is no footer; what one would say is [under the
+query](#one-status-strip-and-the-scrubber-with-it), beside the query that produced it.
 
 ```bash
 cargo build --release                       # the app finds ./target/release/cs by itself
@@ -38,7 +39,7 @@ swift run -c release chat-search --watch-theme
 ```
 
 `--size` opens the window at a stated size, `--group` opens the list already cut along an axis,
-`--folded` opens every group of it shut, `--no-timeline` opens the bottom drawer closed, and
+`--folded` opens every group of it shut, `--no-timeline` opens the scrubber closed, and
 `--settings` opens the settings window beside it. All five are verification affordances rather than
 preferences — the row has to hold at several widths, a grouped list rebuilds sections where an
 ungrouped one rebuilds rows, a folded one draws heads where an open one draws heads and rows, an
@@ -76,16 +77,15 @@ See [the theme seam](#the-theme-seam) below.
 
 **`Sources/ChatSearch`** — the window, the models and the views. One `cs search --json` per
 keystroke with the previous one killed and no debounce, which is not an oversight:
-`chat-search-me9.22` measured fork/exec at 0.3 ms and the whole process boundary at 5–13 ms, so
-a debounce would be latency spent to save a cost that was measured and found small. With a
-conversation open that is two processes per keystroke rather than one, both cancellable: the
-median conversation is ~10 KB and the corpus's longest measured 50–90 ms end to end, against the
-~50 ms the search beside it already costs. With the [bottom drawer](#the-bottom-drawer) open it is
+`chat-search-me9.22` measured fork/exec at 0.3 ms and the whole process boundary at 5–13 ms, so a
+debounce would be latency spent to save a cost that was measured and found small. With a
+conversation open that is two processes per keystroke rather than one, both cancellable: the median
+conversation is ~10 KB and the corpus's longest measured 50–90 ms end to end, against the ~50 ms
+the search beside it already costs. With the [scrubber](#the-scrubber-under-the-query) open it is
 three, on the same terms and for the same reason — see there for what that one costs and what
-shutting it buys. Rows and messages both go through `List` because it is the only one of
-SwiftUI's three containers that recycles — 5.2 MB scrolling the whole corpus against
-`LazyVStack`'s 65.6 MB and `VStack`'s 566 MB. That question is answered, so the app does
-not offer the other two.
+shutting it buys. Rows and messages both go through `List` because it is the only one of SwiftUI's
+three containers that recycles — 5.2 MB scrolling the whole corpus against `LazyVStack`'s 65.6 MB
+and `VStack`'s 566 MB. That question is answered, so the app does not offer the other two.
 
 [`docs/JSON-CONTRACT.md`]: ../../docs/JSON-CONTRACT.md
 
@@ -146,9 +146,10 @@ list's viewport:
 | `--size 720x480`, after | 720×480 | **320 pt** | 4 |
 
 That is 37 pt more list in a window 32 pt shorter — 69 pt at the same window height — and it is
-where `chat-search-me9.8.31`'s status strip and scrubber are going. **The 480 pt floor still
-holds**: ask for `--size 400x300` and the window comes up 720×480, where before it came up 720×512.
-The floor is the same number and is now a taller 480, because the band is inside it.
+where [the status strip](#one-status-strip-and-the-scrubber-with-it) went, which spent it and then
+handed 30 pt back. **The 480 pt floor still holds**: ask for `--size 400x300` and the window comes
+up 720×480, where before it came up 720×512. The floor is the same number and is now a taller 480,
+because the band is inside it.
 
 And the band is the theme's ground, in all six directions and on both sides of the appearance axis.
 `--shot` can check this since the change — `cacheDisplay` is on `window.contentView`, which is now
@@ -175,6 +176,87 @@ a contrast pair `ThemeCheck` knows nothing about — it fences token against tok
 system-drawn button is neither. The window's shape stays the system's. And the reason there is no
 picture of the *active* lights anywhere in this repository is that the only focus-free capture is of
 a window that is not frontmost, which draws them grey.
+
+## One status strip, and the scrubber with it
+
+The 2026-08-06 markup asked for two moves into the same strip of real estate — "the # of results +
+timing info should be directly under the search bar" and "I'm considering moving the timeline
+scrubber to the top under the search bar" — so `chat-search-me9.8.31` is one bead. Under the query
+box, in order: the strip, the track, the axis, a rule, then the panes. There is no footer.
+
+The scrubber's half has an argument in the code that is stronger than layout taste, and
+`TimelineDrawer`'s own comment had been carrying it since `me9.8.20`: a drag "has to reach the query
+box: the selection is derived from the query text and never kept here". A control whose entire
+output is text in the search field is a query-editing control that happens to look like a chart, and
+query controls belong with the query. It is still called a drawer in the source, which is now a
+misnomer with a bead's worth of history behind it.
+
+### The count was on screen twice, and the two copies disagreed
+
+The consolidation is the half that is a correctness fix rather than a rearrangement. Before this,
+the same fact was printed in two places six hundred points apart, by two replies that arrive
+separately and can land in either order:
+
+```
+3617 in range · 58 the query selects · all time · 4 undated     ← above the scrubber
+58 of 58                                     334 ms  292.4 in sqlite   ← the footer
+```
+
+They agree on `borrow checker` because it is a settled query. **They disagree on the ordinary
+keystroke.** The list's total is a prefix search's, and `--prefix` is on for every keystroke this
+window sends, so it stops early and reports a floor; the drawer's is `cs timeline`'s, which counts
+the whole matching set and is always whole. Typing `the` against the live index, both numbers on
+screen at once:
+
+```bash
+cs search "the" --prefix --limit 60 --json | jq '.total, .settled'   # 897, false
+cs timeline "the" --json              | jq '.total'                  # 3549
+cs search "the" --limit 60 --json     | jq '.total, .settled'        # 3549, true
+```
+
+`897+` and `3,549` are the same fact, and the settled search says which of them is true.
+
+**The survivor is the list's, ranged.** `total` is a number only when `settled` and a floor
+otherwise, so it prints with a `+` — the footer's own rule, which moved up here with the number.
+The drawer's settled total is *deliberately not borrowed for it*, and this is the one decision in
+the bead worth arguing with: it is the better number, and it is decoded and in hand whenever the
+scrubber is open. Reading it would make the count exact when the scrubber happens to be open and
+vague when it is shut, which is a count that appears to move because a region was closed — and the
+scrubber is a third `cs` per keystroke that exists to be closable. One source, honestly ranged,
+beats two sources that are each right about different things.
+
+Everything else the footer carried is still said. What Enter would do with the cursor on a group
+head is on the strip, and so is the fold count — **which is not where it belongs, and was measured
+before it was put there.** A fold is something done to the axis, and the axis is what the group key
+line above the list describes, so that line was the obvious home. What it costs is room that line
+has not got: it lives in the list's column, about 330 pt at the default window with a reader open,
+and it was already truncating its own residue clause to `2 with no wor…`. A fourth clause took that
+to `2…`. So the count is on the strip, which is the width of the window, and the group key keeps
+the three facts it can say whole.
+
+The scrubber's toggle came up with its header, which is why a shut scrubber now draws nothing at
+all where it used to draw a strip whose only job was to hold the way back in.
+
+### What it costs
+
+The clauses stack up: at the 720 pt floor the line is genuinely near full, and it sheds `· 4
+undated` first and `in sqlite` after that. **A `ViewThatFits` around the clause that shrinks is the
+wrong shape and elides early** — the first build of this strip dropped `undated` with 200 points of
+empty line to its right. What that `ViewThatFits` is proposed is the share an `HStack` hands a
+flexible child once the `Spacer` beside it has been counted as a claimant too, which is not the room
+on the line, and no arrangement of `layoutPriority` moved it. Three whole candidate *lines* measure
+the thing that has to fit: an `HStack`'s ideal width is the sum of its children's and a `Spacer`'s
+ideal width is its `minLength`, so a candidate's ideal is the line at its tightest.
+
+`--density`'s reading of the list viewport, terminal, same query, against the state `me9.8.30` left:
+
+| asked for | list viewport, before | after | whole rows |
+| --- | ---: | ---: | --- |
+| `--size 900x620` | 460 pt | **490 pt** | 7 → 7 (`blueprint` 7 → 8) |
+| `--size 720x480` | 320 pt | **350 pt** | 4 → **5** |
+
+So it gave 30 pt back rather than spending the 37 the titlebar freed. Two strips became one, and the
+one that was 20 points of button when the scrubber was shut became nothing.
 
 ## Facets: the query text is the filter
 
@@ -344,13 +426,13 @@ field editor's, so it costs nothing to maintain and is wrong only if the field e
 
 **View is the rule's other half, and the first item here that is this app's own act.** Everything
 above resolves into AppKit — a text system, an application, a window — where Cmd-T calls the same
-method the drawer's own `hide` button calls. It is on the bar because `chat-search-me9.8.20` closed
-saying the drawer could not have a key: this window has one focused view, the query box, so a key
-bound beside it is a key the box stops getting, and the fold escaped that only because Enter already
-belonged to the list rather than to the field. A menu resolves its key equivalents before the
-responder chain is consulted, which is what makes it the one place a key can be added here without
-taking it off something. That argument was not available when the drawer shipped, because there was
-no bar; it is the same shape as Cmd-C, and it arrived the same way.
+method the `hide timeline` button on the status strip calls. It is on the bar because
+`chat-search-me9.8.20` closed saying the drawer could not have a key: this window has one focused
+view, the query box, so a key bound beside it is a key the box stops getting, and the fold escaped
+that only because Enter already belonged to the list rather than to the field. A menu resolves its
+key equivalents before the responder chain is consulted, which is what makes it the one place a key
+can be added here without taking it off something. That argument was not available when the drawer
+shipped, because there was no bar; it is the same shape as Cmd-C, and it arrived the same way.
 
 **Cmd-T is free in this app in a way it is not in most.** The platform spends it on New Tab and on
 Show Fonts; there are no tabs here (nothing implements `newWindowForTab:`, and `--clipboard`'s
@@ -993,7 +1075,8 @@ window](#the-settings-window-at-cmd-comma) is what closed it; watching the file 
 it is below.
 
 - **Padding is mostly still literal.** The row's rhythm is tokenised because a direction moves it
-  and it trades against rows-per-screen. The search bar's, the banner's and the footer's are not —
+  and it trades against rows-per-screen. The search bar's, the banner's and the status strip's are
+  not —
   they are literal in `styles.css` too — so dialling those is still a view edit, file or no file.
   `chat-search-me9.8.11`.
 
@@ -1321,9 +1404,9 @@ Two things worth knowing before taking these again. **Both arms need the same ex
 `UserDefaults` keys off it (see "Where the choice lives"), so a build copied to `/tmp/before` reads
 an empty preference domain and draws a different theme than the one beside it — the first attempt
 at this compared `terminal` against `terminal with paper's light`. And **the pictures are the check
-on "nothing moved"**: across the pair, every frame is identical outside a 162×16 px patch of the
-footer holding the query's own millisecond readout, which differs by as much between two runs of
-one build.
+on "nothing moved"**: across the pair, every frame is identical outside a 162×16 px patch holding
+the query's own millisecond readout, which differs by as much between two runs of one build. That
+patch was in the footer when the reading was taken and is on the status strip now.
 
 ### Markdown, set over the source
 
@@ -1941,12 +2024,15 @@ Enter, which is already delivered to the list, is still the only thing that can 
 went the other way for exactly that reason: `group by project` names no line, so nothing has to know
 where the cursor is to obey it.
 
-The footer says what Enter would do whenever the cursor is on a head, and how many groups are shut
-(`12 groups by project · 12 folded`). That is the same defect `poc/ui/NOTES.md` §5 complains about,
-approached from the other side: a footer that draws a key nobody wired and a fold no footer
-mentions are the same mistake. What the head itself does *not* change when it folds is anything it
-says — the count, the day span and the sparkline are drawn shut exactly as they are open, because a
-folded group and a group that is not there have to look different.
+The status strip says both what Enter would do whenever the cursor is on a head and how many groups
+are shut (`58 of 58 · 3617 in range · all time · 12 folded · ⏎ opens this group`). That is the same
+defect `poc/ui/NOTES.md` §5 complains about, approached from the other side: a status line that
+draws a key nobody wired and a fold no status line mentions are the same mistake. It was the footer
+saying both until `chat-search-me9.8.31` deleted the footer — see [why the fold count is not on the
+group key line](#the-count-was-on-screen-twice-and-the-two-copies-disagreed), which is where it
+belongs by subject and has no room. What the head itself does *not* change when it folds is
+anything it says — the count, the day span and the sparkline are drawn shut exactly as they are
+open, because a folded group and a group that is not there have to look different.
 
 **Switching axes clears the accordion** rather than restoring it, which is the prototype's rule and
 its reasoning: groups are *ranked*, so the set you left open is rarely the set at the top when you
@@ -1975,12 +2061,13 @@ Three things this does not do:
   chip would say this corpus has four axes; drawing it live would need a grammar that does not
   exist. `chat-search-me9.18`, and `chat-search-6eb.18` for the discovery half.
 
-## The bottom drawer
+## The scrubber, under the query
 
-A track under all three panes: everything the filters keep, stacked by source below a baseline,
-and where this query landed raised above it. `poc/ui/DESIGN-BRIEF.md:59` asks for "a timeline of
-whatever survives the current filters, with a scrubber", and its own comment states the claim —
-it answers *when was I working on this* and *when did this query land* at once.
+A track the width of the window, under the status strip and above all three panes: everything the
+filters keep, stacked by source below a baseline, and where this query landed raised above it.
+`poc/ui/DESIGN-BRIEF.md:59` asks for "a timeline of whatever survives the current filters, with a
+scrubber", and its own comment states the claim — it answers *when was I working on this* and *when
+did this query land* at once.
 
 **Nothing here counts anything.** That is the decision the bead (`chat-search-me9.8.20`) required
 be made and written down before a bar was drawn, and it is the only interesting thing about the
@@ -2022,11 +2109,11 @@ The picture is bars, so a selection finer than a bar is a selection nobody can s
 - **The bars are drawn with `date:` left out of them**, which the prototype also does
   (`visible(true)`) and which is the whole reason a scrubber is worth having: a timeline narrowed
   by its own selection draws a solid block and can never say what widening would get you. Only
-  the header's numbers move when you drag.
+  the status strip's numbers move when you drag.
 - **Each half of the track is scaled to its own tallest bar.** 58 matches under 3,617
   conversations on one shared scale is a row of nothing, and where the matches are is the question
-  the top half exists to answer. The absolute numbers are in the header, where a scale cannot
-  mislead about them.
+  the top half exists to answer. The absolute numbers are on the status strip above it, where a
+  scale cannot mislead about them.
 - **No 30d/90d/1y/all presets.** The facet rail's *When* section already offers four relative
   spans, and a second vocabulary of them in the same window is one rule written twice. Clicking a
   rail chip lights the selection here anyway — the selection is read out of the query text like
@@ -2053,20 +2140,36 @@ anything narrower. Cold through a spawn it is **140–240 ms where the `cs searc
 same keystroke is 280–340 ms**. So a debounce would be staleness bought to save the smaller of two
 costs, which is the trade `SearchModel` already refuses for the search itself.
 
-What is offered instead is `hide`. A hidden drawer asks `cs` for nothing, and `--no-timeline`
-opens that way — an instrument affordance in the same family as `--group` and `--folded`, so
-`--measure` can take the keystroke number both ways. It is not remembered between launches, for
-the same reason those are not.
+What is offered instead is `hide timeline`, at the end of the status strip. A hidden scrubber asks
+`cs` for nothing, which is countable rather than assertable — point `--bin` at a shim that logs its
+argv and execs the real binary, then run `--measure`, which types the benchmark phrases into the
+real interface:
+
+```
+open   45 search · 45 facets · 45 timeline
+shut   50 search · 50 facets ·  0 timeline
+```
+
+(The search and facet counts differ between the runs because a superseded keystroke's process is
+cancelled before it spawns, and how many of those there are depends on timing. The column that
+matters goes to zero.) The `hide timeline` button and `--no-timeline` set the same
+`TimelineModel.shown`, and the guard reading it is one line at the top of `queryChanged`.
+`--no-timeline` opens that way — an instrument affordance in the same family as `--group` and
+`--folded`, so `--measure` can take the keystroke number both ways, which is what the count above
+rides on. It is not remembered between launches, for the same reason those are not.
 
 **Cmd-T is the same switch from the keyboard**, through `View ▸ Hide Timeline`
-(`chat-search-me9.8.26`). The button in the corner and the menu item call one method, so there is
+(`chat-search-me9.8.26`). The button on the strip and the menu item call one method, so there is
 one act with two routes rather than two behaviours; and since a menu resolves its keys outside the
 responder chain, the third `cs` per keystroke can now be stopped without the mouse and without the
 query box giving up a key. [The menu bar](#the-menu-bar) is why that became possible after the
 drawer shipped rather than with it.
 
 **Shutting it cannot change the result set**, because it never narrowed one: the window it draws
-is a `date:` token in the query box, and hiding the drawer does not touch the box.
+is a `date:` token in the query box, and hiding it does not touch the box. What shutting it does
+take off the screen is the three clauses on the status strip that only `cs timeline` knows — the
+in-range count, the window and `undated` — because a shut scrubber asks for nothing and the last
+reply it got is about a query somebody has since typed past.
 
 ### Seeing it
 
@@ -2108,7 +2211,9 @@ Three frames beside the ordinary ones: `-scrubbed.png` with the selection standi
   fixed, and the mouse half of the same complaint — no handles, no pan — is
   `chat-search-me9.8.32`. `chat-search-me9.8.26`.
 - **`undated` is a number and not a mark.** Four of 4,426 conversations have no ending and can be
-  in no bucket; the header says so and the track cannot show them.
+  in no bucket; the status strip says so and the track cannot show them. It is also the first
+  clause that strip gives up when the line runs out of room, so at the 720 pt floor with a cursor
+  hint beside it the number is on the hover and not on the line.
 - **A negated `date:` draws no rectangle.** The complement of a window is not a rectangle, and
   drawing it as one would put the selection over exactly the stretch the filter threw away. The
   counts beside it are still right.

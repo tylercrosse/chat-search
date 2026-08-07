@@ -12,8 +12,8 @@ import SwiftUI
 /// Nothing below names a colour, a size or a face. Every one is a token off `\.theme`
 /// (`chat-search-me9.8.8`), which is what makes a change of direction a change to one generated
 /// file. Where a value here differs from the plain one it replaced, the mockup is why: the search
-/// field is monospaced because `.qbox` is, the footer is `--fs-meta` because `.fbar` is, and the
-/// empty state has a dashed rule around it because `.empty` does.
+/// field is monospaced because `.qbox` is, the status strip is `--fs-meta` because `.fbar` is, and
+/// the empty state has a dashed rule around it because `.empty` does.
 struct SearchView: View {
     @Bindable var model: SearchModel
     @Environment(\.theme) private var theme
@@ -27,6 +27,22 @@ struct SearchView: View {
         VStack(spacing: 0) {
             searchBar
             rule
+            // The query's own header: what came back, and when it happened. Both are full width and
+            // above the panes rather than under them, which is `chat-search-me9.8.31` — and the
+            // scrubber's half of that has an argument stronger than layout taste behind it. A drag
+            // across the track writes `date:A..B` into the query box and the selection is read back
+            // out of the text (`TimelineDrawer`), so it is a query-editing control that happens to
+            // look like a chart, and query controls belong with the query.
+            //
+            // The track stays full width for the reason it was full width at the bottom: the axis
+            // is a property of the whole filtered set, and a track the width of one column would
+            // read as a property of that column.
+            StatusStrip(model: model)
+            TimelineDrawer(model: model)
+            rule
+            // Under the header rather than above it, so the three strips a reader learns the window
+            // by do not move whenever a banner appears. A banner qualifies the rows, and it is
+            // against the rows that it sits.
             indexBanner
             unappliedBanner
             openBanner
@@ -35,11 +51,6 @@ struct SearchView: View {
                 Rectangle().fill(theme.color(.rule)).frame(width: 1)
                 content
             }
-            // Under all three panes rather than under the list alone, which is `poc/ui`'s own
-            // arrangement — `.searchshell` holds the panes *and* the drawer. The axis is a
-            // property of the whole filtered set, and a track the width of one column would read
-            // as a property of that column.
-            TimelineDrawer(model: model)
         }
         .onAppear { focused = true }
         // The fallback half of the arrangement below: this fires only when the focused view did
@@ -435,6 +446,14 @@ struct SearchView: View {
     /// `of 458` is the one-word form of (`chat-search-me9.8.23`). Said once at the top and once
     /// per head, because a head can be read without the line above it and a screen of heads on an
     /// axis with no corpus count needs one place that explains the word.
+    ///
+    /// **The fold count is not here, and it was measured before it was not.** The footer used to
+    /// carry it and `chat-search-me9.8.31` deleted the footer, so this line was the obvious home —
+    /// a fold is done to the axis, and the axis is what this line describes. What that costs is
+    /// room this line has not got: it lives in the list's column, which at the default window with
+    /// a reader open is about 330 pt, and it was already truncating its own residue clause to
+    /// `2 with no wor…`. A fourth clause took that to `2…`. So the count is on `StatusStrip`, which
+    /// is the width of the window, and this line keeps the three facts it can say whole.
     private var groupKey: some View {
         // Three facts, in the order they may be given up in. The reader pane leaves this column
         // ~400pt at the window's floor, which is about seventy characters of the micro face, so

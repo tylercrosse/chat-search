@@ -262,8 +262,8 @@ final class SearchModel {
     /// Whether this group is drawn folded.
     func isFolded(_ key: String) -> Bool { foldsByDefault != toggled.contains(key) }
 
-    /// How many groups are folded, which the footer says because a folded group and a group that
-    /// is not there look the same from above it.
+    /// How many groups are folded, which `StatusStrip` says because a folded group and a group
+    /// that is not there look the same from above it.
     var foldedGroups: Int { groups.filter { isFolded($0.key) }.count }
 
     /// Fold or unfold one group, and take the cursor with it.
@@ -352,9 +352,11 @@ final class SearchModel {
 
     /// What Enter would do where the cursor is, when that is not what it has always done.
     ///
-    /// `poc/ui/NOTES.md` §5's complaint about the prototype is a footer that drew a key nobody had
-    /// wired. A fold the keyboard can reach and no footer mentions is the same defect from the
-    /// other side, so the one line that is new — the cursor standing on a group head — says so.
+    /// `poc/ui/NOTES.md` §5's complaint about the prototype is a status line that drew a key nobody
+    /// had wired. A fold the keyboard can reach and no status line mentions is the same defect from
+    /// the other side, so the one line that is new — the cursor standing on a group head — says so.
+    /// It is read by `StatusStrip` since `chat-search-me9.8.31`, and was read by the footer before
+    /// that; which strip draws it has never been this property's business.
     var cursorHint: String? {
         guard case .head(let key) = cursor else { return nil }
         return isFolded(key) ? "⏎ opens this group" : "⏎ folds this group"

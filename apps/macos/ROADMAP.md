@@ -41,7 +41,9 @@ fold plus the keyboard that had to come with it (`me9.8.15`). Library was scrapp
 strip for the privilege — and its file is still compiled so that it does not rot while it waits.
 `me9.8.31` spent what that freed and handed some back: the footer and the scrubber's header became
 one status strip under the query box, with the scrubber under it, which is 30 pt more list at both
-sizes and a fifth row at the 480 pt floor.
+sizes and a fifth row at the 480 pt floor. `me9.8.33` then made the list longer than sixty rows for
+the first time — `--offset` on the wire, appended at the bottom, and a line saying where the
+ranking ends, since it ends at 897 rows for `the` against a count of 3,549.
 
 **3 · The theme seam.** Deliberately before the views that would have hardcoded it (`me9.8.8`),
 then several directions in one binary (`me9.8.9`), the decision about whether a named theme may
@@ -152,7 +154,8 @@ one bead making the next one cheap.
 | `28 → 30` | No point theming a titlebar before knowing whether the macOS 26 SDK is already compositing glass over it. It is not — nothing glassy is drawn over a window with no toolbar, sidebar, popover or sheet — so `30` took the band with `.fullSizeContentView` and no compatibility key. ADR 27. |
 | `30 → 31` | Both rewrite the top of `Shell.swift`. Remove and reclaim height, *then* add two strips into it. `30` measured what there is to spend: 37 pt more list in a window 32 pt shorter, 69 pt at the same window height. `31` spent it and came back 30 pt up, because the two strips it added replaced three. |
 | `31 → 32` | Build the scrubber's gestures once, after it has moved. It has: the track is under the status strip and above the panes, so `32`'s handles are drawn against a full-width track that is not going anywhere else. |
-| `27 → 33` | Was "`ScrollPosition` is how a list keeps its place when a page is appended rather than jumping", and `27` measured that `ScrollPosition` does not move a `List` at all — see [what the floor bought](./README.md#what-the-floor-bought). What survives the edge is `onScrollGeometryChange`: `33` still needs to know where the list is to know it has reached the bottom, and it needs another answer for keeping its place. |
+| `27 → 33` | Was "`ScrollPosition` is how a list keeps its place when a page is appended rather than jumping", and `27` measured that `ScrollPosition` does not move a `List` at all — see [what the floor bought](./README.md#what-the-floor-bought). What survived the edge is `onScrollGeometryChange`, and it is the whole of what `33` needed: appending below the reader does not move the reader, so there was no place to keep. Both landed. |
+| `31 → 33` | Both edit the region between the query box and the list, and `33` had to know which line the count lives on before it could make the count climb. |
 | `10 → 34` | Without a token set read at runtime, the type scale is one rebuild per guess. |
 | `34 → 35` | Guessed the header might stop colliding once `micro` was 10pt with less tracking. It did not — 10pt is *wider* than 9 and `34` never touched tracking — so `35` did the whole of it. |
 | `29 → 36`, `29 → 37` | Both add runs to a path that currently rebuilds an `AttributedString` on every body evaluation. Fix it first or measure the wrong thing. |
@@ -175,7 +178,7 @@ files two or more open beads want:
 | file | beads |
 | --- | --- |
 | `Shell.swift`, `SearchView.swift` top | `me9.8.30`, `me9.8.31` — both landed, so the region is free |
-| `SearchView.swift` list, `Grouping.swift` | `me9.8.33`, `me9.43` |
+| `SearchView.swift` list, `Grouping.swift` | `me9.8.33` landed, so `me9.43` has the region — and inherits one claim from it: a page may only append, or the axis it adds has to say it re-sorts, as `run` does |
 | `ReaderView.swift`, `BlockRow` | `me9.8.37` — and `me9.45`, which replaces `Segments.swift` under it |
 | `Rail.swift` | `me9.8.35`, `me9.42`, `me9.43` |
 | `cs-core/src/blocks.rs` | `me9.41`, `me9.45`, `qyn` |

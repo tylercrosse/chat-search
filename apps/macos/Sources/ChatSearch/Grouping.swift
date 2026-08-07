@@ -39,6 +39,25 @@ enum Grouping: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
+    /// What a page arriving does to the rows already on screen, on the one axis where the answer
+    /// is not "nothing".
+    ///
+    /// **This is the sentence paging owes a reader** (`chat-search-me9.8.33`). `project` and
+    /// `source` gather in the order each key first appears and the rows arrive best first, so a
+    /// page can only lengthen a group or add one at the bottom — nothing above the scroll
+    /// position moves, which is what makes reaching the bottom of the list a safe gesture.
+    /// `run` sorts by time instead, so a row from further down the ranking can be older than
+    /// rows already drawn and land in a run above them. That is the axis working, not a fault,
+    /// and the difference is invisible from the screen unless it is said.
+    var reordersOnPaging: String? {
+        switch self {
+        case .none, .project, .source: nil
+        case .run:
+            "a page re-sorts this: a run is found in time, so rows further down the ranking can "
+                + "land above ones already drawn"
+        }
+    }
+
     /// What the rows this axis cannot place are called, and why there are any.
     ///
     /// **The residue is information, not an edge case.** `cwd` covers 34% of the corpus — codex

@@ -34,6 +34,26 @@ final class SearchModel {
     /// `--prefix` is on for every keystroke here, so the unsettled case is the common one.
     private(set) var total = 0
     private(set) var settled = true
+    /// Whether the ranking has been read to the end — set by the page that came back short.
+    ///
+    /// **Not the same statement as `conversations.count == total`, and that is the whole reason
+    /// it is a stored fact rather than arithmetic.** `cs` ranks the best few thousand messages a
+    /// query matches and pages out of the conversations those fall into, so on a broad query the
+    /// list ends long before the count does: measured on 2026-08-07, `the` pages to 897 rows
+    /// against a settled total of 3,549. The only thing that knows where the ranking stops is
+    /// the reply that stopped, which is why this is written there and nowhere else.
+    private(set) var exhausted = false
+    /// A page is in flight. Read by the trigger, so reaching the bottom twice while one is out
+    /// asks once — a scroll produces a great many geometry callbacks and each of them would
+    /// otherwise be a `cs`.
+    private(set) var paging = false
+    /// Bumped by each *answer* and never by a page. What the list watches to know it is looking
+    /// at a new set of rows rather than more of the same ones.
+    ///
+    /// A serial and not the query text, because the two are not the same event: `askAgain` runs
+    /// the same text again and produces a new answer, and a keystroke that leaves the results
+    /// unchanged still produces one.
+    private(set) var answerSerial = 0
     /// Where the index stands, from whichever half of the contract said so — the `index_state`
     /// on an answered envelope or the `error.code` on a refusal. Both paths land here, which is
     /// what lets one `switch` in the view cover all four states.
@@ -107,6 +127,14 @@ final class SearchModel {
 
     private var inFlight: Task<Void, Never>?
     private var railInFlight: Task<Void, Never>?
+    private var pageInFlight: Task<Void, Never>?
+    /// The query the rows in hand are the answer to.
+    ///
+    /// A page asks for `query` as it stands when the reply lands, and a keystroke can land in
+    /// between — so this is what the page is checked against before it is appended. Without it a
+    /// page of the previous query's ranking would be stitched onto the new one's rows, which is
+    /// the one way appending can produce a list that is not a ranking.
+    private var answeredQuery = ""
     /// When the keystroke that this query belongs to happened, on `CACurrentMediaTime`'s clock.
     private var keystrokeAt: Double?
 
@@ -138,6 +166,12 @@ final class SearchModel {
         // characters leaves eight `cs` processes competing for the same index and the last one —
         // the only one whose answer is wanted — finishes last.
         inFlight?.cancel()
+        // And the page with it, for a sharper version of the same reason: its rows are a window
+        // on the *previous* query's ranking, so a page that outlived its query would not merely
+        // be stale, it would be rows from another list appended to this one.
+        pageInFlight?.cancel()
+        paging = false
+        exhausted = false
         let started = keystrokeAt ?? CACurrentMediaTime()
         inFlight = Task { [weak self] in
             guard let self else { return }
@@ -156,6 +190,69 @@ final class SearchModel {
             }
         }
         refreshRail(for: text)
+    }
+
+    /// Whether there is another page to ask for. What the list's bottom edge reads before asking.
+    ///
+    /// Four ways to be finished, and each of them is a different sentence on screen: nothing has
+    /// been answered yet, the ranking has already run out, a page is already out, or the rows in
+    /// hand are the whole count. The last is the only one arithmetic can decide, and only when
+    /// `settled` — an unsettled `total` is a floor, so `60 < 897+` is not a promise there is a
+    /// sixty-first row.
+    var hasMorePages: Bool {
+        guard !conversations.isEmpty, !exhausted, !paging else { return false }
+        return !settled || conversations.count < total
+    }
+
+    /// Ask for the rows after the ones in hand, and append them.
+    ///
+    /// **Appended, never merged and never re-sorted.** `cs` cuts every page of one query at one
+    /// `--limit` out of the same ranking (`docs/JSON-CONTRACT.md#paging`), so the rows arriving
+    /// here belong strictly after the rows already held — which is exactly the premise
+    /// `Grouping` gathers on. A group therefore grows downwards or a new one appears at the
+    /// bottom, and nothing above the reader's scroll position moves. `run` is the stated
+    /// exception and re-orders, because it sorts by time rather than by rank.
+    ///
+    /// Idempotent while a page is out, because the trigger is a scroll: reaching the bottom
+    /// produces a geometry callback per frame and every one of them would otherwise be a `cs`.
+    func loadNextPage() {
+        guard hasMorePages else { return }
+        paging = true
+        // Read now rather than inside the task. Typing continues while this runs and the reply
+        // is only appendable to the list it was a continuation of.
+        let text = answeredQuery
+        let from = conversations.count
+        pageInFlight = Task { [weak self] in
+            guard let self else { return }
+            defer { self.paging = false }
+            guard let result = try? await client.search(text, limit: limit, offset: from),
+                !Task.isCancelled
+            else { return }
+            self.append(result.response, from: from, of: text)
+        }
+    }
+
+    /// Put a page on the end of the list, or record that there was no page to put there.
+    private func append(_ page: SearchResponse, from: Int, of text: String) {
+        // Three ways this page is not this list's. The query moved under it; the list moved
+        // under it, because a second page landed first; or `cs` answered a different depth than
+        // the one asked for. None is an error and all three mean the same thing — drop it, and
+        // let the bottom of the list ask again if it is still the bottom.
+        guard text == answeredQuery, from == conversations.count, page.offset == from else {
+            return
+        }
+        // The reply that knows where the ranking stops is the one that stopped. A short page is
+        // the end even when it is not empty: `cs` fills a page until the ranked list runs out.
+        if page.results.count < limit { exhausted = true }
+        guard !page.results.isEmpty else { return }
+        conversations.append(contentsOf: page.results)
+        // Not `total`: a page's total is the same number the first reply carried, so taking it
+        // again would be re-reading one fact. `marks` is not taken either — the offsets in these
+        // snippets are in whatever units the *first* reply named, and a client that let the
+        // units change halfway down its own list is the defect `marks` exists to prevent. If
+        // they ever disagreed, the rows below would be marked against the rows above's rule.
+        regroup()
+        place()
     }
 
     /// Re-project the rail onto the query, in a process of its own.
@@ -235,6 +332,13 @@ final class SearchModel {
         conversations = []
         unappliedFilters = []
         cursor = nil
+        // There is no list, so there is nothing below it. `hasMorePages` would say so anyway on
+        // the empty rows; this also stops a page that was already out from landing on the
+        // screen that replaced it.
+        pageInFlight?.cancel()
+        paging = false
+        exhausted = true
+        answeredQuery = ""
         regroup()
     }
 
@@ -426,9 +530,15 @@ final class SearchModel {
         // nothing on screen could say a newer answer was coming (`chat-search-me9.8.1`).
         health = .answering(result.response.indexState)
         conversations = result.response.results
+        answeredQuery = query
+        answerSerial += 1
         marks = result.response.markOffsets
         total = result.response.total
         settled = result.response.settled
+        // A first answer shorter than the page asked for is a ranking that ended inside it, so
+        // there is nothing below to go and get. Said here as well as in `append` because the
+        // common case — 58 rows for `borrow checker` — never reaches `append` at all.
+        exhausted = result.response.results.count < limit
         unappliedFilters = result.response.unappliedFilters
         lastTiming = result.timing
         // Before the cursor is placed: grouped, the first row on the screen is the first row of

@@ -48,7 +48,8 @@ for, and a `count` that means something different depending on the value of anot
 | `query` | string | never | The query **as parsed**, with `--source` desugared into it: `--source codex` reaches the ranker as the token `agent:codex` and is reported that way. So this is what was actually run, not a flag and a string a client would have to recombine. Echo it back to tell which of several responses is in hand, and paste it into `cs explain` unchanged. |
 | `ms` | number | never | Wall time for the ranking pass and the building of this reply, rounded to 2dp. Excludes opening the index, process start, and the second pass behind `settled`. Measured once, in core: three clients used to round their own copy and one of them fed the query log. |
 | `count` | integer | never | `results.length`. Not how many conversations match — `--limit` truncates before this is taken. |
-| `total` | integer | never | How many conversations the query selects with `--limit` ignored. **Read it beside `settled`**: a hundred rows out of a hundred and a hundred out of two thousand are the same hundred rows, and this is what says which. |
+| `offset` | integer | never | How far into the ranking `results` starts — `--offset`, echoed. `0` unless a client asked for a later page, which is every reply that predates the key. Echoed rather than left implicit for the reason `query` is: two replies to the same query at different depths are otherwise indistinguishable once both are in hand. See [Paging](#paging). |
+| `total` | integer | never | How many conversations the query selects with `--limit` ignored. **Read it beside `settled`**: a hundred rows out of a hundred and a hundred out of two thousand are the same hundred rows, and this is what says which. Unaffected by `--offset`: it counts the whole matching set, not what is left below the page. |
 | `settled` | boolean | never | Whether `total` is the whole number. False means it is a **floor and a poor one** — measured on 2026-08-04 the typeahead `the` came back at 1,025 against a true 4,243 — to be ranged rather than displayed. Only `--prefix` can produce it: an ordinary `cs search` pays for the second pass before printing, because a one-shot caller has no later moment to spend it in. |
 | `unapplied_filters` | array of string | never; may be empty | Filter tokens whose *value* selects nothing, e.g. `agent:notathing`. They parsed as filters and were then not applied, so the result set is wider than the query asked for. Non-empty is not an error and the exit status stays 0; a client that ignores this silently shows unfiltered results for a filtered query (`chat-search-6eb.11`). |
 | `index_state` | string | never | What was at the index path: `ready` or `rebuilding` on any answered search. **Both mean the results are complete** — since `chat-search-me9.28` a rebuild assembles a sibling and swaps it in whole, so a client never has to wonder whether a thin answer is a partial one. `rebuilding` says only that a newer index is on its way, which is what lets a client offer to ask again rather than presenting this as the last word. Branch on the name, never on the sentence beside it (ADR 12). |
@@ -57,6 +58,52 @@ for, and a `count` that means something different depending on the value of anot
 
 Object keys are emitted in alphabetical order. That is an artefact of how the response is
 built, not a promise — decode by name.
+
+## Paging
+
+`--offset N` starts `--limit` that far down the ranking. **Every page of one query at one
+`--limit` is a window on the same ranking**, so a client appends rather than merges: no
+conversation arrives twice, none is stepped over, and the concatenation is in rank order. That
+is the property to build on, and it is the one this had to be redesigned to get.
+
+The thing that makes it non-obvious is that ranking is bounded. `cs` scores the best few
+thousand *messages* a query matches and folds them into conversations, and the size of that scan
+is set by `--limit`. Sizing it by `--offset + --limit` instead — so that a deeper page could be
+reached — quietly re-ranks the answer under the reader: measured against the reference archive
+on 2026-08-07, page two of `the` at `--limit 60` then held **11 of page one's own sixty rows**
+and skipped 11 more that no page would ever show. `code` was 14 and 14. So the scan ignores the
+offset, and the price is paid at the bottom of the list instead of in the middle of it.
+
+**A page past the end is empty, not an error.** Exit status 0, `count` 0, `results` `[]`, and
+`total` still saying how many matched. That is the ordinary end of a list, and it is a state a
+client must be able to tell apart from a failure.
+
+**`total` does not bound how far you can page.** The ranking runs out first, and on a broad
+query it runs out far first. Against the reference archive at `--limit 60`, paging until a short
+page came back:
+
+| query | rows reachable | `total` while `settled` is false | `total` once settled | pages |
+| --- | --- | --- | --- | --- |
+| `the` | 897 | 897 | 3,549 | 15 |
+| `code` | 746 | 746 | 1,598 | 13 |
+| `borrow checker` | 58 | 58 | 58 | 1 |
+| `schema migration` | 67 | 67 | 67 | 2 |
+
+The middle column is the useful one: **while `settled` is false, `total` is exactly how many rows
+paging can hand back.** Both numbers are the length of the same ranked list — the floor is
+counted off it, and the pages are cut out of it — so a typeahead client showing `60 of 897+`
+knows before it starts that it will stop at 897. Once `settle` replaces that floor with the whole
+number the two part company, and a client that pages to the end of `the` holds 897 rows under a
+label reading 3,549. Draw the end of the list; do not imply the remaining 2,652 are one more
+scroll away.
+
+**`--offset` is not available with `--flat`.** That envelope orders messages by score with no
+tiebreak, so two messages that score identically may swap between calls, and under an offset one
+would arrive on both pages and the other on neither. It exits nonzero saying so rather than
+ignoring the flag.
+
+A paged request is also not written to the query log, whatever `--prefix` says. It is the same
+need read further down, not a second need, and `cs needs` folds on what was wanted.
 
 ## The `--flat` envelope
 

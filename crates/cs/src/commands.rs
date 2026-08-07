@@ -1,6 +1,6 @@
 //! `cs index`, `cs search` and `cs explain` — everything downstream of the archive.
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use cs_archive::{machine, ArchiveReader, Config, Layout};
 use cs_core::model::Conversation;
 use std::path::{Path, PathBuf};
@@ -156,6 +156,7 @@ pub fn search(
     db_path: Option<PathBuf>,
     text: &str,
     limit: i64,
+    offset: i64,
     source: Option<&str>,
     tools: bool,
     include_off_path: bool,
@@ -164,6 +165,15 @@ pub fn search(
     flat: bool,
     json: bool,
 ) -> Result<()> {
+    // Refused rather than ignored, and refused rather than implemented. `--flat` orders
+    // messages by score alone, with no tiebreak, so two messages that score identically are
+    // free to swap places between one call and the next — under an OFFSET that means one
+    // arrives on both pages and the other on neither. The grouped path breaks its ties on
+    // `conv_id` and has a total order to page over; this one would need the same before it
+    // could carry a page honestly, and no surface has asked for it.
+    if flat && offset != 0 {
+        bail!("--offset needs an ordering with no ties in it, and --flat orders messages by score alone");
+    }
     let cfg = Config::load(config_path)?;
     let db_path = db_path.unwrap_or_else(|| cfg.default_db());
     let index = open_index(&db_path, json)?;
@@ -173,6 +183,7 @@ pub fn search(
         .with_source(source);
     let opts = cs_core::SearchOptions {
         limit,
+        offset,
         field: if tools { cs_core::Field::Tools } else { cs_core::Field::Prose },
         include_off_path,
         nested,
@@ -212,7 +223,12 @@ pub fn search(
     // Typeahead is excluded: `--prefix` fires once per keystroke, so logging it would
     // bury the handful of real queries under every prefix of each of them. A client
     // doing typeahead records the finished query with `cs pick` instead.
-    if !prefix {
+    //
+    // A page past the first is excluded for the neighbouring reason: it is the same need being
+    // read further down, not a second need. The log is what `cs needs` folds into how often
+    // something was wanted, and counting each page of one search as another want would report
+    // a reader who scrolled as a reader who asked twice.
+    if !prefix && offset == 0 {
         log_search(&cfg, &parsed, text, source, &answer);
     }
     render_answer(&answer, json)
@@ -806,11 +822,23 @@ fn render_answer(answer: &cs_core::Answer, json: bool) -> Result<()> {
     }
     let query = &answer.query;
     if answer.results.is_empty() {
-        println!("no results for {query:?}");
-        println!("  if you expected one, `cs explain <conv-id> {query:?}` says why it missed");
+        // Two different nothings, and `cs explain` answers only the first. A page past the end
+        // of the ranking is not a query that missed — the rows exist, this window is simply
+        // past them — so suggesting an explanation there sends a reader after a bug that is not
+        // in their query.
+        if answer.offset > 0 {
+            println!("no results past {} for {query:?}", answer.offset);
+            println!("  the ranking runs out before this page; see --offset for why");
+        } else {
+            println!("no results for {query:?}");
+            println!("  if you expected one, `cs explain <conv-id> {query:?}` says why it missed");
+        }
         return Ok(());
     }
     for (i, g) in answer.results.iter().enumerate() {
+        // Numbered from where the page starts, not from one. A second page whose first row is
+        // called `1.` is a second answer as far as anything reading the terminal is concerned.
+        let rank = answer.offset + i + 1;
         let mut meta = vec![g.source.clone()];
         // Rendered by cs-core, not here: this is the same string the JSON hands a GUI, so
         // the terminal and every other client cannot disagree about which day a session was.
@@ -821,11 +849,7 @@ fn render_answer(answer: &cs_core::Answer, json: bool) -> Result<()> {
         if g.deleted_upstream {
             meta.push("deleted upstream".into());
         }
-        println!(
-            "{:>2}. {}",
-            i + 1,
-            g.title.as_deref().unwrap_or("(untitled)")
-        );
+        println!("{rank:>2}. {}", g.title.as_deref().unwrap_or("(untitled)"));
         println!("    {}", meta.join(" · "));
         for m in &g.matches {
             let tag = if m.is_sidechain {
@@ -849,9 +873,16 @@ fn render_answer(answer: &cs_core::Answer, json: bool) -> Result<()> {
     // a hundred out of two thousand are the same hundred lines. Printed only once settled,
     // because an unsettled total is a floor and about half the truth on this corpus — a number
     // to be ranged, not shown. `--prefix` is the only caller that leaves one standing.
+    // A page says where it sits as well as how big it is: `60 of 3549` and `61–120 of 3549`
+    // are the same rows only on the first page.
+    let shown = if answer.offset > 0 {
+        format!("{}–{}", answer.offset + 1, answer.offset + answer.count)
+    } else {
+        answer.count.to_string()
+    };
     match (answer.settled && answer.total > answer.count, answer.ms) {
-        (true, ms) => println!("{} of {} conversations · {} ms", answer.count, answer.total, ms),
-        (false, ms) => println!("{} conversations · {} ms", answer.count, ms),
+        (true, ms) => println!("{shown} of {} conversations · {ms} ms", answer.total),
+        (false, ms) => println!("{shown} conversations · {ms} ms"),
     }
     Ok(())
 }

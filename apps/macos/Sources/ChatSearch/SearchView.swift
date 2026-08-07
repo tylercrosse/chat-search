@@ -144,7 +144,10 @@ struct SearchView: View {
                     chip(axis.label, on: model.grouping == axis, dashed: false)
                 }
                 .buttonStyle(.plain)
-                .help(axis.note)
+                // The axis's measurement, and — on `run` — what a page does to it. Both here
+                // because this hover is reachable at every window width, where the key line
+                // above the list drops its last clause first.
+                .help([axis.note, axis.reordersOnPaging].compactMap { $0 }.joined(separator: " · "))
             }
             chip("topic", on: false, dashed: true)
                 .opacity(0.55)
@@ -412,8 +415,75 @@ struct SearchView: View {
             // hand: the row's margin is `--row-px`, which a direction gets to move.
             .scrollContentBackground(.hidden)
             .background(theme.color(.bg))
+            // Reaching the bottom is the whole gesture — no button, no page number, and nothing
+            // to learn. It is read off the scroll view's own geometry rather than off which rows
+            // have reported themselves through `onAppear`: `chat-search-me9.8.27` raised the
+            // floor to macOS 15 for exactly this publisher, and the reader's minimap is the other
+            // thing it bought. `onAppear` on the last row would fire on a list shorter than its
+            // viewport and on a section header the fold had just closed.
+            //
+            // A screenful of slack, so the next page is being fetched while there is still
+            // something to read rather than at the moment the scroll stops. `max(1)` because a
+            // list with nothing in it publishes a zero-height container, and a zero threshold
+            // would make every empty state ask for a page.
+            .onScrollGeometryChange(for: Bool.self) { geometry in
+                let slack = max(geometry.containerSize.height, 1)
+                return geometry.contentOffset.y + geometry.containerSize.height
+                    >= geometry.contentSize.height - slack
+            } action: { _, atBottom in
+                if atBottom { model.loadNextPage() }
+            }
+            // What the bottom of the list is, said in words rather than by simply stopping.
+            listFoot
         }
         .frame(minWidth: 280)
+    }
+
+    /// One line under the list saying why it ends where it does.
+    ///
+    /// **The end of a ranking is not the end of the matches, and this is the only place that can
+    /// say so.** `cs` ranks the best few thousand messages a query matches and pages out of the
+    /// conversations they fall into, so `the` pages to 897 rows while the strip above reads
+    /// `897+` — and once that floor settles into 3,549 the two numbers part company for good.
+    /// A list that just stopped would read as a list still loading, and the number above it would
+    /// read as a lie.
+    ///
+    /// Outside the `List` rather than as a last row, which is `chat-search-9uu`'s doing: a row
+    /// appearing and disappearing at the bottom is another change to the collection an
+    /// NSTableView is mid-update on, and this line changes on exactly the frame the page lands.
+    @ViewBuilder
+    private var listFoot: some View {
+        if !model.conversations.isEmpty, model.paging || model.exhausted {
+            HStack(spacing: 6) {
+                if model.paging {
+                    Text("reading further down the ranking…")
+                } else if model.settled, model.conversations.count >= model.total {
+                    Text("that is all \(model.total)")
+                } else {
+                    // The honest sentence for the case that actually happens on a broad query.
+                    // It names the rows in hand rather than the ones missing, because how many
+                    // are missing is a number this window does not have: `total` is itself a
+                    // floor while `settled` is false.
+                    Text("\(model.conversations.count) rows — the ranking ends here")
+                        .help(
+                            "cs ranks the best few thousand messages a query matches and pages "
+                                + "out of the conversations they fall into, so a broad query "
+                                + "runs out of ranked rows long before it runs out of matches. "
+                                + "Narrow the query to reach the rest.")
+                }
+                Spacer(minLength: 0)
+            }
+            .font(theme.font(.micro, .mono))
+            .foregroundStyle(theme.color(.ink3))
+            .lineLimit(1)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(theme.color(.bg))
+            .overlay(alignment: .top) {
+                Rectangle().fill(theme.color(.rule)).frame(height: 1)
+            }
+        }
     }
 
     /// One row, drawn identically grouped and ungrouped.
@@ -466,8 +536,8 @@ struct SearchView: View {
                     .fixedSize()
             }
             .help(
-                "grouped over the rows this query returned, which is the --limit window of the "
-                    + "answer and not the corpus")
+                "grouped over the rows this query has returned so far, which is what scrolling "
+                    + "has fetched of the ranking and not the corpus")
             .layoutPriority(1)
             if let residue = model.groups.first(where: \.isResidue),
                 let named = model.grouping.residue
@@ -478,6 +548,18 @@ struct SearchView: View {
                 Text("\(residue.items.count) with \(named.label)")
                     .foregroundStyle(theme.color(.hit))
                     .help(named.why)
+                    .layoutPriority(2)
+            }
+            // What a page does to this axis, on the one axis where it does anything. `project`
+            // and `source` gather in arrival order over rows that arrive best first, so a page
+            // lengthens a group or adds one at the bottom and nothing above the reader moves;
+            // `run` sorts by time and can put a later row above an earlier one. Ahead of the
+            // axis note because it is about what the list is going to do rather than about what
+            // the corpus is, and a reader who scrolls will meet it either way.
+            if let reorders = model.grouping.reordersOnPaging {
+                Text("a page re-sorts this")
+                    .foregroundStyle(theme.color(.hit))
+                    .help(reorders)
                     .layoutPriority(2)
             }
             // Whole or not at all, as in the group head: half a measurement is not a measurement,

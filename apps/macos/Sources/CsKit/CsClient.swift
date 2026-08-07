@@ -105,8 +105,14 @@ public struct CsClient: Sendable {
         return nil
     }
 
-    public func arguments(query: String, limit: Int, prefix: Bool, flat: Bool) -> [String] {
+    public func arguments(query: String, limit: Int, offset: Int = 0, prefix: Bool, flat: Bool)
+        -> [String]
+    {
         var args = ["search", query, "--json", "--limit", String(limit)]
+        // Omitted when it is zero, which is what every call but a page makes. The default on the
+        // far side is zero too, so this is about what the argv of an ordinary keystroke looks
+        // like in a log or a shim rather than about behaviour.
+        if offset != 0 { args += ["--offset", String(offset)] }
         // `--prefix` is the typeahead affordance: the last word is treated as incomplete, so
         // "borrow che" still matches. Without it every keystroke inside a word returns nothing
         // and the latency question never even gets asked.
@@ -121,10 +127,17 @@ public struct CsClient: Sendable {
     /// than waiting for it. Without this, typing eight characters leaves eight `cs` processes
     /// competing for the same 324 MB index and the last one — the only one whose answer is
     /// wanted — finishes last.
-    public func search(_ query: String, limit: Int = 60, prefix: Bool = true) async throws
-        -> QueryResult<SearchResponse>
+    ///
+    /// `offset` is the next page of the same ranking, and a page is a window rather than a new
+    /// answer: `cs` sizes its scan off `limit` alone, so every page of one query at one `limit`
+    /// is cut from the same ranked list and a caller appends rather than merging. What that
+    /// costs is depth — the ranking ends before `total` does — and `docs/JSON-CONTRACT.md#paging`
+    /// is where the measured numbers for both are.
+    public func search(_ query: String, limit: Int = 60, offset: Int = 0, prefix: Bool = true)
+        async throws -> QueryResult<SearchResponse>
     {
-        try await invoke(arguments(query: query, limit: limit, prefix: prefix, flat: false))
+        try await invoke(
+            arguments(query: query, limit: limit, offset: offset, prefix: prefix, flat: false))
     }
 
     /// Matching messages, ungrouped. A separate call and not a flag on the one above, because it

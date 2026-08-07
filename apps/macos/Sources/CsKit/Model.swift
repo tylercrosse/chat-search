@@ -39,9 +39,17 @@ public struct SearchResponse: Envelope {
     public let ms: Double
     /// `results.count`. Not how many conversations match: `--limit` truncates before this.
     public let count: Int
+    /// How far down the ranking `results` starts — `--offset`, echoed back. Zero on every reply
+    /// nobody asked to page, which is every keystroke. Read it to tell two replies to one query
+    /// apart: with a page in flight beside a keystroke, nothing else in the envelope does.
+    public let offset: Int
     /// How many conversations the query selects with `--limit` ignored. Read it beside
     /// `settled`: a hundred rows out of a hundred and a hundred out of two thousand are the same
     /// hundred rows, and this is what says which.
+    ///
+    /// **It is not how far this can be paged.** The ranking stops at a scan ceiling well before
+    /// it, and while `settled` is false the floor this carries is exactly how many rows paging
+    /// will hand back — 897 for `the` against a settled 3,549. See `docs/JSON-CONTRACT.md#paging`.
     public let total: Int
     /// False means `total` is a floor and a poor one, to be ranged rather than displayed. Only
     /// `--prefix` can produce it — which is exactly the mode this client types in.

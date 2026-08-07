@@ -103,6 +103,12 @@ struct StatusStrip: View {
     ///
     /// Saying "897 matches" when the answer is 3,549 is the one thing this field exists to stop a
     /// client doing, so an unsettled total is ranged rather than printed.
+    ///
+    /// **The left number climbs as a reader scrolls** (`chat-search-me9.8.33`) and goes on meaning
+    /// exactly what it meant: rows in hand. It was the first page's size and is now every page
+    /// fetched, which is a change to the arithmetic and none at all to the sentence. What the
+    /// right number never became is a target — the ranking runs out before it, and the line under
+    /// the list is what says so when it does.
     private var counts: some View {
         Text(
             "\(model.conversations.count) of "
@@ -113,7 +119,8 @@ struct StatusStrip: View {
                 model.settled
                     ? "rows in hand, of every conversation the query selects with --limit ignored"
                     : "rows in hand, of a floor and not a count — a prefix search stops early, so "
-                        + "the whole number is this or more")
+                        + "the whole number is this or more. It is also as far as scrolling can "
+                        + "read: the floor and the end of the ranking are the same list")
     }
 
     /// What the picture under this line is of, in numbers the picture itself cannot state.

@@ -99,6 +99,68 @@ enum Measure {
             print("      \(f.count) of \(phrase.count) keystrokes rendered, "
                 + "\(frames.missed) of \(frames.lag.count) vsyncs missed")
         }
+
+        await paging(model: model, frames: frames)
+    }
+
+    /// What the second page costs against the first answer, and where the list actually ends.
+    ///
+    /// **The cost is a keystroke→frame number and not a `cs` number**, because a page is not a
+    /// keystroke: nothing is waiting on it, the rows already on screen stay there while it runs,
+    /// and what a reader can feel is whether the frame carrying it was late. So both are here —
+    /// the round trip so it can be compared with the answer above, and the main-thread lag over
+    /// the same window so the appending itself is accounted for.
+    ///
+    /// The queries are two of the typing phrases and two broad prefixes, and the broad ones are
+    /// the point: `borrow checker` returns 58 rows and has no second page at all, so a paging
+    /// measurement taken only on the phrases above would report that paging is free by never
+    /// doing any. `chat-search-me9.8.33`.
+    @MainActor
+    private static func paging(model: SearchModel, frames: FrameClock) async {
+        print("\ncost of a page against the cost of the first answer, on the promoted app")
+        print("  the list is scrolled to the bottom by asking for the page directly, which is the")
+        print("  one thing a script can do that a scroll wheel does; the trigger itself is the")
+        print("  scroll view's own geometry (SearchView) and is not exercised here")
+        print("  \(drivenLine())\n")
+
+        for query in ["borrow checker", "sqlite fts5", "the", "code"] {
+            model.query = ""
+            try? await Task.sleep(for: .milliseconds(300))
+            model.noteKeystroke(at: CACurrentMediaTime())
+            model.query = query
+            try? await Task.sleep(for: .seconds(2))
+
+            let first = model.lastTiming
+            let firstRows = model.conversations.count
+            frames.reset()
+
+            var pages: [(rows: Int, ms: Double)] = []
+            // Ten at most. The point is what a page costs and where the list ends, and on the
+            // broadest prefix this archive holds that is fifteen pages — enough of them to have
+            // been established well before the tenth.
+            while model.hasMorePages, pages.count < 10 {
+                let before = model.conversations.count
+                let t0 = CACurrentMediaTime()
+                model.loadNextPage()
+                // Polled rather than awaited: `loadNextPage` is fire-and-forget by design, since
+                // no part of the interface waits for a page. A tenth of the shortest page
+                // measured, so the reading is the page rather than the poll.
+                while model.paging {
+                    try? await Task.sleep(for: .milliseconds(2))
+                }
+                pages.append((model.conversations.count - before, (CACurrentMediaTime() - t0) * 1000))
+            }
+
+            let ended = model.exhausted ? "the ranking ends" : "stopped at ten pages"
+            let total = model.settled ? "\(model.total)" : "\(model.total)+"
+            print("  \"\(query)\" — first answer \(firstRows) rows in "
+                + "\(fmt(first?.total ?? 0)) ms, of \(total)")
+            print("    pages           \(pages.map { "\($0.rows) rows \(fmt($0.ms)) ms" }.joined(separator: " · "))")
+            print("    main-thread lag \(line(frames.lag))")
+            print("      \(model.conversations.count) rows in hand after "
+                + "\(pages.count) page(s), \(ended), "
+                + "\(frames.missed) of \(frames.lag.count) vsyncs missed")
+        }
     }
 
     /// Search, open the first result, and draw the window to a PNG from inside the process.

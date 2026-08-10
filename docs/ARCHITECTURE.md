@@ -170,6 +170,15 @@ stateDiagram-v2
 - **Vanished** is designed to fold up into `conversation.deleted_upstream_at` — content kept,
   only the fact of upstream deletion recorded (ADR 9). **The fold is not implemented**: the
   event is written here and nothing downstream reads it. See "Built in part" below.
+- **Excluded** is the one classification that is deliberately *not* a manifest state, which is
+  why it is absent from the diagram above. It is a file the archive already holds, still on
+  disk, that the include list has stopped naming — narrowing a glob is a config edit, not
+  something that happened to the file, so nothing is written and the silence rule
+  (`recorded_anything` in `cs archive`) is untouched. The scan reports it as standing state,
+  in a column of its own, on every run for as long as it is true. Calling it `Vanished`
+  instead — which is what the code did until the first narrowing was attempted,
+  chat-search-aig — would write "gone from source" about a file anyone can `ls`, permanently,
+  into the log ADR 9 folds into the flag that warns reopening will fail.
 
 A file being written _while_ the archiver copies it yields a truncated last line. That is safe
 by construction, not by luck: append-only plus supersede-on-next-scan means the partial copy
@@ -246,7 +255,7 @@ carries what would falsify it, so a doubtful reader settles it in about a second
 
 ### Built in part — the state neither a table nor the code admits to
 
-Five things read as finished from either end and are not. They are here because this is the
+Six things read as finished from either end and are not. They are here because this is the
 only place that can say so: the schema looks complete, the code compiles, and the gap is a
 missing edge rather than a missing file.
 
@@ -309,6 +318,20 @@ missing edge rather than a missing file.
   gives. Nothing is lost yet: the archive holds 692 rollouts and no `.zst` at all. When the
   first compressed one lands it will be captured correctly and read as an empty conversation,
   which is a silent miss, not an error.
+- **Nothing can take bytes back out of the archive (ADR 9).** A deliberate `forget` is
+  specified — remove from raw and index, write a tombstone so the next scan cannot resurrect it
+  from a source file that still exists — and there is no implementation: `grep -rn forget
+  crates/ --include='*.rs'` finds two unrelated test names and one comment in `answer.rs`
+  calling `deleted_upstream_at` "the tombstone a forget leaves". No command, no code path, no
+  tombstone. So capture is one-way, and a glob that was too wide is only half reversible. Narrowing it stops the next byte; the ones already taken stay. The live example is
+  the one that produced this bullet: 175.5 MiB of `gemini-cli` checkpoints, captured under
+  `**/*.json` before it became `**/chats/*.json` (chat-search-aig), still sitting in
+  `raw/<machine>/gemini-cli/*/checkpoints/`. Deleting them by hand is not the missing feature —
+  it is the thing the missing feature exists to prevent, because the manifest would go on
+  claiming the archive holds files it no longer has, and nothing anywhere would record that a
+  human removed them. They are clones sharing blocks with files still under `~/.gemini/tmp`
+  (ADR 20), so today they cost almost nothing and they are recoverable from the source; the day
+  Gemini prunes its own checkpoints, both of those stop being true.
 - **Superseded copies have a writer and no reader.** On a `Rewritten` change the archiver moves
   the old copy to `_superseded/<source_id>/<rel_path>.<ts_ms>` rather than overwriting it, which
   reads as "the previous version is kept". It is kept on disk and it is unreachable:
